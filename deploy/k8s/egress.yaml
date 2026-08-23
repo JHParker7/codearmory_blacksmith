@@ -1,0 +1,96 @@
+# Egress control for sandbox VMs.
+#
+# A kata lease is a KERNEL boundary, not a network one: the microVM has its own
+# guest kernel, and none of that stops it opening a socket to gatekeeper. Until
+# now this cluster had no egress restriction on sandboxes at all — only
+# git-local-ingress — so a runner could reach every internal service.
+#
+# THE MODEL IS NOT EGRESS. host.minikube.internal is the agent's own inference
+# backend, an infrastructure dependency rather than user-controlled traffic, so it
+# is allowed directly. It cannot go through the proxy in any case: the proxy's
+# dial-time guard refuses private addresses unconditionally, which is exactly the
+# SSRF protection worth keeping.
+#
+# Everything else goes through the proxy, which enforces the domain allowlist and
+# refuses private/loopback/link-local/metadata addresses however it is asked.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress-proxy
+  namespace: blacksmith
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: egress-proxy}
+  template:
+    metadata:
+      labels: {app: egress-proxy}
+    spec:
+      containers:
+        - name: egress-proxy
+          image: egress-proxy:local
+          imagePullPolicy: IfNotPresent
+          env:
+            # The sentinel: any PUBLIC host is allowed, while the dial-time IP
+            # guard still blocks everything internal. Narrow this to a
+            # comma-separated domain list to tighten further.
+            - name: PROXY_ALLOWED_DOMAINS
+              value: "*"
+          ports: [{containerPort: 3128}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-proxy
+  namespace: blacksmith
+spec:
+  selector: {app: egress-proxy}
+  ports: [{port: 3128, targetPort: 3128}]
+---
+# What a sandbox may talk to directly. Everything not named here is refused, so
+# the interesting case — a runner dialling gatekeeper or postgres — simply fails.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: forge-lease-egress
+  namespace: blacksmith
+spec:
+  # SELECTED BY lease-id, NOT BY app. A lease pod is labelled {app: forge,
+  # lease-id: <uuid>} and the forge SERVICE is app: forge-local — so matching on
+  # a made-up app value selects nothing and the policy is silently inert, while
+  # matching app: forge would be one rename away from cutting forge off from its
+  # own database. The lease-id key exists on sandboxes and on nothing else.
+  podSelector:
+    matchExpressions:
+      - {key: lease-id, operator: Exists}
+  policyTypes: [Egress]
+  egress:
+    # DNS, or nothing resolves and every failure looks like a network fault.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # The inference backend on the host, and only that port.
+    - to:
+        - ipBlock: {cidr: 192.168.58.1/32}
+      ports:
+        - {protocol: TCP, port: 8080}
+    # THE GIT SERVER. A sandbox clones its branch and pushes the result — that is
+    # the entire point of the lease — and leaving it out of the first version of
+    # this policy broke every push with "push_failed" while the cause looked like
+    # a git problem. It is named explicitly rather than covered by a broad rule,
+    # because "the sandbox may reach git-local" is a decision, not a side effect.
+    - to:
+        - podSelector:
+            matchLabels: {app: git-local}
+      ports:
+        - {protocol: TCP, port: 9418}
+    # The proxy, which is the only route to the internet.
+    - to:
+        - podSelector:
+            matchLabels: {app: egress-proxy}
+      ports:
+        - {protocol: TCP, port: 3128}

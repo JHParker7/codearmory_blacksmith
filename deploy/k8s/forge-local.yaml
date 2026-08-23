@@ -1,0 +1,541 @@
+# A forge on the agent host, for agent sandboxes.
+#
+# This is the local half of the design: blacksmith submits executions here
+# DIRECTLY (AGENTS_FORGE_URL), not through conductor, so the sandbox runs on the
+# same machine as the model and the department's egress boundary collapses to a
+# single outbound hole.
+#
+# Apply to the kata-capable cluster:
+#   kubectl --context blacksmith apply -f deploy/k8s/forge-local.yaml
+#
+# ─── THE SANDBOX PLANE IS SELF-CONTAINED ──────────────────────────────────────
+#
+# This deploys a MINIMAL CodeArmory — its own gatekeeper, its own forge, its own
+# database — and it is NOT connected to the platform's systems. That separation
+# is the design, not an expedient:
+#
+#   - The agent host holds a credential for ITS OWN sandbox plane and an ordinary
+#     account token for the platform. Compromising the workstation yields the
+#     ability to run sandboxes on it — not a platform service key, and not the
+#     grants that would come with one.
+#   - Sandboxes keep working when the platform is unreachable, which matters on a
+#     host that is off half the time.
+#   - It sidesteps the service-identity collision entirely. A forge sharing the
+#     platform gatekeeper would need a name other than "forge", because gatekeeper
+#     stores one key per service name and two instances sharing one rotate each
+#     other's keys indefinitely — warning and limping rather than failing, which
+#     is the hardest kind of fault to attribute. With its own gatekeeper there is
+#     only one forge, so the name is free.
+#
+# What this costs: a second gatekeeper to run, and two credentials for blacksmith
+# to hold (CODEARMORY_TOKEN for the platform, AGENTS_FORGE_TOKEN for here).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: blacksmith
+---
+# NOTE: the Secret this plane needs is NOT in this file. It lives in
+# secret.example.yaml and is applied separately, ON PURPOSE.
+#
+# It used to be here with REPLACE_ME placeholders, which made re-applying this
+# file — the documented way to change the plane — overwrite the real secret with
+# placeholders. That failure is invisible at apply time: running pods keep their
+# existing environment, so the plane stays healthy and the damage only appears at
+# the next restart, when a service comes back with the key "REPLACE_ME" and its
+# permission checks fail for reasons unrelated to whatever was being changed.
+#
+# Apply the secret once, from secret.example.yaml, before this file.
+---
+# One postgres serves the whole plane, but POSTGRES_DB creates only ONE database.
+# Without this, a from-scratch deploy comes up with gatekeeper and tickets
+# CrashLooping on "database does not exist" — which reads like a broken image
+# rather than a missing schema, and used to be fixed by hand after every rebuild.
+#
+# Scripts here run only when PGDATA is empty, which now means a genuinely new
+# volume rather than every restart — see the volumeClaimTemplate below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forge-postgres-initdb
+  namespace: blacksmith
+data:
+  01-databases.sql: |
+    CREATE DATABASE gatekeeper;
+    CREATE DATABASE tickets;
+---
+# Forge's own database. Separate from the platform's on purpose: executions are
+# per-instance state, and sharing a store would be the "split state" mistake that
+# ruled out a second workflows deployment.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: forge-postgres
+  namespace: blacksmith
+spec:
+  serviceName: forge-postgres
+  replicas: 1
+  selector:
+    matchLabels: {app: forge-postgres}
+  template:
+    metadata:
+      labels: {app: forge-postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_DB
+              value: forge
+            - name: POSTGRES_USER
+              value: forge
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: forge-local, key: POSTGRES_PASSWORD}}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports: [{containerPort: 5432}]
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: initdb, mountPath: /docker-entrypoint-initdb.d}
+      volumes:
+        - name: initdb
+          configMap: {name: forge-postgres-initdb}
+  # THE BOARDS LIVE HERE, so the volume has to outlive the pod.
+  #
+  # This was an emptyDir, on the reasoning that execution history is not precious
+  # and a rebuild is cheap. That was true when this postgres served forge alone.
+  # It no longer does: the initdb ConfigMap above creates the gatekeeper and
+  # tickets databases in the same instance, so an emptyDir throws away every
+  # board, ticket and comment whenever the pod restarts — not only on a redeploy.
+  #
+  # Measured twice on 2026-08-18: a full pipeline run lost all twenty tickets to a
+  # host reboot, and a graceful `minikube stop` lost them again, while the git
+  # repos came back untouched because they have a real claim. The run state was
+  # the one thing that could not be rebuilt, and it was the one thing not stored.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forge-postgres
+  namespace: blacksmith
+spec:
+  selector: {app: forge-postgres}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+# Forge needs to create and watch Jobs and Pods to run sandboxes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: forge-local
+  namespace: blacksmith
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: forge-local
+  namespace: blacksmith
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "persistentvolumeclaims"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # A lease holds a sandbox open across many commands and delivers each one over
+  # the exec subresource. Without this, forge can create the lease pod but every
+  # command into it fails "forbidden" — the grant the whole saving rests on.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: forge-local
+  namespace: blacksmith
+subjects:
+  - {kind: ServiceAccount, name: forge-local, namespace: blacksmith}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: forge-local}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-local
+  namespace: blacksmith
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: forge-local}
+  template:
+    metadata:
+      labels: {app: forge-local}
+    spec:
+      serviceAccountName: forge-local
+      containers:
+        - name: forge
+          # Pinned to the platform's tag on purpose: a local forge on a
+          # different build is a second variable when a sandbox misbehaves.
+          # LEASES ARE REQUIRED, and alpha-0.1.0 predates them.
+          #
+          # Every agent holds ONE sandbox for a whole ticket rather than starting a
+          # container per command, which is most of a ticket's wall time. That needs
+          # POST /leases, and the published alpha tag answers it with 404 — the
+          # agent then fails with "this forge must support leases" and every ticket
+          # blocks, cascading to everything that depends on them.
+          #
+          # Measured on 2026-08-18: recreating the postgres StatefulSet meant
+          # applying this file, which reset a running lease-capable deployment back
+          # to the pinned alpha tag. All eleven remaining tickets blocked within
+          # five minutes, and nothing in the board said the cause was an image.
+          # lease-fix carries the reaper change: a lease with a RUNNING execution is
+          # not idle. LastUsedAt is bumped on dispatch and never again, so a long
+          # command left its lease looking untouched and the reaper killed the
+          # sandbox mid-work — measured at +5:17 against a 300s idle timeout, and
+          # every caller whose test suite outlives that timeout was exposed to it.
+          image: ghcr.io/code-armory-app/forge:lease-quiet
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8083}]
+          env:
+            - name: PORT
+              value: "8083"
+            # kubernetes runtime; the kata backend is created through the API
+            # after startup (see the note at the bottom of this file).
+            - name: RUNTIME
+              value: kubernetes
+            - name: K8S_NAMESPACE
+              value: blacksmith
+            - name: DATABASE_URL
+              value: postgres://forge:forge-local@forge-postgres:5432/forge?sslmode=disable
+            # The LOCAL gatekeeper. This forge never talks to the platform.
+            - name: GATEKEEPER_URL
+              value: "http://gatekeeper-local:8081"
+            - name: GATEKEEPER_SERVICE_KEY
+              valueFrom: {secretKeyRef: {name: forge-local, key: GATEKEEPER_SERVICE_KEY}}
+            - name: ALLOWED_IMAGES
+              # The agent runner image must be listed here or every sandbox is
+              # refused with a bare "400: image not allowed" (§4b).
+              # agent-tools:local carries git, Go AND Node at once, which no
+              # stock image does: forge's checkout needs git, the tickets are Go,
+              # and a third-party coding agent ships as an npm package. Built
+              # locally from golang:1.25 — see tmp/agentimg/Dockerfile.
+              value: "alpine:3.19,golang:1.25,node:22-alpine,python:3.12-slim,ubuntu:22.04,agent-tools:local"
+            # Lease quota. forge defaults to 4, which is exactly
+            # AGENTS_DEV_CONCURRENCY — so four working dev agents held every
+            # lease the account was allowed and the reviewer ALWAYS fell back to
+            # a container per command. Six leaves headroom for the stages that
+            # run alongside dev instead of making them lose the race for one.
+            - name: FORGE_MAX_LEASES_PER_USER
+              value: "6"
+            - name: LOG_LEVEL
+              value: info
+            # Traces go to a collector on the HOST. host.minikube.internal rather
+            # than an IP because the bridge address changes between profiles, and
+            # a hardcoded one silently stops working on the next `minikube start`.
+            # Unset is fine: the SDK logs locally and says so once.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://host.minikube.internal:4318"
+            - name: OTEL_TRACES_SAMPLER
+              value: always_on
+          # tcpSocket, not httpGet: these services have no /health endpoint, and an
+          # HTTP probe against one 404s forever while the process is perfectly
+          # healthy. This matches what the platform chart does.
+          readinessProbe:
+            tcpSocket: {port: 8083}
+            initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forge-local
+  namespace: blacksmith
+spec:
+  type: NodePort
+  selector: {app: forge-local}
+  ports:
+    - port: 8083
+      targetPort: 8083
+      # Fixed so AGENTS_FORGE_URL is stable across redeploys.
+      nodePort: 30083
+---
+# The local gatekeeper. Minimal: it exists to authenticate one client (blacksmith)
+# and one service (the forge beside it).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gatekeeper-local
+  namespace: blacksmith
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: gatekeeper-local}
+  template:
+    metadata:
+      labels: {app: gatekeeper-local}
+    spec:
+      containers:
+        - name: gatekeeper
+          image: ghcr.io/code-armory-app/gatekeeper:otel-fix
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8081}]
+          env:
+            - name: PORT
+              value: "8081"
+            - name: DATABASE_URL
+              value: postgres://forge:forge-local@forge-postgres:5432/gatekeeper?sslmode=disable
+            - name: REDIS_URL
+              value: redis://gatekeeper-redis:6379
+            # The forge beside it, and nothing else.
+            - name: GATEKEEPER_SERVICES
+              valueFrom: {secretKeyRef: {name: forge-local, key: GATEKEEPER_SERVICES}}
+            - name: GATEKEEPER_ADMIN_EMAIL
+              valueFrom: {secretKeyRef: {name: forge-local, key: GATEKEEPER_ADMIN_EMAIL}}
+            - name: GATEKEEPER_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: forge-local, key: GATEKEEPER_ADMIN_PASSWORD}}
+            - name: LOG_LEVEL
+              value: info
+            # Traces go to a collector on the HOST. host.minikube.internal rather
+            # than an IP because the bridge address changes between profiles, and
+            # a hardcoded one silently stops working on the next `minikube start`.
+            # Unset is fine: the SDK logs locally and says so once.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://host.minikube.internal:4318"
+            - name: OTEL_TRACES_SAMPLER
+              value: always_on
+          readinessProbe:
+            tcpSocket: {port: 8081}
+            initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gatekeeper-local
+  namespace: blacksmith
+spec:
+  # NodePort, like forge's. blacksmith runs on the HOST and exchanges an
+  # email/password for a session against THIS gatekeeper, not the platform's, so
+  # a ClusterIP leaves the agent host unable to obtain a sandbox token at all.
+  # Forge's own URL is not a substitute: it serves no /login — that route belongs
+  # to gatekeeper — so aiming the credential at it returns a bare 404 that reads
+  # like a rejected password rather than a missing route.
+  type: NodePort
+  selector: {app: gatekeeper-local}
+  ports: [{port: 8081, targetPort: 8081, nodePort: 30081}]
+---
+# Gatekeeper caches permission decisions in Redis and invalidates them on role
+# change; without it every check is a database round trip.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gatekeeper-redis
+  namespace: blacksmith
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: gatekeeper-redis}
+  template:
+    metadata:
+      labels: {app: gatekeeper-redis}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports: [{containerPort: 6379}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gatekeeper-redis
+  namespace: blacksmith
+spec:
+  selector: {app: gatekeeper-redis}
+  ports: [{port: 6379, targetPort: 6379}]
+---
+# The local git server: bare repos over HTTP, and nothing else.
+#
+# NOT git_factory. That is the platform's git PLANE — repo management APIs,
+# Smart-HTTP, RBAC-integrated per-repo authorisation, its own service identity —
+# and a mirror whose authoritative copy lives upstream needs none of it.
+#
+# The security boundary is NOT this server's authentication. The sandbox is the
+# untrusted party and legitimately holds a credential for this server, so a
+# prompt-injected agent can rewrite anything here. What stops that reaching
+# upstream is the SYNCER's refspec (sync.go): local main goes to the upstream dev
+# branch, agent branches go to agent branches, and nothing else — never upstream
+# main, never tags, never a force push.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-local
+  namespace: blacksmith
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: git-local}
+  template:
+    metadata:
+      labels: {app: git-local}
+    spec:
+      containers:
+        - name: git
+          image: alpine/git:latest
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              apk add --no-cache git-daemon >/dev/null 2>&1 || true
+              mkdir -p /srv/git
+              # --enable=receive-pack allows push. Reachable only from this
+              # namespace; see the NetworkPolicy below.
+              exec git daemon --verbose --export-all --enable=receive-pack                 --reuseaddr --base-path=/srv/git --listen=0.0.0.0 --port=9418 /srv/git
+          ports: [{containerPort: 9418}]
+          volumeMounts:
+            - {name: repos, mountPath: /srv/git}
+      volumes:
+        - name: repos
+          persistentVolumeClaim: {claimName: git-local-repos}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: git-local-repos
+  namespace: blacksmith
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 20Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: git-local
+  namespace: blacksmith
+spec:
+  selector: {app: git-local}
+  ports: [{port: 9418, targetPort: 9418}]
+---
+# The git server is reachable from this namespace and nowhere else. Combined with
+# the syncer's refspec, a compromised sandbox can rewrite the local mirror and
+# still cannot reach anything outside it or push where it should not.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: git-local-ingress
+  namespace: blacksmith
+spec:
+  podSelector:
+    matchLabels: {app: git-local}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: blacksmith}
+---
+# The plane's own TICKET STORE.
+#
+# This is what lets the department run with no CodeArmory at all: tickets, git and
+# the sandbox all live on this plane, so a host with inference and this namespace
+# is a complete system rather than a client of one.
+#
+# Which store is AUTHORITATIVE is a mode, chosen explicitly, and the two must never
+# be blended (see the "local tickets" ticket). STANDALONE: this store is the only
+# one, and there is no sync. CONNECTED: the cluster is authoritative and this store
+# is a durable work queue - tickets are pulled down, worked here, and only comments
+# and terminal status are pushed back. What must not exist is a third mode where
+# both sides accept writes to mutable rows: status and priority are last-write-wins
+# across two stores, and the claim protocol assumes ONE ordering authority, so
+# master-master reintroduces exactly the duplicate-work race the claim exists to
+# stop.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tickets-local
+  namespace: blacksmith
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: tickets-local}
+  template:
+    metadata:
+      labels: {app: tickets-local}
+    spec:
+      containers:
+        - name: tickets
+          # Pinned to the platform's tag, same reasoning as forge: a local store on
+          # a different build is a second variable whenever a ticket misbehaves.
+          #
+          # ...except this tag is AHEAD of alpha-0.1.0, deliberately, because the
+          # claim protocol needs a store that serves an ETag. Without one, Claim
+          # takes its claim-by-append fallback, and there a RETRY loses arbitration
+          # to its own previous attempt's claim comment: oldestClaimForRole spans
+          # the ticket's whole history and nothing clears it. Every retry then
+          # burns an attempt without running, and after maxAttempts the ticket is
+          # stranded in ready_for_dev forever. alpha-0.1.0 predates the ETag
+          # support, so on that image retries never worked at all.
+          image: ghcr.io/code-armory-app/tickets:etag-local
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8086}]
+          env:
+            - name: PORT
+              value: "8086"
+            # Its own database in the plane's postgres, beside forge's and
+            # gatekeeper's.
+            - name: DATABASE_URL
+              value: postgres://forge:forge-local@forge-postgres:5432/tickets?sslmode=disable
+            # The LOCAL gatekeeper. This store never talks to the platform.
+            - name: GATEKEEPER_URL
+              value: "http://gatekeeper-local:8081"
+            - name: GATEKEEPER_SERVICE_KEY
+              valueFrom: {secretKeyRef: {name: forge-local, key: GATEKEEPER_SERVICE_KEY}}
+            - name: LOG_LEVEL
+              value: info
+            # Traces go to a collector on the HOST. host.minikube.internal rather
+            # than an IP because the bridge address changes between profiles, and
+            # a hardcoded one silently stops working on the next `minikube start`.
+            # Unset is fine: the SDK logs locally and says so once.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://host.minikube.internal:4318"
+            - name: OTEL_TRACES_SAMPLER
+              value: always_on
+          readinessProbe:
+            tcpSocket: {port: 8086}
+            initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tickets-local
+  namespace: blacksmith
+spec:
+  # NodePort for the same reason as gatekeeper's: blacksmith runs on the HOST and
+  # reads its work from here.
+  type: NodePort
+  selector: {app: tickets-local}
+  ports: [{port: 8086, targetPort: 8086, nodePort: 30086}]
+
+---
+# After the deployment is up, create the kata runtime backend through forge's
+# API — it is database state, not configuration:
+#
+#   PUT /runtime-backends/default
+#   {"type":"kata","enabled":true,"config":{"runtime_class":"kata-clh"}}
+#
+# USE kata-clh, NOT kata-qemu. kata-qemu fails on this host: the guest kernel
+# panics during boot with a QEMU register dump and the sandbox never starts.
+# kata-clh works, and it matches what the platform's cluster runs, so the two
+# environments behave the same.
+#
+# Then point the agent host at it, with a credential from the LOCAL gatekeeper:
+#   AGENTS_FORGE_URL=http://<minikube-ip>:30083
+#   AGENTS_FORGE_TOKEN=<token issued by gatekeeper-local>
+#
+# blacksmith refuses to fall back to the platform token here. Doing so would send
+# a platform credential to a host deliberately outside the platform's trust
+# domain, which is the one mistake this whole arrangement exists to prevent.

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Conventional Commits, as the Angular project defines them.
+#
+# THE SAME RULES THE AGENTS ARE HELD TO. angularHookScript in agent_dev.go
+# installs this hook into every sandbox checkout; this copy holds the same line
+# for commits made to blacksmith itself, so the standard is one standard rather
+# than one for the machine and another for the person maintaining it.
+# TestTheAngularHookAcceptsAndRejects runs both against the same cases, so the
+# two cannot drift in behaviour without a test failing.
+#
+# Enabled by `git config core.hooksPath hooks`. A body is allowed and expected —
+# this repository's convention is that a non-obvious decision cites the run and
+# the number that bought it — but the SUBJECT is one conventional line of at most
+# 72 characters, and a body is separated from it by a blank one.
+subject=$(head -n 1 "$1")
+case "$subject" in
+  '#'*|'') exit 0 ;;
+esac
+if ! printf '%s' "$subject" | grep -Eq '^(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)(\([a-z0-9._/-]+\))?!?: .+'; then
+  echo "commit-msg: not Conventional Commits." >&2
+  echo "  got:  $subject" >&2
+  echo "  want: type(scope): subject   e.g. feat(store): add the in-memory store" >&2
+  echo "  type is one of feat fix chore docs refactor test perf build ci style revert" >&2
+  exit 1
+fi
+if [ "$(printf '%s' "$subject" | wc -c)" -gt 72 ]; then
+  echo "commit-msg: subject is longer than 72 characters." >&2
+  exit 1
+fi
+second=$(sed -n '2p' "$1")
+if [ -n "$second" ]; then
+  echo "commit-msg: leave a blank line between the subject and the body." >&2
+  exit 1
+fi

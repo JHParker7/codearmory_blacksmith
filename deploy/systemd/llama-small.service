@@ -1,0 +1,46 @@
+[Unit]
+Description=llama-server (small class) — llama3.1:8b on the RTX 4060 Ti via Vulkan
+Documentation=https://github.com/ggml-org/llama.cpp
+After=graphical-session.target
+
+[Service]
+Type=exec
+# --host 127.0.0.1 is a security decision, not a default. The agents service and
+# its sandboxes run on this host, so inference never needs to cross the network.
+# Binding to loopback is what collapses the department's egress boundary to a
+# single outbound hole to conductor.
+#
+# --api-key-file closes the remaining local hole: llama-server enables CORS for
+# all origins, so without a key any page in a browser on this machine could
+# drive the model.
+#
+# --parallel 4 is measured, not guessed: 1/2/4/8 streams gave 145/249/384/372
+# tok/s aggregate on this card. Four is the knee — eight requests against four
+# slots is measurably WORSE than four. Keep this equal to AGENTS_LARGE_SLOTS.
+#
+# --alias gives the API a clean model name; without it the model field reports
+# the full filesystem path, which then lands in every transcript record.
+ExecStart=%h/.local/opt/llama.cpp/llama-server \
+  --model %h/.local/share/llama-models/llama3.1-8b.gguf \
+  --alias llama3.1-8b \
+  --device Vulkan1 \
+  --n-gpu-layers 999 \
+  --host 127.0.0.1 \
+  --port 8081 \
+  --parallel 4 \
+  --ctx-size 32768 \
+  --flash-attn on \
+  --cache-reuse 256 \
+  --jinja \
+  --api-key-file %h/.config/codearmory-agents/llama-small.key \
+  --no-webui
+Environment=LD_LIBRARY_PATH=%h/.local/opt/llama.cpp
+Restart=on-failure
+RestartSec=5
+# The model is 4.9GB and loads in ~8s from page cache, but cold from disk it is
+# slower; do not let systemd give up on a cold boot.
+TimeoutStartSec=300
+KillSignal=SIGINT
+
+[Install]
+WantedBy=default.target

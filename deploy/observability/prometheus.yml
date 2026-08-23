@@ -1,0 +1,10 @@
+global:
+  # Metrics arrive by remote write from the collector, so this interval only
+  # governs Prometheus scraping itself. Kept short because runs are short.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
