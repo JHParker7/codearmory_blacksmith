@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/wake"
 	"log/slog"
 	"strings"
 )
@@ -14,7 +15,7 @@ import (
 // department that refuses to start over one misconfigured repository is worse
 // than one that reports it.
 func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api *CodeArmory,
-	recorder *Recorder, gw *Gateway, tracers *agentTracers, wake *Wake) ([]*Dispatcher, error) {
+	recorder *Recorder, gw *Gateway, tracers *agentTracers, waker *wake.Wake) ([]*Dispatcher, error) {
 	var out []*Dispatcher
 	if err := api.EnsureColumns(ctx, proj.BoardID); err != nil {
 		return nil, fmt.Errorf("provision columns on board %s: %w", proj.BoardID, err)
@@ -34,7 +35,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 		out = append(out, NewDispatcher(api, recorder,
 			NewArchitectAgent(gw, api, architectClass, proj.Repo), DispatcherOpts{
 				Tracers:      tracers,
-				Wake:         wake,
+				Wake:         waker,
 				Host:         cfg.Host,
 				BoardID:      proj.BoardID,
 				Concurrency:  1,
@@ -47,7 +48,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 
 	out = append(out, NewDispatcher(api, recorder, NewPMAgent(gw, api, cfg.PMClass), DispatcherOpts{
 		Tracers:      tracers,
-		Wake:         wake,
+		Wake:         waker,
 		Host:         cfg.Host,
 		BoardID:      proj.BoardID,
 		Concurrency:  cfg.Concurrency,
@@ -86,7 +87,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 		out = append(out, NewDispatcher(api, recorder,
 			NewTesterAgent(gw, api, testClass, proj.Repo, cfg.SpecMaxIterations), DispatcherOpts{
 				Tracers:      tracers,
-				Wake:         wake,
+				Wake:         waker,
 				Host:         cfg.Host,
 				BoardID:      proj.BoardID,
 				Concurrency:  cfg.TestConcurrency,
@@ -104,7 +105,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 			out = append(out, NewDispatcher(api, recorder,
 				NewCoverageAgent(gw, api, coverageClass, proj.Repo, cfg.SpecMaxIterations), DispatcherOpts{
 					Tracers:      tracers,
-					Wake:         wake,
+					Wake:         waker,
 					Host:         cfg.Host,
 					BoardID:      proj.BoardID,
 					Concurrency:  cfg.TestConcurrency,
@@ -122,7 +123,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 		out = append(out, NewDispatcher(api, recorder,
 			NewSpecAgent(gw, api, testClass, withIntegration(proj.Repo, proj.IntegrationBranch), cfg.SpecMaxIterations), DispatcherOpts{
 				Tracers:      tracers,
-				Wake:         wake,
+				Wake:         waker,
 				Host:         cfg.Host,
 				BoardID:      proj.BoardID,
 				Concurrency:  cfg.TestConcurrency,
@@ -135,7 +136,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 		out = append(out, NewDispatcher(api, recorder,
 			NewSpecMergeAgent(gw, api, testClass, withIntegration(proj.Repo, proj.IntegrationBranch), cfg.SpecMaxIterations), DispatcherOpts{
 				Tracers:      tracers,
-				Wake:         wake,
+				Wake:         waker,
 				Host:         cfg.Host,
 				BoardID:      proj.BoardID,
 				Concurrency:  1,
@@ -148,7 +149,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 		out = append(out, NewDispatcher(api, recorder,
 			NewDevAgent(gw, api, cfg.DevClass, withIntegration(proj.Repo, proj.IntegrationBranch), cfg.DevMaxIterations), DispatcherOpts{
 				Tracers:      tracers,
-				Wake:         wake,
+				Wake:         waker,
 				Host:         cfg.Host,
 				BoardID:      proj.BoardID,
 				Concurrency:  cfg.DevConcurrency,
@@ -161,7 +162,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 			out = append(out, NewDispatcher(api, recorder,
 				NewSecAgent(gw, api, cfg.SecClass, proj.Repo).WithUpkeep(proj.AutoMode(), proj.BoardID), DispatcherOpts{
 					Tracers:      tracers,
-					Wake:         wake,
+					Wake:         waker,
 					Host:         cfg.Host,
 					BoardID:      proj.BoardID,
 					Concurrency:  1,
@@ -181,7 +182,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 				out = append(out, NewDispatcher(api, recorder,
 					NewTicketMergeAgent(api), DispatcherOpts{
 						Tracers:      tracers,
-						Wake:         wake,
+						Wake:         waker,
 						Host:         cfg.Host,
 						BoardID:      proj.BoardID,
 						Concurrency:  1,
@@ -202,7 +203,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 				out = append(out, NewDispatcher(api, recorder,
 					NewMaintenanceAgent(gw, api, cfg.DevClass, proj.Repo, cfg.DevMaxIterations, proj.BoardID), DispatcherOpts{
 						Tracers:      tracers,
-						Wake:         wake,
+						Wake:         waker,
 						Host:         cfg.Host,
 						BoardID:      proj.BoardID,
 						Concurrency:  1,
@@ -220,7 +221,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 			out = append(out, NewDispatcher(api, recorder,
 				NewIntegratorAgent(api, proj.Repo, proj.IntegrationBranch), DispatcherOpts{
 					Tracers:      tracers,
-					Wake:         wake,
+					Wake:         waker,
 					Host:         cfg.Host,
 					BoardID:      proj.BoardID,
 					Concurrency:  1,
@@ -236,7 +237,7 @@ func buildProjectDispatchers(ctx context.Context, cfg Config, proj Project, api 
 				out = append(out, NewDispatcher(api, recorder,
 					NewResolverAgent(gw, api, cfg.DevClass, proj.Repo, proj.IntegrationBranch), DispatcherOpts{
 						Tracers:      tracers,
-						Wake:         wake,
+						Wake:         waker,
 						Host:         cfg.Host,
 						BoardID:      proj.BoardID,
 						Concurrency:  1,

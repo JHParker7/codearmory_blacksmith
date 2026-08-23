@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/wake"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -223,7 +224,7 @@ func runService(ctx context.Context) {
 	// through a board column, and without this each only learns of a hand-off on
 	// its own timer — three times per ticket, since the pipeline has three of
 	// them. Sharing the trigger is what makes a hand-off immediate.
-	wake := NewWake()
+	waker := wake.New()
 	if !cfg.DispatchReady() {
 		// Serving without dispatch is a legitimate state — the host can still be
 		// exercised with the live smoke test — so this is a warning rather than a
@@ -324,7 +325,7 @@ func runService(ctx context.Context) {
 				slog.Info("project disabled; skipping", "project", proj.Name)
 				continue
 			}
-			ds, derr := buildProjectDispatchers(ctx, cfg, proj, api, recorder, gw, tracers, wake)
+			ds, derr := buildProjectDispatchers(ctx, cfg, proj, api, recorder, gw, tracers, waker)
 			if derr != nil {
 				slog.Error("could not start a project", "project", proj.Name, "error", derr)
 				os.Exit(1)
