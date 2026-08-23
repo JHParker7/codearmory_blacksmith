@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/model"
 	"log/slog"
 	"strings"
 )
@@ -426,7 +427,7 @@ func decodeJSONObject(raw string, into any) error {
 	if start == -1 || end == -1 || end < start {
 		return errors.New("no JSON object in the model output")
 	}
-	return decodeModelJSON(s[start:end+1], into)
+	return model.DecodeJSON(s[start:end+1], into)
 }
 
 func keysOf(m map[string]string) []string {

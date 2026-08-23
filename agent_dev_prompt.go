@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/model"
 	"sort"
 	"strings"
 )
@@ -328,7 +329,7 @@ func actionFromCall(call ToolCall, mode agentMode) (devAction, error) {
 	if args == "" || args == "null" {
 		return act, nil
 	}
-	if err := decodeModelJSON(args, &act); err != nil {
+	if err := model.DecodeJSON(args, &act); err != nil {
 		return devAction{}, fmt.Errorf("tool %s: arguments are not valid JSON: %w", name, err)
 	}
 	act.Action = name // arguments must never redefine which tool was called
@@ -359,7 +360,7 @@ func parseDevAction(raw string) (devAction, error) {
 	}
 
 	var act devAction
-	if err := decodeModelJSON(s[start:end+1], &act); err != nil {
+	if err := model.DecodeJSON(s[start:end+1], &act); err != nil {
 		return devAction{}, fmt.Errorf("reply is not valid JSON: %w", err)
 	}
 	act.Action = strings.TrimSpace(act.Action)
@@ -989,7 +990,7 @@ func toolCallFromText(content string) (ToolCall, bool) {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
-	if err := decodeModelJSON(s[start:end+1], &raw); err != nil {
+	if err := model.DecodeJSON(s[start:end+1], &raw); err != nil {
 		return ToolCall{}, false
 	}
 	if raw.Name == "" {

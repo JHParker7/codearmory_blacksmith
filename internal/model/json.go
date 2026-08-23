@@ -1,4 +1,4 @@
-package main
+package model
 
 import (
 	"encoding/json"
@@ -29,12 +29,12 @@ import (
 // in it, and guessing there would risk silently changing the code the agent is
 // about to commit.
 
-// decodeModelJSON unmarshals a model's JSON object, repairing raw control
+// DecodeJSON unmarshals a model's JSON object, repairing raw control
 // characters inside string literals if the strict parse fails.
 //
 // The strict parse is tried FIRST and unchanged, so well-formed replies — the
 // majority — take exactly the path they always did.
-func decodeModelJSON(payload string, into any) error {
+func DecodeJSON(payload string, into any) error {
 	if err := decodeFirstJSONValue(payload, into); err == nil {
 		return nil
 	} else if repaired := escapeControlCharsInStrings(payload); repaired != payload {

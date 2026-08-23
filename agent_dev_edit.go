@@ -743,7 +743,7 @@ func windowAround(content, errText string) string {
 // missing terminator — the repair is therefore a GUESS, and it is accepted only
 // if the file parses afterwards. A wrong guess produces something that does not
 // parse and is discarded, leaving the original error to be reported. The same
-// discipline decodeModelJSON uses on control characters: repair what is
+// discipline model.DecodeJSON uses on control characters: repair what is
 // unambiguous, verify, and never let a guess through unchecked.
 //
 // Returns the content to use, whether a repair was applied, and an error only
