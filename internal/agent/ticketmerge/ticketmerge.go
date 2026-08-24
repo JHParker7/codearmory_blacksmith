@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/code-armory-app/blacksmith/internal/agent/plan"
 	"github.com/code-armory-app/blacksmith/internal/model"
 	"github.com/code-armory-app/blacksmith/internal/record"
 	"github.com/code-armory-app/blacksmith/internal/ticket"
@@ -38,13 +39,6 @@ type Store interface {
 
 // MergedFromMarker records the ticket that absorbed the others.
 const MergedFromMarker = "**Merged from the tasks below.**"
-
-// TaskFileIntro is how a plan names the source file a task's code belongs in.
-//
-// A CONSTANT SHARED WITH THE STAGE THAT WRITES IT, because coupling one stage to
-// another's prose by retyping it is a bug waiting for someone to reword a
-// sentence. Naming it is not.
-const TaskFileIntro = "Put this task's code in `"
 
 // Agent folds a plan's tasks into one.
 type Agent struct {
@@ -262,7 +256,7 @@ func SectionBrief(unit ticket.Ticket, n, total int) string {
 	// owns cannot make that mistake.
 	file := "spec_test.go"
 	if src := SourceFileFromBrief(unit.Description); src != "" {
-		file = SpecFileFor(src)
+		file = plan.SpecFileFor(src)
 	}
 	fmt.Fprintf(&b, "Put these tests in `%s`, creating it, and touch no other test file. "+
 		"It is slice %d of %d; the others are written by other authors onto this same branch, "+
@@ -276,7 +270,7 @@ func SectionBrief(unit ticket.Ticket, n, total int) string {
 // the matching test file can be named. Empty when the plan named no file, which
 // is why the caller keeps a default.
 func SourceFileFromBrief(desc string) string {
-	_, rest, ok := strings.Cut(desc, TaskFileIntro)
+	_, rest, ok := strings.Cut(desc, plan.TaskFileIntro)
 	if !ok {
 		return ""
 	}
@@ -285,16 +279,6 @@ func SourceFileFromBrief(desc string) string {
 		return ""
 	}
 	return strings.TrimSpace(file)
-}
-
-// SpecFileFor names the test file for a section, from the source file it was
-// assigned.
-func SpecFileFor(source string) string {
-	base := strings.TrimSuffix(source, ".go")
-	if base == source {
-		return source + "_test.go"
-	}
-	return base + "_test.go"
 }
 
 func (a *Agent) comment(ctx context.Context, id, body string) {

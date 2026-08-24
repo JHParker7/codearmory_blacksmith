@@ -275,6 +275,17 @@ type Config struct {
 	CoverageEnabled  bool
 	ArchitectEnabled bool
 
+	// MergeTasksFirst folds a whole plan into one task before it is specified,
+	// and OneSpecAuthorPerTask has one agent write a task's whole specification
+	// instead of one per slice.
+	//
+	// BOTH ARE MEASUREMENTS IN PROGRESS rather than settled design: each keeps
+	// the other shape runnable on the same seed, so the answer is a number
+	// instead of an argument. See internal/agent/scope.Options, which is where
+	// what they mean is written down.
+	MergeTasksFirst      bool
+	OneSpecAuthorPerTask bool
+
 	Repo              Repo
 	IntegrationBranch string
 
