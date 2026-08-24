@@ -110,7 +110,17 @@ func escapeControlCharsInStrings(s string) string {
 				b.WriteString(`\\`)
 				continue
 			}
-			if isJSONEscape(s[i+1]) {
+			// \u IS ONLY AN ESCAPE IF FOUR HEX DIGITS FOLLOW IT. Accepting it
+			// without looking left the one case this function exists to prevent:
+			// a reply carrying a good file thrown away for a character in it.
+			// Measured directly — "path C:\users\bin" and "see \usr for it" both
+			// came back as "invalid character 's' in \u hexadecimal character
+			// escape", with the whole edit lost, while "valid \u00e9 here" was fine.
+			//
+			// A bad \u now takes the same route as any other unknown escape: kept
+			// as a literal backslash, because preserving beats dropping and visible
+			// beats silent, which is what the rest of this branch already does.
+			if isJSONEscape(s[i+1]) && (s[i+1] != 'u' || hasFourHexDigits(s[i+2:])) {
 				b.WriteByte(c)
 				i++
 				b.WriteByte(s[i])
@@ -137,13 +147,28 @@ func escapeControlCharsInStrings(s string) string {
 
 // isJSONEscape reports whether c may follow a backslash in a JSON string.
 //
-// \u is included without checking the four hex digits that must follow it: a
-// malformed \u is rare, and treating it as a literal backslash would mangle the
-// far commoner well-formed case.
+// \u is included here, but the caller checks the four hex digits that must
+// follow it before treating the pair as an escape — see hasFourHexDigits.
 func isJSONEscape(c byte) bool {
 	switch c {
 	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u':
 		return true
 	}
 	return false
+}
+
+// hasFourHexDigits reports whether s opens with the four hex digits a \u escape
+// requires. Anything else means the backslash was not starting an escape at all.
+func hasFourHexDigits(s string) bool {
+	if len(s) < 4 {
+		return false
+	}
+	for i := 0; i < 4; i++ {
+		switch c := s[i]; {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
