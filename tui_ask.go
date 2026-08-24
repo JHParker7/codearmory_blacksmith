@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/model"
 	"strings"
 	"time"
 
@@ -99,7 +100,7 @@ func refineRequest(ctx context.Context, gw *Gateway, class Class, line string) (
 		Title   string `json:"title"`
 		Request string `json:"request"`
 	}
-	if err := decodeModelJSON(res.Content, &out); err != nil {
+	if err := model.DecodeJSON(res.Content, &out); err != nil {
 		return line, ""
 	}
 	if strings.TrimSpace(out.Title) == "" {

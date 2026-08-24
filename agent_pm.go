@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/model"
 	"log/slog"
 	"os"
 	"path"
@@ -655,7 +656,7 @@ func parseTriage(raw string) (triage, error) {
 		return triage{}, errors.New("no JSON object in model output")
 	}
 	var tri triage
-	if err := decodeModelJSON(s[start:end+1], &tri); err != nil {
+	if err := model.DecodeJSON(s[start:end+1], &tri); err != nil {
 		return triage{}, fmt.Errorf("decode triage: %w", err)
 	}
 	return tri, nil

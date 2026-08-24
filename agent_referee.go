@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/model"
 	"log/slog"
 	"strings"
 )
@@ -250,7 +251,7 @@ func (a *DevAgent) askSpecPreflight(ctx context.Context, rec *Recorder, t Ticket
 		Reason     string `json:"reason"`
 		Confidence string `json:"confidence"`
 	}
-	if err := decodeModelJSON(res.Content, &pre); err != nil {
+	if err := model.DecodeJSON(res.Content, &pre); err != nil {
 		return nil
 	}
 	if pre.Verdict != preflightImpossible {

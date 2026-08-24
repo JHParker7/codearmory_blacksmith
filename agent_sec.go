@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/model"
 	"log/slog"
 	"slices"
 	"strings"
@@ -459,7 +460,7 @@ func parseReview(raw string) (review, error) {
 		return review{}, errors.New("no JSON object in model output")
 	}
 	var rev review
-	if err := decodeModelJSON(s[start:end+1], &rev); err != nil {
+	if err := model.DecodeJSON(s[start:end+1], &rev); err != nil {
 		return review{}, fmt.Errorf("decode review: %w", err)
 	}
 	return rev, nil
