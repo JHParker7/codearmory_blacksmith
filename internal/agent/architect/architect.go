@@ -240,7 +240,7 @@ func (a *Agent) Handle(ctx context.Context, t ticket.Ticket) (workflow.Outcome, 
 	}
 
 	var design Design
-	if err := decodeObject(res.Content, &design); err != nil {
+	if err := model.DecodeObject(res.Content, &design); err != nil {
 		return a.skip(ctx, t, unusableReply(res, err))
 	}
 
@@ -529,40 +529,6 @@ func renderTicket(t ticket.Ticket) string {
 		b.WriteString(clip(d, 4000))
 	}
 	return b.String()
-}
-
-// decodeObject pulls the JSON object out of a reply. A reply that already IS an
-// object is never fence-extracted: this stage asks for markdown file contents,
-// and a README with a fenced build snippet in it is the norm rather than the
-// exception.
-func decodeObject(raw string, into any) error {
-	s := strings.TrimSpace(raw)
-	if !strings.HasPrefix(s, "{") {
-		if fenced := extractFenced(s); fenced != "" {
-			s = fenced
-		}
-	}
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start == -1 || end == -1 || end < start {
-		return errors.New("no JSON object in the model output")
-	}
-	return model.DecodeJSON(s[start:end+1], into)
-}
-
-func extractFenced(s string) string {
-	_, rest, ok := strings.Cut(s, "```")
-	if !ok {
-		return ""
-	}
-	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-		rest = rest[nl+1:]
-	}
-	body, _, ok := strings.Cut(rest, "```")
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(body)
 }
 
 func recorderFrom(ctx context.Context) *transcript.Recorder {
