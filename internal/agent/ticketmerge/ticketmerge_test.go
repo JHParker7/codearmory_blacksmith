@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/code-armory-app/blacksmith/internal/agent/plan"
 	"github.com/code-armory-app/blacksmith/internal/record"
 	"github.com/code-armory-app/blacksmith/internal/ticket"
 	"github.com/code-armory-app/blacksmith/internal/workflow"
@@ -157,13 +158,13 @@ func (b *board) commentsOn(id string) string {
 }
 
 // plan builds a request with n tasks waiting to be merged.
-func plan(b *board, n int) (parent ticket.Ticket, tasks []ticket.Ticket) {
+func breakdown(b *board, n int) (parent ticket.Ticket, tasks []ticket.Ticket) {
 	parent = b.add(ticket.Ticket{Title: "Build a task manager", Status: workflow.ColTracking})
 	for i := 1; i <= n; i++ {
 		tasks = append(tasks, b.add(ticket.Ticket{
 			Title: fmt.Sprintf("Task %d", i),
 			Description: fmt.Sprintf("Do the %d%s thing.\n\n%sunit%d.go`.",
-				i, "th", TaskFileIntro, i),
+				i, "th", plan.TaskFileIntro, i),
 			Status:   workflow.ColReadyForTicketMerge,
 			ParentID: &parent.ID,
 		}))
@@ -176,7 +177,7 @@ func plan(b *board, n int) (parent ticket.Ticket, tasks []ticket.Ticket) {
 // and reports success while the requirement is simply gone.
 func TestEveryTasksRequirementsSurviveTheMerge(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 4)
+	_, tasks := breakdown(b, 4)
 
 	a := New(b)
 	status, detail, err := a.Handle(context.Background(), tasks[0])
@@ -203,7 +204,7 @@ func TestEveryTasksRequirementsSurviveTheMerge(t *testing.T) {
 // request's children, and the id anything already referring to it used.
 func TestTheFirstTicketAbsorbsTheOthersRatherThanANewOne(t *testing.T) {
 	b := newBoard()
-	parent, tasks := plan(b, 3)
+	parent, tasks := breakdown(b, 3)
 
 	if _, _, err := New(b).Handle(context.Background(), tasks[0]); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -236,7 +237,7 @@ func TestTheFirstTicketAbsorbsTheOthersRatherThanANewOne(t *testing.T) {
 // written in. Leaving it to the store made both vary run to run.
 func TestTheOrderIsTheOrderTheWorkWasPlanned(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 4)
+	_, tasks := breakdown(b, 4)
 
 	// The listing returns them backwards, as a store with no ordering promise may.
 	if _, _, err := New(b).Handle(context.Background(), tasks[0]); err != nil {
@@ -264,7 +265,7 @@ func TestTheOrderIsTheOrderTheWorkWasPlanned(t *testing.T) {
 // five units and it stops after one.
 func TestOneSectionIsOpenedPerUnitOfWork(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 3)
+	_, tasks := breakdown(b, 3)
 
 	if _, _, err := New(b).Handle(context.Background(), tasks[0]); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -290,7 +291,7 @@ func TestOneSectionIsOpenedPerUnitOfWork(t *testing.T) {
 // specification exists rather than partway through it.
 func TestTheMergedTaskWaitsForEverySection(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 3)
+	_, tasks := breakdown(b, 3)
 
 	if _, _, err := New(b).Handle(context.Background(), tasks[0]); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -318,7 +319,7 @@ func TestTheMergedTaskWaitsForEverySection(t *testing.T) {
 // once, four looping until the run was stopped.
 func TestTheSectionsAreChainedSoTheyCannotRaceOnTheBranch(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 4)
+	_, tasks := breakdown(b, 4)
 
 	if _, _, err := New(b).Handle(context.Background(), tasks[0]); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -345,7 +346,7 @@ func TestTheSectionsAreChainedSoTheyCannotRaceOnTheBranch(t *testing.T) {
 // failing to quote a function back exactly before one landed.
 func TestEachSectionIsGivenItsOwnFileToCreate(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 3)
+	_, tasks := breakdown(b, 3)
 
 	if _, _, err := New(b).Handle(context.Background(), tasks[0]); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -396,7 +397,7 @@ func TestASectionWithNoNamedFileGetsADefault(t *testing.T) {
 // nobody develops.
 func TestSectionsUnderAnAbsorbedTicketAreClosed(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 2)
+	_, tasks := breakdown(b, 2)
 	orphan := b.add(ticket.Ticket{
 		Title: "Specification for Task 2", Status: workflow.ColReadyForSpec, ParentID: &tasks[1].ID,
 	})
@@ -448,8 +449,8 @@ func TestATaskPastThisStageIsNotAbsorbed(t *testing.T) {
 // A ticket from another request must never be taken, however it is ordered.
 func TestATaskFromAnotherRequestIsNeverAbsorbed(t *testing.T) {
 	b := newBoard()
-	_, mine := plan(b, 2)
-	_, theirs := plan(b, 2)
+	_, mine := breakdown(b, 2)
+	_, theirs := breakdown(b, 2)
 
 	if _, _, err := New(b).Handle(context.Background(), mine[0]); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -505,7 +506,7 @@ func TestATicketWithNoSiblingsLeftDoesNothing(t *testing.T) {
 // a success reported: the brief is the merge.
 func TestAFailureToWriteTheBriefIsReportedAsOne(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 3)
+	_, tasks := breakdown(b, 3)
 	b.failUpdate = true
 
 	status, _, err := New(b).Handle(context.Background(), tasks[0])
@@ -524,7 +525,7 @@ func TestAFailureToWriteTheBriefIsReportedAsOne(t *testing.T) {
 
 func TestAFailureToOpenASectionIsReportedAsOne(t *testing.T) {
 	b := newBoard()
-	_, tasks := plan(b, 3)
+	_, tasks := breakdown(b, 3)
 	b.failCreate = true
 
 	status, _, err := New(b).Handle(context.Background(), tasks[0])
@@ -558,20 +559,20 @@ func TestSpecFileNaming(t *testing.T) {
 		"":             "_test.go",
 	}
 	for in, want := range cases {
-		if got := SpecFileFor(in); got != want {
-			t.Errorf("SpecFileFor(%q) = %q, want %q", in, got, want)
+		if got := plan.SpecFileFor(in); got != want {
+			t.Errorf("plan.SpecFileFor(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
 func TestTheSourceFileIsReadBackFromTheBrief(t *testing.T) {
-	desc := "Do the thing.\n\n" + TaskFileIntro + "store.go`, and nowhere else."
+	desc := "Do the thing.\n\n" + plan.TaskFileIntro + "store.go`, and nowhere else."
 	if got := SourceFileFromBrief(desc); got != "store.go" {
 		t.Errorf("SourceFileFromBrief() = %q", got)
 	}
 	// A brief that names no file yields nothing, which is why the caller keeps a
 	// default rather than trusting this.
-	for _, desc := range []string{"", "no file here", TaskFileIntro + "unterminated"} {
+	for _, desc := range []string{"", "no file here", plan.TaskFileIntro + "unterminated"} {
 		if got := SourceFileFromBrief(desc); got != "" {
 			t.Errorf("SourceFileFromBrief(%q) = %q, want empty", desc, got)
 		}

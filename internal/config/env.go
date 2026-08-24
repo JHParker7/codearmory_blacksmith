@@ -183,6 +183,10 @@ func Load() (Config, error) {
 		// so no permitted action ends the loop.
 		ArchitectEnabled: e.onUnlessOff("AGENTS_ARCHITECT_ENABLED"),
 
+		// Both OFF by default, which is the shape every run so far has used.
+		MergeTasksFirst:      e.on("AGENTS_PM_ONE_TASK"),
+		OneSpecAuthorPerTask: e.on("AGENTS_SPEC_ONE_AUTHOR"),
+
 		IntegrationBranch: e.str("AGENTS_REPO_INTEGRATION_BRANCH", DefaultIntegrationBranch),
 	}
 

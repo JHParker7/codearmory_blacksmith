@@ -321,7 +321,7 @@ func (a *Agent) skip(ctx context.Context, t ticket.Ticket, s skipped) (workflow.
 func unusableReply(res model.ChatResult, err error) skipped {
 	why := fmt.Sprintf("the reply is not valid JSON (%v)", err)
 	detail := "unparseable model output"
-	if res.CompletionTokens >= MaxReplyTokens {
+	if res.Truncated(MaxReplyTokens) {
 		why = fmt.Sprintf("the reply was CUT OFF at the %d-token ceiling, so the JSON never closed (%v)",
 			MaxReplyTokens, err)
 		detail = "design reply truncated"
