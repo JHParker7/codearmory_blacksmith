@@ -275,6 +275,10 @@ func (m Mode) RestartJob() string {
 			"already written are shown above — keep what is right, add what the ticket asks for " +
 			"and is still missing. They must FAIL against the current code; that is what makes " +
 			"them a specification, and it is what the gate checks."
+	case ModeSpecMerge:
+		return "Your job is unchanged: make the sections on this branch compile as ONE " +
+			"package. Rename a duplicate, fold two identical helpers into one — and weaken " +
+			"nothing: every assertion that was here must still be here when you finish."
 	case ModeCoverage:
 		return "Your job is unchanged: ADD tests to raise coverage. The tests that were here " +
 			"before you are the specification the developer was held to and must not be edited."
