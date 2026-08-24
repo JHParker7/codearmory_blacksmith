@@ -98,6 +98,24 @@ type State struct {
 	// work was kept.
 	Restart string
 
+	// Baseline is each file's content AS IT WAS ON DISK, captured on the first
+	// read and never overwritten by the agent's own writes.
+	//
+	// Read is NOT a substitute: it is deliberately updated with staged content so
+	// the agent sees its own edits, which means by the time a second write
+	// arrives there is nothing left to compare against. This exists to answer one
+	// question — "is this write throwing away code that was already there" — and
+	// that question needs the ORIGINAL.
+	Baseline map[string]string
+
+	// The counters that end an attempt. Each answers a different question, and
+	// the two occasions they were conflated both cost whole runs.
+	Refusals         int
+	NoopEdits        int
+	ConsecutiveReads int
+	Resets           int
+	LastResetAt      int
+
 	// Missing records a path the tree listed but a read could not find, so a
 	// create is not refused as an overwrite of something that is not there.
 	Missing map[string]bool
