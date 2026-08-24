@@ -149,10 +149,13 @@ func (s *State) Directive() string {
 // the softer behavioural signals.
 func (s *State) Exhausted(deadCeiling int) (why string, done bool) {
 	switch {
-	case s.Iteration >= MaxTotalIterations:
+	// STRICTLY GREATER, because the check runs at the TOP of a turn: at the start
+	// of turn N the agent has taken N-1 actions, so ">=" would give a budget of N
+	// exactly N-1 turns — and a budget of one would give none at all.
+	case s.Iteration > MaxTotalIterations:
 		return fmt.Sprintf("ran to the diagnostic ceiling of %d turns", MaxTotalIterations), true
 
-	case s.Budget > 0 && s.Iteration >= s.Budget:
+	case s.Budget > 0 && s.Iteration > s.Budget:
 		return fmt.Sprintf("spent its budget of %d turns", s.Budget), true
 
 	case s.ConsecutiveReads >= MaxConsecutiveReads:
@@ -225,8 +228,14 @@ func (s *State) ResetAgent(brief string) {
 	s.Notice = ""
 	s.Refusals = 0
 	s.NoopEdits = 0
-	s.ConsecutiveReads = 0
 	s.UndoStack = nil
+
+	// THE READ RUN DELIBERATELY SURVIVES. It is not memory of how the agent got
+	// here, it is evidence about the agent itself — and clearing it every forty
+	// turns means an agent that only ever reads can never reach the hundred-read
+	// ceiling. It then runs to the diagnostic ceiling instead and the ticket
+	// reports "ran to 200 turns", which is exactly the unusable message the read
+	// bound exists to replace. Caught by a test, not by reading the code.
 
 	// The brief goes last and on its own, because the agent being briefed did not
 	// take the action that came before — it is not a rejection.
@@ -238,16 +247,42 @@ func (s *State) ResetAgent(brief string) {
 // IT SAYS THE WORK IS KEPT, first and plainly. An agent told only that its
 // memory was cleared has every reason to start over, which is the one outcome
 // this exists to prevent.
-func RestartBrief(staged []string, resets int) string {
+func RestartBrief(mode Mode, staged []string, resets int) string {
 	if len(staged) == 0 {
 		return fmt.Sprintf("YOU ARE PICKING UP THIS TICKET FRESH (restart %d). Nothing has been "+
-			"written yet. Read what you need in ONE call, then make the change.", resets)
+			"written yet. Read what you need in ONE call, then make the change.\n\n%s",
+			resets, mode.RestartJob())
 	}
 	return fmt.Sprintf("YOU ARE PICKING UP THIS TICKET PART-WAY THROUGH (restart %d). The files "+
 		"below are ALREADY WRITTEN and are on the branch — they are the code that exists now, "+
 		"not a draft to redo:\n\n  %s\n\nRead them before changing them, and continue from "+
-		"there rather than starting over. The last verification above says what is still "+
-		"failing; that is the work.", resets, joinLines(staged))
+		"there rather than starting over.\n\n%s",
+		resets, joinLines(staged), mode.RestartJob())
+}
+
+// RestartJob is what the fresh agent is told its job is.
+//
+// THE BRIEF MUST MATCH THE JOB. One loop serves three stages, and the first
+// version of this told all of them to "make the remaining test failures pass" —
+// which is the developer's job and the EXACT INVERSE of the specification
+// author's, whose tests are supposed to fail. Observed on a live ticket: an
+// author was restarted twice and instructed, in its own prompt, to do the one
+// thing its own gate refuses.
+func (m Mode) RestartJob() string {
+	switch m {
+	case ModeTest:
+		return "Your job is unchanged: finish the SPECIFICATION for this ticket. The tests " +
+			"already written are shown above — keep what is right, add what the ticket asks for " +
+			"and is still missing. They must FAIL against the current code; that is what makes " +
+			"them a specification, and it is what the gate checks."
+	case ModeCoverage:
+		return "Your job is unchanged: ADD tests to raise coverage. The tests that were here " +
+			"before you are the specification the developer was held to and must not be edited."
+	default:
+		return "Your job is narrow: make the remaining test failures pass. Read the verification " +
+			"output, change what is wrong, and let the checks run. If the existing approach is " +
+			"wrong, replace it."
+	}
 }
 
 func joinLines(in []string) string {
