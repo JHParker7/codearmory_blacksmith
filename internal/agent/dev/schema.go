@@ -1,0 +1,264 @@
+package dev
+
+import (
+	"github.com/code-armory-app/blacksmith/internal/model"
+)
+
+// Schema constrains the reply on a backend with no tool support.
+//
+// ONE SHAPE PER ACTION, because a single object with everything optional is not
+// a constraint at all. This was one flat object requiring only "action", which
+// was harmless while it was a fallback and became the whole contract the moment
+// the turn stopped offering tools. The tool definitions required edits, summary
+// and type on write_files; this copy required none of them, so the grammar
+// happily admitted {"action":"write_files"} — 25 refusals of "write_files with
+// no edits" in the first window after the switch, every one schema-valid.
+//
+// EVERY FIELD IS BOUNDED, because this becomes a GRAMMAR and an unbounded string
+// in a grammar is an unbounded reply. Measured when a backend without tool
+// support first fell through to here: the model filled "type" with
+// "replace_all_content_in_file_if_exists_…" and kept going for 5,000 tokens and
+// 348 seconds — schema-valid the whole way, because nothing said how long a
+// string may be.
+func Schema() *model.ReplySchema {
+	only := func(action string) map[string]any {
+		return map[string]any{"type": "string", "enum": []string{action}}
+	}
+	return &model.ReplySchema{
+		Name: "dev_action",
+		Schema: map[string]any{
+			"oneOf": []any{
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action": only(ActionReadFiles),
+						"paths": map[string]any{
+							"type":     "array",
+							"items":    map[string]any{"type": "string", "maxLength": MaxPathChars},
+							"maxItems": MaxReadPaths,
+							"minItems": 1,
+						},
+					},
+					"required":             []string{"action", "paths"},
+					"additionalProperties": false,
+				},
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action":  only(ActionWriteFiles),
+						"edits":   EditsSchema(),
+						"summary": map[string]any{"type": "string", "maxLength": MaxSummaryRunes},
+						"type":    map[string]any{"type": "string", "enum": ConventionalTypes},
+					},
+					// The three the tool form required. AN EDIT-LESS WRITE IS NOT A
+					// SMALLER EDIT, IT IS A WASTED TURN.
+					"required":             []string{"action", "edits", "summary", "type"},
+					"additionalProperties": false,
+				},
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action": only(ActionUndoEdit),
+						"reason": map[string]any{"type": "string", "maxLength": MaxSummaryRunes},
+					},
+					"required":             []string{"action"},
+					"additionalProperties": false,
+				},
+			},
+		},
+	}
+}
+
+// EditsSchema describes a batch of edits. SHARED by the tool definition and the
+// content fallback so the two cannot describe different shapes — which is how
+// the last format ended up with two channels that disagreed.
+//
+// ONE SHAPE PER WAY OF POINTING AT THE CODE, because putting every address in
+// one object is what made the copy inevitable.
+//
+// With old_str and replace both required and adjacent, a constrained sampler
+// walks the fields in order and the highest-probability continuation after a
+// long quote is that same quote again. Measured directly: under the flat shape
+// the model sent old_str identical to replace in 39 of 47 turns, and the
+// no-progress ceiling then killed the ticket — twice, taking the board with it.
+// A message naming the mistake did not move it, and neither did a length cap.
+//
+// Branching removes the OPPORTUNITY rather than discouraging the act. The decl
+// shape has no old_str to copy; the anchor shape holds a SHORT quote that cannot
+// be a duplicate of a long replacement; the line shape carries no quote at all.
+func EditsSchema() map[string]any {
+	path := map[string]any{
+		"type": "string", "maxLength": MaxPathChars,
+		"description": "Repository-relative path to edit.",
+	}
+	replace := map[string]any{
+		"type":        "string",
+		"description": "The new text. This is the only place new code goes.",
+	}
+	return map[string]any{
+		"type":     "array",
+		"minItems": 1,
+		"maxItems": MaxWriteFiles,
+		"items": map[string]any{
+			"oneOf": []any{
+				// PREFERRED: name a whole declaration and give its new body once.
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": path,
+						"decl": map[string]any{
+							"type": "string", "maxLength": MaxDeclChars,
+							"description": `The declaration to replace whole: "main", "apiTasksHandler", "Store.Add".`,
+						},
+						"replace": replace,
+					},
+					"required":             []string{"path", "decl", "replace"},
+					"additionalProperties": false,
+				},
+				// A SHORT ANCHOR for a change inside a declaration. Capped here, where
+				// the cap is safe because the other two shapes cover what it excludes.
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": path,
+						"old_str": map[string]any{
+							"type": "string", "maxLength": MaxAnchorChars,
+							"description": "A SHORT unique snippet, at most a few lines, copied exactly " +
+								"from the numbered contents. It marks WHERE to change and must appear once.",
+						},
+						"replace": replace,
+					},
+					"required":             []string{"path", "old_str", "replace"},
+					"additionalProperties": false,
+				},
+				// Line numbers, for picking one of several identical lines, and for
+				// creating a file (start_line 0).
+				map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path":       path,
+						"start_line": map[string]any{"type": "integer", "minimum": 0},
+						"end_line":   map[string]any{"type": "integer", "minimum": 0},
+						"replace":    replace,
+					},
+					"required":             []string{"path", "start_line", "end_line", "replace"},
+					"additionalProperties": false,
+				},
+			},
+		},
+	}
+}
+
+// Tools offers the loop's actions as callable functions.
+//
+// ONE TOOL PER ACTION, rather than one tool with an action enum, because that is
+// what the models are trained on and it lets each action carry only its own
+// arguments — "edits" is required on write_files and cannot be omitted, which
+// was previously a silent empty write.
+//
+// FILTERED THROUGH Actions so the offered tools and the accepted ones cannot
+// drift apart. run_tests, finish and give_up still have definitions here and are
+// simply not listed: keeping them makes restoring one a one-line change, whereas
+// a tool offered but not accepted is a trap of exactly the kind this removes.
+func Tools(mode Mode) []model.Tool {
+	all := []model.Tool{
+		{
+			Name: ActionReadFiles,
+			Description: "Read files from the repository. Name every file you need in ONE call — " +
+				"each call costs an iteration and you have few.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"paths": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Repository-relative paths, up to 12.",
+					},
+				},
+				"required":             []string{"paths"},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Name: ActionWriteFiles,
+			Description: "Edit files. " + mode.EditRule() +
+				` ADDRESS AN EDIT BY ITS TEXT: put the exact snippet you are replacing in "old_str" ` +
+				`(it must appear exactly once) and the new text in "replace". To rewrite a whole ` +
+				`function or type, name it in "decl" instead and give the whole declaration in ` +
+				`"replace". Line numbers are a last resort for picking one of several identical ` +
+				"lines. NEVER put the same text in old_str and replace — old_str is what is there " +
+				"now, replace is what it becomes. For a small file you may send the whole new file " +
+				`in "replace" with old_str, decl, start_line and end_line all empty or 0. ` +
+				"What you do not name, you do not change.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"edits":   EditsSchema(),
+					"summary": map[string]any{"type": "string", "description": "One line describing the change."},
+					"type": map[string]any{
+						"type":        "string",
+						"enum":        ConventionalTypes,
+						"description": "Conventional Commits type for the commit message.",
+					},
+				},
+				"required":             []string{"edits", "summary", "type"},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Name: ActionUndoEdit,
+			Description: "Put the file back to what it was before your last write. Use this the moment " +
+				"an edit leaves a file you no longer recognise — once the text on disk has diverged " +
+				"from what you expect, neither old_str nor a line number will find what you are " +
+				"looking for, and further edits make it worse. Undo, read the file, then try again.",
+			Parameters: emptyArgs(),
+		},
+		{
+			Name:        ActionRunTests,
+			Description: mode.CheckDescription(),
+			Parameters:  emptyArgs(),
+		},
+		{
+			Name: ActionFinish,
+			Description: "Not offered: the stage ends by itself when its checks pass. Kept so restoring " +
+				"it is a one-line change to Actions.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"summary": map[string]any{"type": "string", "description": "One line describing the change."},
+					"type":    map[string]any{"type": "string", "enum": ConventionalTypes},
+				},
+				"required":             []string{"summary", "type"},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Name:        ActionGiveUp,
+			Description: "Stop, explaining why this ticket cannot be done. Use this rather than guessing.",
+			Parameters: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{"reason": map[string]any{"type": "string"}},
+				"required":             []string{"reason"},
+				"additionalProperties": false,
+			},
+		},
+	}
+
+	allowed := ActionsFor(mode)
+	out := make([]model.Tool, 0, len(all))
+	for _, t := range all {
+		for _, name := range allowed {
+			if t.Name == name {
+				out = append(out, t)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func emptyArgs() map[string]any {
+	return map[string]any{
+		"type": "object", "properties": map[string]any{}, "additionalProperties": false,
+	}
+}
