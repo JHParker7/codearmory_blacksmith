@@ -468,7 +468,7 @@ func TestADesignCarryingAFencedBlockIsNotMangled(t *testing.T) {
 	raw, _ := json.Marshal(Design{Overview: "x", Files: []File{{Path: "README.md", Content: body}}})
 
 	var got Design
-	if err := decodeObject(string(raw), &got); err != nil {
+	if err := model.DecodeObject(string(raw), &got); err != nil {
 		t.Fatalf("a design containing a fence was rejected: %v", err)
 	}
 	if !strings.Contains(got.Files[0].Content, "go build ./...") {

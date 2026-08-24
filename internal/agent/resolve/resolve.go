@@ -359,7 +359,7 @@ func ValidateResolution(raw string, conflicted map[string]string) (map[string]st
 			Content string `json:"content"`
 		} `json:"files"`
 	}
-	if err := decodeObject(raw, &out); err != nil {
+	if err := model.DecodeObject(raw, &out); err != nil {
 		return nil, err
 	}
 	if len(out.Files) == 0 {
@@ -462,46 +462,6 @@ Rules:
 - KEEP BOTH CHANGES where they are independent — two functions added to one file are not a disagreement, they are two additions, and dropping either loses work someone asked for.
 - Where they genuinely conflict, prefer the change that matches the ticket above.
 - Change nothing beyond what the conflict requires.`
-
-// decodeObject pulls the JSON object out of a model reply and decodes it,
-// tolerating the fences and preamble models add despite being asked not to.
-//
-// A REPLY THAT ALREADY IS A JSON OBJECT IS NEVER FENCE-EXTRACTED. Taking the
-// first fence is right when a model wrapped its answer in a code block and
-// CATASTROPHIC when the answer itself contains one — and file contents routinely
-// do. Leading brace is the reliable signal: nothing needs unwrapping, so nothing
-// is unwrapped.
-func decodeObject(raw string, into any) error {
-	s := strings.TrimSpace(raw)
-	if !strings.HasPrefix(s, "{") {
-		if fenced := extractFenced(s); fenced != "" {
-			s = fenced
-		}
-	}
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start == -1 || end == -1 || end < start {
-		return errors.New("no JSON object in the model output")
-	}
-	return model.DecodeJSON(s[start:end+1], into)
-}
-
-// extractFenced returns the contents of the first fenced block, or "".
-func extractFenced(s string) string {
-	_, rest, ok := strings.Cut(s, "```")
-	if !ok {
-		return ""
-	}
-	// A fence may name a language on the same line.
-	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-		rest = rest[nl+1:]
-	}
-	body, _, ok := strings.Cut(rest, "```")
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(body)
-}
 
 func (a *Agent) secretRefs() map[string]string {
 	if a.repo.SecretRef == "" {
