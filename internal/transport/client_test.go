@@ -353,8 +353,10 @@ func TestAnUndecodableBodyIsAnError(t *testing.T) {
 
 func TestSnippetBoundsALargeBody(t *testing.T) {
 	got := Snippet(strings.NewReader(strings.Repeat("x", 5000)))
-	if len(got) > 500 {
-		t.Errorf("a 5000-byte body rendered as %d bytes", len(got))
+	// Tied to the constant rather than to a number typed here: a bound that moves
+	// must not need a test edited to agree with it.
+	if len(got) > SnippetBytes+len("…") {
+		t.Errorf("a 5000-byte body rendered as %d bytes, want at most %d", len(got), SnippetBytes+len("…"))
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Error("a clipped body does not show it was clipped")

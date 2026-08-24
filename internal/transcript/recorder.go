@@ -175,7 +175,7 @@ func (r *Recorder) Refusal(ctx context.Context, code, target, detail string) {
 		TaskID:       id.TaskID,
 		Role:         id.Role,
 		Tool:         code,
-		Detail:       strings.TrimSpace(target + " — " + detail),
+		Detail:       refusalDetail(target, detail),
 	})
 
 	if r.metrics != nil {
@@ -207,6 +207,23 @@ func (r *Recorder) Finish(ctx context.Context, status, detail string) {
 	if r.metrics != nil {
 		r.metrics.Outcome(id.Role, status)
 	}
+}
+
+// refusalDetail joins what the agent was trying to do with why it was refused.
+//
+// IT JOINS ONLY WHAT IS THERE. Formatting the pair unconditionally and trimming
+// the result leaves a lone dash when both are empty -- a record that says
+// nothing, in the one place whose whole purpose is to say what the agent
+// attempted. An empty detail is better than a decorative one: it reads as
+// missing, which it is.
+func refusalDetail(target, detail string) string {
+	parts := make([]string, 0, 2)
+	for _, s := range []string{target, detail} {
+		if s = strings.TrimSpace(s); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, " — ")
 }
 
 // Completion is what the model actually produced, whichever channel it used.
