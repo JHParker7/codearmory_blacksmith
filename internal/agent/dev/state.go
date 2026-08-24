@@ -110,6 +110,10 @@ type State struct {
 
 	// The counters that end an attempt. Each answers a different question, and
 	// the two occasions they were conflated both cost whole runs.
+	// VerifiedTree fingerprints the staged tree as it was when a verification
+	// last actually ran. See TreeHash for why this is not a counter.
+	VerifiedTree string
+
 	Refusals         int
 	StaleReads       int
 	NoopEdits        int
