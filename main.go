@@ -28,6 +28,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/transcript"
 	"github.com/code-armory-app/blacksmith/internal/transport"
 	"github.com/code-armory-app/blacksmith/internal/wake"
+	"github.com/code-armory-app/blacksmith/internal/window"
 	"github.com/code-armory-app/blacksmith/internal/workflow"
 )
 
@@ -38,7 +39,10 @@ func main() {
 	args := os.Args[1:]
 	switch {
 	case len(args) == 0:
-		usage(os.Stdout)
+		if err := runWindow(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case args[0] == "service":
 		if err := runService(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("the department stopped", "error", err)
@@ -56,11 +60,35 @@ func main() {
 func usage(w *os.File) {
 	fmt.Fprint(w, `blacksmith — the agent department
 
+  blacksmith            open the window onto a running department
   blacksmith service    run the department (this is what the systemd unit starts)
 
 Configuration is read from ~/.config/codearmory-agents/env, the same file the
 unit uses, so both work from any shell without exporting anything.
 `)
+}
+
+// runWindow opens the read-only view.
+//
+// A MISSING SERVING STACK IS NOT A REASON TO REFUSE TO LOOK. The window calls no
+// model and claims nothing — and "why is nothing being served" is exactly the
+// question someone opens it to answer, so a configuration that would stop the
+// department starting must still let the board be read.
+func runWindow(ctx context.Context) error {
+	cfg, err := config.Load()
+	if err != nil && !errors.Is(err, config.ErrNoModelClasses) {
+		return fmt.Errorf("configuration invalid: %w", err)
+	}
+	if cfg.PlatformURL == "" {
+		return errors.New("no board to read: set CODEARMORY_URL and CODEARMORY_TOKEN " +
+			"in ~/.config/codearmory-agents/env")
+	}
+
+	store, err := platform.Routed(cfg.PlatformURL, transport.Static(cfg.PlatformToken))
+	if err != nil {
+		return fmt.Errorf("platform client: %w", err)
+	}
+	return window.Open(ctx, store, department.Table(cfg), cfg.BoardID)
 }
 
 // runService starts the department.
