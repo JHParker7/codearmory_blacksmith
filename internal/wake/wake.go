@@ -1,4 +1,4 @@
-package main
+package wake
 
 import "sync"
 
@@ -27,7 +27,7 @@ type Wake struct {
 	subs []chan struct{}
 }
 
-func NewWake() *Wake { return &Wake{} }
+func New() *Wake { return &Wake{} }
 
 // Subscribe returns a channel that receives when any stage moves a ticket.
 func (w *Wake) Subscribe() <-chan struct{} {

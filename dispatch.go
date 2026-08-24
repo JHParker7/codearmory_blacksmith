@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/wake"
 	"log/slog"
 	"sort"
 	"strings"
@@ -103,7 +104,7 @@ type Dispatcher struct {
 	tracer trace.Tracer
 
 	// wake is the shared cross-stage trigger. Nil is valid and means "poll only".
-	wake *Wake
+	wake *wake.Wake
 
 	mu       sync.Mutex
 	inFlight map[string]bool
@@ -121,7 +122,7 @@ type DispatcherOpts struct {
 	// Wake is the shared cross-stage trigger. Optional: a nil Wake leaves the
 	// dispatcher on its poll timer alone, which is what every test wants and what
 	// a single-stage host would get.
-	Wake *Wake
+	Wake *wake.Wake
 }
 
 func NewDispatcher(api *CodeArmory, rec *Recorder, h Handler, opts DispatcherOpts) *Dispatcher {

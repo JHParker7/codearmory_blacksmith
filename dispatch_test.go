@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/code-armory-app/blacksmith/internal/wake"
 	"strings"
 	"sync"
 	"testing"
@@ -677,7 +678,7 @@ func TestAttemptsUnchangedWithoutAReturn(t *testing.T) {
 // process waits for a timer — three times per ticket, which was around 22
 // seconds of idle GPU on the default interval.
 func TestWakeSignalsEverySubscriber(t *testing.T) {
-	w := NewWake()
+	w := wake.New()
 	a, b := w.Subscribe(), w.Subscribe()
 	w.Signal()
 	for i, ch := range []<-chan struct{}{a, b} {
@@ -693,7 +694,7 @@ func TestWakeSignalsEverySubscriber(t *testing.T) {
 // is one deep and a full one is dropped, because a wake already pending is as
 // good as two.
 func TestWakeNeverBlocksAndCoalesces(t *testing.T) {
-	w := NewWake()
+	w := wake.New()
 	ch := w.Subscribe()
 	for range 100 {
 		w.Signal() // would deadlock if Signal blocked on a full buffer
@@ -712,7 +713,7 @@ func TestWakeNeverBlocksAndCoalesces(t *testing.T) {
 // A nil Wake is the "poll only" configuration, and must be safe rather than a
 // panic: it is what every test and any single-stage host gets.
 func TestNilWakeIsSafe(t *testing.T) {
-	var w *Wake
+	var w *wake.Wake
 	w.Signal() // must not panic
 	if ch := w.Subscribe(); ch != nil {
 		t.Error("a nil Wake handed out a channel; a nil receive is the correct no-op in a select")
@@ -725,7 +726,7 @@ func TestDispatcherAdvancingATicketWakesTheOtherStages(t *testing.T) {
 	f, api := newFakePlatform(t)
 	f.addTicket(t, Ticket{TicketID: "t1", Title: "x", CreatedBy: "alice", Status: ColInbox})
 
-	w := NewWake()
+	w := wake.New()
 	listener := w.Subscribe() // stands in for another stage's dispatcher
 	d := NewDispatcher(api, nil, &stubHandler{role: "pm-agent", status: OutcomeSuccess},
 		DispatcherOpts{Host: "h", Wake: w})
