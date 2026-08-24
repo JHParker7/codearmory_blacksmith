@@ -111,6 +111,7 @@ type State struct {
 	// The counters that end an attempt. Each answers a different question, and
 	// the two occasions they were conflated both cost whole runs.
 	Refusals         int
+	StaleReads       int
 	NoopEdits        int
 	ConsecutiveReads int
 	Resets           int
