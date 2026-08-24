@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/code-armory-app/blacksmith/internal/queue"
+	"github.com/code-armory-app/blacksmith/internal/transport"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -291,18 +291,11 @@ func toolCalls(in []wireToolCall) []ToolCall {
 // Bounded because a serving backend that fails mid-generation can return a very
 // large one, and because an error goes into a log line — THE PROMPT MUST NOT
 // FOLLOW IT THERE.
+//
+// It defers to the transport's clip rather than keeping its own. Two copies of
+// one rule is the mistake that cut r106's version wrong, and this pair had
+// already drifted the same way: both split multi-byte runes, so fixing either
+// alone would have left the other emitting log lines that are not valid text.
 func errorSnippet(r io.Reader) string {
-	const max = 512
-	data, err := io.ReadAll(io.LimitReader(r, max+1))
-	if err != nil {
-		return "<unreadable body>"
-	}
-	s := strings.TrimSpace(string(data))
-	if s == "" {
-		return "<empty body>"
-	}
-	if len(s) > max {
-		return s[:max] + "…"
-	}
-	return s
+	return transport.Snippet(r)
 }

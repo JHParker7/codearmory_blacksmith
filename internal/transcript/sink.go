@@ -42,6 +42,19 @@ func NewJSONLSink(dir string) (*JSONLSink, error) {
 }
 
 func (s *JSONLSink) Write(r Record) error {
+	// A RECORD WITH NO TIMESTAMP IS STAMPED HERE, because the filename is derived
+	// from it. An unstamped record otherwise lands in transcripts-0001-01-01.jsonl
+	// -- a file nobody will ever open, holding a line that is gone as far as anyone
+	// reading the corpus is concerned.
+	//
+	// The recorder already stamps, so this is the second line of defence rather
+	// than the first. It is here because the sink is exported and writable
+	// directly, and silently losing a record is the one failure this package must
+	// not have.
+	if r.At.IsZero() {
+		r.At = time.Now().UTC()
+	}
+
 	line, err := json.Marshal(r)
 	if err != nil {
 		return fmt.Errorf("encode transcript record: %w", err)

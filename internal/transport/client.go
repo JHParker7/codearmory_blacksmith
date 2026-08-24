@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -114,6 +115,15 @@ func (c *Client) Do(ctx context.Context, req Request) error {
 		return fmt.Errorf("%s %s: no %s is configured on this host", req.Method, req.Path, c.hostName())
 	}
 
+	// A CLIENT WITH NO CREDENTIAL IS A WIRING MISTAKE, and it must say so rather
+	// than panicking. A nil dereference here surfaces as a stack trace from
+	// whichever agent happened to call first, which names the caller and not the
+	// thing that was never configured.
+	if c.Cred == nil {
+		return fmt.Errorf("%s %s: no credential is configured for the %s",
+			req.Method, req.Path, c.hostName())
+	}
+
 	token, err := c.Cred.Token(ctx)
 	if err != nil {
 		return fmt.Errorf("%s credential: %w", c.hostName(), err)
@@ -216,6 +226,19 @@ func (c *Client) once(ctx context.Context, token string, req Request) error {
 	if req.Out == nil {
 		return nil
 	}
+
+	// 204 MEANS THERE IS NOTHING TO DECODE, and that is a success. A store that
+	// answers a write with no content has done the write; failing here would turn
+	// a completed move into an error and the caller would retry something that
+	// already landed.
+	//
+	// Only 204. An EMPTY 200 still fails, deliberately — that is the shape a
+	// misrouted request takes, and quietly handing back a zero-valued struct is
+	// how "no work today" gets reported instead of a misconfiguration.
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+
 	if err := json.NewDecoder(resp.Body).Decode(req.Out); err != nil {
 		return fmt.Errorf("%s %s: decode response: %w", req.Method, req.Path, err)
 	}
@@ -253,17 +276,39 @@ func classify(req Request, resp *http.Response) error {
 	return nil
 }
 
+// SnippetBytes is how much of an error body is kept.
+const SnippetBytes = 512
+
 // Snippet bounds an error body: these go into log lines, and a failing service
 // can return a very large one.
+//
+// IT CUTS ON A RUNE BOUNDARY, NOT A BYTE ONE. This is the shape of a mistake
+// that bricked a run once already — a hook counted a subject in bytes while the
+// text was clipped by runes, and every specification section blocked with a
+// message pointing squarely at the network. Slicing UTF-8 at an arbitrary byte
+// leaves half a character, and this department's prose is full of em dashes,
+// three bytes each, so the odds are not small. A log line that is not valid text
+// is a line a reader distrusts entirely.
+//
+// The empty and unreadable cases are NAMED rather than rendered as nothing: a
+// message ending in a bare colon reads as though it were itself truncated, and
+// "the server said nothing" is information.
 func Snippet(r io.Reader) string {
-	const max = 400
-	data, err := io.ReadAll(io.LimitReader(r, max+1))
+	data, err := io.ReadAll(io.LimitReader(r, SnippetBytes+1))
 	if err != nil {
-		return "<unreadable>"
+		return "<unreadable body>"
 	}
 	s := strings.TrimSpace(string(data))
-	if len(s) > max {
-		return s[:max] + "…"
+	if s == "" {
+		return "<empty body>"
 	}
-	return s
+	if len(s) <= SnippetBytes {
+		return s
+	}
+	// Back off to the last rune that fits whole.
+	cut := SnippetBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }

@@ -66,6 +66,12 @@ func Parse(body string) (Claim, error) {
 //
 // An empty role considers every claim; naming one restricts arbitration to the
 // hosts running THAT role. See OldestForRole.
+//
+// EITHER WAY THE CLAIM MUST BE READABLE. A body that carries the marker but does
+// not decode names nobody, and letting one win means a ticket whose column says
+// it is held reports no holder at all -- the window then shows it as free while
+// an agent is working it. The oldest claim anyone can actually read is the best
+// available answer, and it is the only one worth giving.
 func Oldest(comments []ticket.Comment) (ticket.Comment, bool) {
 	return OldestForRole(comments, "")
 }
@@ -85,11 +91,14 @@ func OldestForRole(comments []ticket.Comment, role string) (ticket.Comment, bool
 		if !IsClaim(cm.Body) {
 			continue
 		}
-		if role != "" {
-			c, err := Parse(cm.Body)
-			if err != nil || c.Role != role {
-				continue
-			}
+		c, err := Parse(cm.Body)
+		if err != nil {
+			// Unreadable. It cannot be shown to belong to this role, and it cannot
+			// name a holder, so it takes part in neither question.
+			continue
+		}
+		if role != "" && c.Role != role {
+			continue
 		}
 		claims = append(claims, cm)
 	}
