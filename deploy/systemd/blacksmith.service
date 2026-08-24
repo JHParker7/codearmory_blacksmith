@@ -1,0 +1,45 @@
+[Unit]
+Description=blacksmith — CodeArmory agent runtime
+Documentation=https://github.com/code-armory-app/blacksmith
+# The agents call the local serving stack over loopback, so start after it. This
+# is ordering only, not a hard dependency: blacksmith starts fine without the
+# models and logs the classes it could not route, which is a clearer failure than
+# refusing to boot.
+After=network-online.target llama-large.service llama-small.service
+Wants=llama-large.service llama-small.service
+
+[Service]
+Type=exec
+# `service` runs the department. The bare command opens the read-only
+# window instead, which is what a person wants at a prompt.
+ExecStart=%h/.local/bin/blacksmith service
+
+# Configuration lives in one file rather than a wall of Environment= lines, so
+# the same file can be sourced by hand when running the e2e suite.
+# CODEARMORY_TOKEN belongs here too — it is the agent account's credential, and
+# the file should be 0600.
+EnvironmentFile=%h/.config/codearmory-agents/env
+
+Restart=on-failure
+RestartSec=10
+# Long enough to outlast a model that is still loading; blacksmith retries the
+# platform on its own, so a slow start is not a failure.
+TimeoutStartSec=120
+
+# Give the process time to finish the tickets it has claimed. Dispatch releases
+# them on shutdown; killing it sooner leaves claims to be cleaned up by the next
+# start's reconcile, which works but is noisier.
+KillSignal=SIGINT
+TimeoutStopSec=120
+
+# The agent runtime holds a platform credential and writes the transcript corpus.
+# It needs neither elevated privilege nor write access to anything else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# ...except its own state: transcripts, and the config it reads.
+ReadWritePaths=%h/.local/share/codearmory-agents
+
+[Install]
+WantedBy=default.target

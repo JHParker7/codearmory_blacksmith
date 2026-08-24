@@ -1,0 +1,94 @@
+# Local observability for the blacksmith agent runtime.
+#
+#   docker compose -f deploy/observability/docker-compose.yml up -d
+#   grafana: http://localhost:3000   (anonymous admin, no login)
+#
+# blacksmith itself runs on the host under systemd and already points at
+# http://localhost:4318, so no change to its env is needed — bring this up and
+# the next run is recorded.
+name: blacksmith-obs
+
+services:
+  loki:
+    image: grafana/loki:3.4.2
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3100/ready | grep -q ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  tempo:
+    image: grafana/tempo:2.7.1
+    command: -config.file=/etc/tempo/tempo.yaml
+    # Local dev: the image's unprivileged user cannot write a fresh named volume
+    # and Tempo then crash-loops on its WAL path. Not a production posture.
+    user: root
+    ports:
+      - "3200:3200"
+    volumes:
+      - ./tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      # Required: the collector delivers blacksmith's metrics by remote write
+      # rather than being scraped, because the runtime is not a long-lived
+      # scrape target — it is a process that starts, runs a batch and stops.
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.118.0
+    command: --config=/etc/otel/collector.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP — what blacksmith is already configured for
+    volumes:
+      - ./otel-collector.yaml:/etc/otel/collector.yaml:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+      prometheus:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    ports:
+      - "3000:3000"
+    environment:
+      # Local-only stack on loopback; a login form here buys nothing and costs
+      # a password prompt every time a run needs looking at.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+
+volumes:
+  loki-data:
+  tempo-data:
+  prom-data:
+  grafana-data:

@@ -1,0 +1,125 @@
+{
+  "uid": "blacksmith-run",
+  "title": "Blacksmith — run",
+  "tags": ["blacksmith"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Attempts ending, by reason",
+      "description": "The failure taxonomy. dead_actions and read_loop are the two that have ended runs; a rising 'other' means a failure message changed and outcomeReason needs a new pattern.",
+      "datasource": { "type": "prometheus", "uid": "blacksmith-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 80 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (increase(blacksmith_agent_outcome_total[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Refusals, by kind",
+      "description": "Actions the harness rejected. This is the series that did not exist before — an attempt that died on twenty dead actions used to leave no record of what it kept trying.",
+      "datasource": { "type": "prometheus", "uid": "blacksmith-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 80 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (increase(blacksmith_agent_refusal_total[5m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Specification gates fired",
+      "description": "How each spec gate is earning its place. A gate at zero for a whole run is dead weight; one firing constantly is rejecting work the author cannot fix.",
+      "datasource": { "type": "prometheus", "uid": "blacksmith-prom" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (gate) (blacksmith_spec_gate_total)",
+          "legendFormat": "{{gate}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Outcomes by role and status",
+      "datasource": { "type": "prometheus", "uid": "blacksmith-prom" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (role, status) (blacksmith_agent_outcome_total)",
+          "legendFormat": "{{role}} {{status}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Model turn latency (p50 / p95) by class",
+      "description": "The MoE/dense comparison, live. Previously reconstructed by hand from JSONL after each run.",
+      "datasource": { "type": "prometheus", "uid": "blacksmith-prom" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, class) (rate(blacksmith_agent_turn_latency_milliseconds_bucket[5m])))",
+          "legendFormat": "p50 {{class}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, class) (rate(blacksmith_agent_turn_latency_milliseconds_bucket[5m])))",
+          "legendFormat": "p95 {{class}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Actions taken, by tool",
+      "datasource": { "type": "prometheus", "uid": "blacksmith-prom" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tool) (increase(blacksmith_agent_action_total[5m]))",
+          "legendFormat": "{{tool}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Agent logs",
+      "datasource": { "type": "loki", "uid": "blacksmith-loki" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "options": { "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=~\"blacksmith.*\"}"
+        }
+      ]
+    }
+  ]
+}

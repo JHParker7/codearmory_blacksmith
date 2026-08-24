@@ -1,0 +1,11 @@
+# Design/plan documents are kept out of version control, matching the convention
+# in the codearmory monorepo: these are working documents, not published ones.
+# Remove this line deliberately if blacksmith is private and you want them tracked.
+plans/
+
+# Go
+*.test
+/blacksmith
+
+# Local operator state — keys, model symlinks, transcripts
+*.key

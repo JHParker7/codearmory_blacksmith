@@ -1,0 +1,62 @@
+# Collector for the blacksmith agent runtime.
+#
+# blacksmith runs on the HOST as a systemd user unit and is already configured
+# with OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318, so the OTLP ports are
+# published to the host and nothing in blacksmith's env has to change.
+#
+# Standing this up is not only about gaining data. With no collector answering,
+# the OTel log processor spins — the same fault fixed in codearmory's SDK by
+# cb775a19 — so an unanswered endpoint costs a core and gives nothing back.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Small batches and a short timeout: this is a debugging stack watched live,
+  # so freshness beats efficiency. A 5s window means a failing agent shows up in
+  # Grafana while the run is still going, not after it has settled.
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  # Loki 3.x accepts OTLP natively; the exporter appends /v1/logs to this path.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+    tls:
+      insecure: true
+    # Resource attributes (service.name, and the agent role blacksmith sets per
+    # TracerProvider) become labels, which is the whole point — a counter that
+    # cannot be split by role answers none of the questions we have.
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheusremotewrite]

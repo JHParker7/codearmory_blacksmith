@@ -1,0 +1,15 @@
+[project]
+name = "blacksmith"
+version = "0.1.0"
+description = "A pull-mode agent department that works a CodeArmory board."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A warning in this harness is almost always a coroutine nobody awaited or a
+# resource nobody closed — both of which are the bug, not noise about it.
+filterwarnings = ["error"]

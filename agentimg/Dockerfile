@@ -1,0 +1,50 @@
+# The runner image every sandbox boots from.
+#
+# IT WAS BUILT BY HAND AND THE RECIPE LIVED ONLY IN PROSE. docs/DEPLOYMENT.md
+# described a two-line Dockerfile; the image actually running carried the qwen
+# CLI as well, installed by npm and recorded nowhere. Rebuilding from the
+# documented version would have dropped it silently and broken the delegate the
+# moment anyone turned AGENTS_DEV_ENGINE back on. This file is the whole of what
+# the image contains, so the next rebuild is a rebuild and not a guess.
+#
+# Build it into the CLUSTER's image store, not the host's — minikube runs
+# containerd, so `eval $(minikube docker-env)` does not apply:
+#
+#   minikube -p blacksmith image build -t agent-tools:local -f agentimg/Dockerfile agentimg/
+#
+# The tag must also appear in forge's ALLOWED_IMAGES (deploy/k8s/forge-local.yaml)
+# or every sandbox is refused with a bare "400: image not allowed".
+FROM golang:1.25
+
+RUN apt-get update -qq \
+    && apt-get install -y -qq nodejs npm git >/dev/null \
+    && rm -rf /var/lib/apt/lists/*
+
+# GOIMPORTS, AND IT IS NOT A CONVENIENCE. AGENTS_REPO_FORMAT_COMMAND asks for it
+# on every push and the image did not have it, so the chain fell through to
+# `go run ...goimports@v0.28.0` — which has to fetch and compile the tool through
+# the sandbox proxy on every single push — and then to plain gofmt, which formats
+# but never adds an import. The degradation was silent: formatScript only warns
+# when the WHOLE chain fails, and gofmt always succeeds.
+#
+# What that cost, measured on r82: a specification author wrote a test calling
+# url.QueryEscape without importing net/url. goimports would have added the
+# import at the moment it was pushed. Instead the task went to a developer that
+# may not edit tests, could not resolve a package qualifier by any legal move,
+# and spent its entire budget rewriting the same file.
+#
+# It also cannot weaken a test, which is why it is the right tool for this and a
+# model reviewing test edits is not: it rewrites the import block and leaves
+# every assertion untouched.
+#
+# Pinned to the version the format command falls back to, so the tool that runs
+# is the tool that was asked for.
+RUN go install golang.org/x/tools/cmd/goimports@v0.28.0
+
+# The external coding agent the developer stage can be delegated to, when
+# AGENTS_DEV_ENGINE=qwen-code. Pinned to the version the working image carried.
+RUN npm install -g --silent @qwen-code/qwen-code@0.21.13
+
+# Fail the build rather than ship an image missing what the pipeline asks for.
+# The whole reason this file exists is that a missing tool degraded quietly.
+RUN command -v goimports && command -v qwen && command -v git && command -v node

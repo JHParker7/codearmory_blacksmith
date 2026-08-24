@@ -1,0 +1,40 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: blacksmith-prom
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+
+  - name: Loki
+    type: loki
+    uid: blacksmith-loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # A log line carrying a trace id becomes a link into Tempo, which is the
+      # join that makes this stack worth running: "this agent refused 20 times"
+      # goes straight to the spans for the attempt that did it.
+      derivedFields:
+        - name: TraceID
+          matcherRegex: '"trace_id":"([a-f0-9]+)"'
+          url: "$${__value.raw}"
+          datasourceUid: blacksmith-tempo
+
+  - name: Tempo
+    type: tempo
+    uid: blacksmith-tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: blacksmith-loki
+        spanStartTimeShift: -1h
+        spanEndTimeShift: 1h
+        filterByTraceID: true
+      serviceMap:
+        datasourceUid: blacksmith-prom
