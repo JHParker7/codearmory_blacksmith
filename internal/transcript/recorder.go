@@ -20,7 +20,7 @@ type Metrics interface {
 	TurnLatency(role string, class model.Class, ms int64)
 	Action(role, tool string, failed bool)
 	Refusal(role, code string)
-	Outcome(role, status string)
+	Outcome(role, status, detail string)
 }
 
 // Recorder writes records for the tasks running on this host.
@@ -205,7 +205,7 @@ func (r *Recorder) Finish(ctx context.Context, status, detail string) {
 	})
 
 	if r.metrics != nil {
-		r.metrics.Outcome(id.Role, status)
+		r.metrics.Outcome(id.Role, status, detail)
 	}
 }
 

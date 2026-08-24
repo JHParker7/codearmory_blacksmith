@@ -84,7 +84,7 @@ func (m *countingMetrics) Refusal(_, code string) {
 	m.refusals = append(m.refusals, code)
 }
 
-func (m *countingMetrics) Outcome(_, status string) {
+func (m *countingMetrics) Outcome(_, status, _ string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.outcomes = append(m.outcomes, status)
