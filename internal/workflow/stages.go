@@ -324,6 +324,27 @@ func (tb Table) Roles() []string {
 	return out
 }
 
+// IsWorking reports whether a column is one a stage parks HELD work in.
+//
+// DERIVED FROM THE TABLE rather than listed separately, so a stage added above
+// cannot be forgotten here. What it answers is "is this ticket claimed": comments
+// are append-only and nothing deletes them, so a ticket carries every claim ever
+// made against it, and reading "claimed" off that history means a ticket looks
+// claimed forever after its first stage — which locks each stage out of the work
+// the one before it just handed over. The column says the same thing without the
+// history, and says it to a person looking at the board as well.
+func (tb Table) IsWorking(column string) bool {
+	if column == "" {
+		return false
+	}
+	for _, st := range tb.stages {
+		if st.Working == column {
+			return true
+		}
+	}
+	return false
+}
+
 // Stages returns the routed stages, in the same order as Roles.
 func (tb Table) Stages() []Stage {
 	roles := tb.Roles()
