@@ -579,3 +579,63 @@ func TestTheStageIdentifiesItself(t *testing.T) {
 		t.Errorf("Class() = %q", a.Class())
 	}
 }
+
+// THE REVIEWER RUNS IN AN EMPTY CONTAINER and has to clone before it can compare
+// anything.
+//
+// A leased sandbox arrives with a checkout; a one-off execution — which is what
+// this stage uses — does not. The script used to say the repository was already
+// there. It was not: the working directory was empty, the fetch failed into a
+// swallowed stderr, and `git diff` exited 128 with nothing to say. Every
+// reviewed branch on the board then failed with "exit 128: " and no cause, from
+// the one stage whose whole job is to explain itself.
+func TestTheEvidenceScriptClonesBeforeItCompares(t *testing.T) {
+	a := New(&gateway{}, &sandbox{}, &board{}, model.ClassLarge, repo())
+	script := a.EvidenceScript("agent/t-42")
+
+	clone := strings.Index(script, "git clone")
+	diff := strings.Index(script, "git diff")
+	if clone < 0 {
+		t.Fatalf("the reviewer never clones, so there is nothing to diff:\n%s", script)
+	}
+	if diff < 0 {
+		t.Fatalf("the reviewer never diffs:\n%s", script)
+	}
+	if clone > diff {
+		t.Errorf("the clone comes after the diff:\n%s", script)
+	}
+	if !strings.Contains(script, "cd repo") {
+		t.Errorf("the script never enters the clone:\n%s", script)
+	}
+}
+
+// A FAILURE MUST SAY WHICH STEP FAILED. Sending the fetch to /dev/null is what
+// turned "could not reach the remote" into a bare exit code two commands later,
+// and a verdict that names a symptom sends a correct reader to the wrong place.
+func TestTheEvidenceScriptReportsWhichStepFailed(t *testing.T) {
+	a := New(&gateway{}, &sandbox{}, &board{}, model.ClassLarge, repo())
+	script := a.EvidenceScript("agent/t-42")
+
+	for _, want := range []string{"could not clone", "could not fetch"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script cannot report %q, so the stage fails with only an "+
+				"exit code:\n%s", want, script)
+		}
+	}
+	// The fetch's own diagnostics must not be discarded.
+	for _, line := range strings.Split(script, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "git fetch") &&
+			strings.Contains(line, "2>&1") && strings.Contains(line, "/dev/null") {
+			t.Errorf("the fetch still hides its error: %q", line)
+		}
+	}
+}
+
+// THE BRANCH REACHES THE SCRIPT QUOTED, because it is model-adjacent text that
+// ends up in a shell.
+func TestTheEvidenceScriptQuotesTheBranch(t *testing.T) {
+	a := New(&gateway{}, &sandbox{}, &board{}, model.ClassLarge, repo())
+	if got := a.EvidenceScript("agent/t-42"); !strings.Contains(got, `"agent/t-42"`) {
+		t.Errorf("the branch is not quoted:\n%s", got)
+	}
+}

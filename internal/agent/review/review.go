@@ -328,11 +328,32 @@ func (a *Agent) EvidenceScript(branch string) string {
 		base = "main"
 	}
 
-	// The repository is already here — the sandbox cloned it — so this only has to
-	// fetch the two refs the review compares.
-	script := fmt.Sprintf(`git fetch origin %q %q >/dev/null 2>&1
+	// THIS RUNS IN AN EMPTY CONTAINER, so it clones before it can compare
+	// anything. A leased sandbox arrives with a checkout; a one-off execution —
+	// which is what the reviewer uses, and what the architect, integrator and
+	// resolver all clone for themselves — does not.
+	//
+	// It used to say the repository was already here. It was not: /tmp/work was
+	// empty, the fetch failed into a swallowed stderr, and `git diff` exited 128
+	// with nothing to say. The stage then failed every reviewed branch on the
+	// board with "exit 128: " and no cause — a verdict naming a symptom, from the
+	// one stage whose job is to explain itself.
+	//
+	// THE FETCH NO LONGER HIDES ITS ERROR. Sending it to /dev/null is what turned
+	// a clear "couldn't reach the remote" into a bare exit code two commands
+	// later.
+	script := fmt.Sprintf(`URL="${GIT_CLONE_URL:-%s}"
+git clone --filter=blob:none "$URL" repo >/dev/null 2>&1 || {
+  echo "could not clone $URL" >&2
+  exit 1
+}
+cd repo
+git fetch -q origin %q %q || {
+  echo "could not fetch %s or %s from $URL" >&2
+  exit 1
+}
 git diff origin/%s...origin/%s
-`, base, branch, base, branch)
+`, a.repo.URL, base, branch, base, branch, base, branch)
 
 	analyses := a.Analyses()
 	if len(analyses) == 0 {
