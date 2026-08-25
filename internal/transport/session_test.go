@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // gatekeeper is enough of the plane's login to exercise a session.
@@ -18,6 +19,10 @@ type gatekeeper struct {
 	status  int
 	body    string
 	lastReq map[string]string
+
+	// hold makes one login take long enough for concurrent callers to pile up
+	// behind it. See TestManyStagesHittingAnExpiredSessionLogInOnce.
+	hold time.Duration
 }
 
 func (g *gatekeeper) server(t *testing.T) *httptest.Server {
@@ -27,6 +32,13 @@ func (g *gatekeeper) server(t *testing.T) *httptest.Server {
 			http.NotFound(w, r)
 			return
 		}
+		// OUTSIDE THE LOCK, so a slow login delays the others rather than
+		// serialising them behind this handler's own mutex — which would collapse
+		// the concurrency the test is trying to create.
+		if g.hold > 0 {
+			time.Sleep(g.hold)
+		}
+
 		g.mu.Lock()
 		defer g.mu.Unlock()
 
@@ -111,7 +123,19 @@ func TestRenewingReplacesTheSession(t *testing.T) {
 // token at once should produce ONE request: the gatekeeper rate-limits logins,
 // and a thundering herd there locks the whole department out.
 func TestManyStagesHittingAnExpiredSessionLogInOnce(t *testing.T) {
-	g := &gatekeeper{}
+	// THE LOGIN IS HELD SO THE PILE-UP IS REAL.
+	//
+	// This asserts an EXACT collapse — sixteen stages, one renewal — and that only
+	// holds if all sixteen arrive while the first login is still in flight. With
+	// an instant gatekeeper they do not have to: under -race on a loaded machine
+	// the first renewal can finish before the last goroutine is scheduled, a
+	// second login starts, and the test fails on a count of three having tested
+	// nothing that was wrong. Observed exactly that way, once, in a full
+	// -race -count=2 run and never in isolation.
+	//
+	// A hold far longer than goroutine start-up skew makes the window the test
+	// assumes into the window it gets.
+	g := &gatekeeper{hold: 100 * time.Millisecond}
 	s, _ := Login(g.server(t).URL, "a@b.test", "pw", nil)
 
 	// One session in hand, which every goroutine below then finds stale.

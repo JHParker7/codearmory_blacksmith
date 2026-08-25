@@ -47,6 +47,11 @@ type Deps struct {
 
 	Store  Store
 	Config config.Config
+
+	// Counters are optional. They travel here rather than being reached for by
+	// each stage, because the department is the one place that knows whether this
+	// host exports metrics at all.
+	Counters referee.Counters
 }
 
 // Runner runs a one-shot command in a fresh container.
@@ -234,7 +239,7 @@ func Assemble(d Deps) (Assembly, error) {
 		dev.Options{
 			Mode: dev.ModeDevelop, Role: workflow.RoleDev,
 			MaxTurns: cfg.DevMaxIterations, Tools: cfg.Classes[model.ClassLarge].ToolsSupported,
-			Referee: referee.New(d.Gateway, model.ClassLarge),
+			Referee: referee.New(d.Gateway, model.ClassLarge).WithCounters(d.Counters),
 		}))
 
 	// COVERAGE IS OFF BY DEFAULT: it works, and it is in the wrong place.

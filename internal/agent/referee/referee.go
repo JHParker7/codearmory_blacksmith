@@ -217,12 +217,53 @@ type Gateway interface {
 
 // Referee asks a model whose fault a failure is.
 type Referee struct {
-	gw    Gateway
-	class model.Class
+	gw       Gateway
+	class    model.Class
+	counters Counters
 }
 
 func New(gw Gateway, class model.Class) *Referee {
 	return &Referee{gw: gw, class: class}
+}
+
+// Counters records what the referee decided. Optional; nil is a valid
+// configuration and every use is guarded.
+//
+// AN INTERFACE RATHER THAN THE TELEMETRY TYPE, so this package does not depend
+// on the metrics stack and a test can count verdicts without one.
+type Counters interface {
+	RefereeVerdict(owner, confidence string)
+}
+
+// WithCounters attaches the counters.
+//
+// THE REFEREE'S VALUE IS ENTIRELY IN WHETHER IT IS RIGHT, and neither of its two
+// failure modes is visible from a log line. One that never blames the spec is
+// dead weight; one that blames it constantly is sending healthy specifications
+// back, which costs an author's repair budget and reaches a person as "cannot be
+// satisfied" about tests that could be. Counting the verdicts is what makes
+// either legible.
+func (r *Referee) WithCounters(c Counters) *Referee {
+	if r == nil {
+		return nil
+	}
+	r.counters = c
+	return r
+}
+
+// record files a verdict, including a nil one — a referee that declined to rule
+// is a different thing from one that was never asked, and only the counter can
+// tell them apart afterwards.
+func (r *Referee) record(v *Verdict) *Verdict {
+	if r == nil || r.counters == nil {
+		return v
+	}
+	if v == nil {
+		r.counters.RefereeVerdict("none", "none")
+		return v
+	}
+	r.counters.RefereeVerdict(v.Owner, v.Confidence)
+	return v
 }
 
 // Preflight reads the tests and says whether they can be satisfied at all.
@@ -265,7 +306,7 @@ func (r *Referee) Preflight(ctx context.Context, rec *transcript.Recorder, t tic
 	}
 	rec.Turn(ctx, model.ChatRequest{}, res, nil)
 
-	return ParsePreflight(res.Content)
+	return r.record(ParsePreflight(res.Content))
 }
 
 // ParsePreflight reads a pre-flight reply, translating it to a verdict ONLY once
@@ -339,7 +380,7 @@ func (r *Referee) Judge(ctx context.Context, rec *transcript.Recorder, t ticket.
 	}
 	rec.Turn(ctx, model.ChatRequest{}, res, nil)
 
-	return ParseVerdict(res.Content)
+	return r.record(ParseVerdict(res.Content))
 }
 
 // ParseVerdict reads a verdict out of a reply.
