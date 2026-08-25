@@ -83,6 +83,9 @@ func (c *Client) Acquire(ctx context.Context, spec SandboxSpec) (*Sandbox, error
 		RunnerClass: spec.RunnerClass,
 		IdleTimeout: spec.IdleTimeoutSecs,
 		MaxLifetime: spec.MaxLifetimeSecs,
+		// ON THE LEASE, so every command inherits it. A leased command runs
+		// LeasedPrelude, which deliberately exports nothing — see SandboxEnv.
+		Env: SandboxEnv(),
 	}
 	if spec.CloneURL != "" {
 		// FULL HISTORY, NOT SHALLOW. This one checkout serves the agent's reads and
@@ -105,7 +108,7 @@ func (c *Client) Acquire(ctx context.Context, spec SandboxSpec) (*Sandbox, error
 		if spec.SecretRef != "" {
 			lease.SecretRefs = map[string]string{"GIT_CLONE_URL": spec.SecretRef}
 		} else {
-			lease.Env = map[string]string{"GIT_CLONE_URL": spec.CloneURL}
+			lease.Env["GIT_CLONE_URL"] = spec.CloneURL
 		}
 	}
 
@@ -182,7 +185,7 @@ func (s *Sandbox) Run(ctx context.Context, rec Recorder, script string) (Result,
 		return Result{}, errors.New("sandbox: no lease is held")
 	}
 	spec := s.spec
-	spec.Command = []string{"sh", "-c", Preamble + s.adopt + script}
+	spec.Command = []string{"sh", "-c", LeasedPrelude + s.adopt + script}
 	return s.run(ctx, rec, spec)
 }
 
@@ -267,7 +270,7 @@ func (s *Sandbox) RunOnBranch(ctx context.Context, rec Recorder, branch, script 
 		return Result{}, errors.New("sandbox: no lease is held")
 	}
 	spec := s.spec
-	spec.Command = []string{"sh", "-c", Preamble + CheckoutBranchScript(branch) + script}
+	spec.Command = []string{"sh", "-c", LeasedPrelude + CheckoutBranchScript(branch) + script}
 	return s.run(ctx, rec, spec)
 }
 

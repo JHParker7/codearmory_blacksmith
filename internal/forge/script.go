@@ -110,3 +110,49 @@ func (c *Client) EnsureRunnerClass(ctx context.Context, spec RunnerClass) error 
 		return err
 	}
 }
+
+// LeasedPrelude is what runs before a command in a HELD sandbox.
+//
+// IT DOES NOT CD, and that is the whole difference from Preamble.
+//
+// The two are for opposite situations and collapsing them broke every leased
+// stage. A one-off execution gets an empty container and clones the repository
+// itself into /tmp/work, so Preamble goes there. A LEASE already holds a
+// checkout — forge cloned it at boot, into the container's own working
+// directory — so a cd sends every command somewhere else entirely.
+//
+// Measured by booting a real sandbox: forge's checkout is at /workspace, the
+// preamble moved to an empty /tmp/work, and every command ran outside the
+// repository. `git status` answered "fatal: not a git repository", so every
+// verification failed and the agent read and rewrote the same files until it hit
+// the 200-turn ceiling — 171 turns on one attempt, with nothing on the ticket to
+// say why. It reads exactly like a model that will not converge.
+//
+// The environment those exports provide is set on the LEASE instead, so every
+// command in the container inherits it. See SandboxEnv.
+const LeasedPrelude = `set -e
+mkdir -p /tmp/.cache
+`
+
+// SandboxEnv is the environment a repository's commands need, set ON THE LEASE
+// so every command inherits it from the container.
+//
+// IT MUST AGREE WITH Preamble, which exports the same names for the one-off
+// executions the architect and the integrator run. A build that wrote its cache
+// somewhere different depending on which of the two ran it would produce results
+// that differ by caller, which is the worst kind of bug to chase.
+//
+// The reasons for each are in Preamble's comment: a read-only root with one
+// writable tmpfs, and a toolchain that fails in several unrelated-looking ways
+// when HOME and the caches are not moved.
+func SandboxEnv() map[string]string {
+	return map[string]string{
+		"HOME":             "/tmp",
+		"GOPATH":           "/tmp/go",
+		"XDG_CACHE_HOME":   "/tmp/.cache",
+		"GOCACHE":          "/tmp/.cache/go-build",
+		"GOMODCACHE":       "/tmp/.cache/go-mod",
+		"npm_config_cache": "/tmp/.cache/npm",
+		"COMMIT_MSG_FILE":  "/tmp/.commit-msg",
+	}
+}
