@@ -125,6 +125,20 @@ type Record struct {
 	// named the real problem in one turn.
 	Reasoning string `json:"reasoning,omitempty"`
 
+	// FinishReason is why the model stopped: "stop" for a complete answer,
+	// "length" when it hit the token limit MID-SENTENCE.
+	//
+	// WITHOUT IT A TRUNCATED REPLY AND A MALFORMED ONE ARE THE SAME RECORD, and
+	// they need opposite responses: one means raise the limit or ask for less,
+	// the other means the model got the shape wrong. ChatResult has carried this
+	// for exactly that reason and the transcript dropped it, so the corpus could
+	// not answer the question it was kept to answer.
+	//
+	// Found on a live run: a product manager's split came back "unexpected EOF"
+	// — the signature of a reply cut off mid-JSON — and the transcript held no
+	// way to confirm that rather than infer it.
+	FinishReason string `json:"finish_reason,omitempty"`
+
 	PromptTokens     int   `json:"prompt_tokens,omitempty"`
 	CompletionTokens int   `json:"completion_tokens,omitempty"`
 	QueuedMS         int64 `json:"queued_ms,omitempty"`

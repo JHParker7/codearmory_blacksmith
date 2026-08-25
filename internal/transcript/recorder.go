@@ -115,6 +115,7 @@ func (r *Recorder) Turn(ctx context.Context, req model.ChatRequest, res model.Ch
 		Endpoint:     res.Endpoint,
 		Completion:   Completion(res),
 		Reasoning:    res.Reasoning,
+		FinishReason: res.FinishReason,
 
 		PromptTokens:     res.PromptTokens,
 		CompletionTokens: res.CompletionTokens,
