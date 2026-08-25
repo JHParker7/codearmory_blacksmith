@@ -148,75 +148,6 @@ func TestEveryStringInTheGrammarIsBoundedExceptTheCodeItself(t *testing.T) {
 	}
 }
 
-// ONE SHAPE PER WAY OF POINTING AT THE CODE, because putting every address in
-// one object is what made the copy inevitable: with old_str and replace both
-// required and adjacent, a constrained sampler's highest-probability
-// continuation after a long quote is that same quote again. Measured: old_str
-// identical to replace in 39 of 47 turns, and the no-progress ceiling then
-// killed the ticket — twice, taking the board with it.
-func TestNoEditShapeLetsAQuoteSitBesideItsOwnReplacement(t *testing.T) {
-	items, ok := EditsSchema()["items"].(map[string]any)
-	if !ok {
-		t.Fatal("the edits schema has no item shape")
-	}
-	shapes := branches(t, items)
-	if len(shapes) != 3 {
-		t.Fatalf("%d edit shapes, want decl, anchor and lines", len(shapes))
-	}
-
-	var sawDecl, sawAnchor, sawLines bool
-	for _, s := range shapes {
-		p := props(t, s)
-		_, hasOld := p["old_str"]
-		_, hasDecl := p["decl"]
-		_, hasStart := p["start_line"]
-
-		switch {
-		case hasDecl:
-			sawDecl = true
-			// THE DECL SHAPE HAS NO old_str TO COPY.
-			if hasOld {
-				t.Error("the declaration shape carries a quote")
-			}
-		case hasOld:
-			sawAnchor = true
-			// THE ANCHOR IS SHORT, so it cannot be a duplicate of a long
-			// replacement. Without the cap, quoting a whole function is expressible
-			// again and the copy comes back.
-			cap, capped := p["old_str"].(map[string]any)["maxLength"]
-			if !capped {
-				t.Fatal("the anchor is unbounded; a whole function can be quoted")
-			}
-			if cap != MaxAnchorChars {
-				t.Errorf("the anchor cap is %v, want %d", cap, MaxAnchorChars)
-			}
-			if hasDecl || hasStart {
-				t.Error("the anchor shape also carries another address")
-			}
-		case hasStart:
-			sawLines = true
-			// THE LINE SHAPE CARRIES NO QUOTE AT ALL.
-			if hasOld || hasDecl {
-				t.Error("the line shape also carries another address")
-			}
-		}
-
-		// Every shape must name a file and say what goes there, or it addresses
-		// nothing.
-		for _, want := range []string{"path", "replace"} {
-			if !slices.Contains(required(t, s), want) {
-				t.Errorf("an edit shape does not require %q", want)
-			}
-		}
-		if s["additionalProperties"] != false {
-			t.Error("an edit shape admits fields nobody defined")
-		}
-	}
-	if !sawDecl || !sawAnchor || !sawLines {
-		t.Errorf("shapes present: decl=%v anchor=%v lines=%v", sawDecl, sawAnchor, sawLines)
-	}
-}
-
 // THE SAME SHAPE REACHES THE MODEL BOTH WAYS. Two channels describing different
 // shapes is how the last format ended up with a grammar and a tool definition
 // that disagreed.
@@ -312,10 +243,13 @@ func TestTheGrammarBoundsWhatOneTurnCanMove(t *testing.T) {
 	if read["paths"].(map[string]any)["maxItems"] != MaxReadPaths {
 		t.Errorf("the read cap is %v, want %d", read["paths"].(map[string]any)["maxItems"], MaxReadPaths)
 	}
-	if EditsSchema()["maxItems"] != MaxWriteFiles {
-		t.Errorf("the write cap is %v, want %d", EditsSchema()["maxItems"], MaxWriteFiles)
-	}
-	if EditsSchema()["minItems"] != 1 {
-		t.Error("the grammar admits a write with no edits in it")
+	// THE WRITE NEEDS NO CAP BECAUSE IT MOVES ONE FILE. The array form bounded
+	// itself with maxItems; flat, the bound is the shape. What still has to hold
+	// is that an empty write cannot be expressed at all.
+	write := branchFor(t, ActionWriteFile)
+	for _, want := range []string{"path", "replace"} {
+		if !slices.Contains(required(t, write), want) {
+			t.Errorf("the grammar admits a write with no %q in it", want)
+		}
 	}
 }
