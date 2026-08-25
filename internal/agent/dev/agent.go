@@ -430,6 +430,17 @@ func (a *Agent) preflight(
 	return "", "", false
 }
 
+// Brief is the system prompt this stage runs under.
+//
+// EXPORTED SO THE ASSEMBLY CAN BE CHECKED. The loop ran with an empty brief for
+// as long as it did because every test built its own agent, with the same gap
+// the department had — so the tests exercised the misconfiguration and passed.
+// Nothing could ask an assembled stage what it was actually configured with.
+func (a *Agent) Brief() string { return a.prompt }
+
+// Mode is which job this stage does, for the same reason.
+func (a *Agent) ModeName() Mode { return a.mode }
+
 // SpecRepairsSoFar counts how many times this ticket has already been handed
 // back to its author.
 func SpecRepairsSoFar(t ticket.Ticket) int {
