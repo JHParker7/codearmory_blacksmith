@@ -248,6 +248,14 @@ func (s *State) RecordVerification(output string, pass bool, mode Mode) {
 		pass = false
 	}
 
+	// COUNTED BEFORE LastTest IS OVERWRITTEN, because the comparison is against
+	// the previous verification and there is nowhere else that still holds it.
+	if !pass && output == s.LastTest {
+		s.SameFailure++
+	} else {
+		s.SameFailure = 0
+	}
+
 	s.LastTest = output
 	s.TestsPass = pass
 	// THE FINGERPRINT, NOT A COUNTER. See TreeHash.

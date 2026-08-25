@@ -155,9 +155,29 @@ type State struct {
 	// built for.
 	FailedVerifications int
 
-	// RefereeAsked records that the second opinion has been sought this attempt,
-	// so it is sought once. See consultReferee.
-	RefereeAsked bool
+	// RefereeAsks counts how many times the second opinion has been sought this
+	// attempt. See consultReferee.
+	//
+	// A COUNT RATHER THAN A FLAG, because one verdict per attempt is one verdict
+	// taken at the least informative moment. Measured on run 21: the referee was
+	// asked 90 seconds in, correctly answered "dev" — the developer did have a
+	// compile error in board.go — and that verdict was then frozen while the
+	// failure changed completely underneath it. The developer spent the next 70
+	// turns oscillating against an assertion no implementation could satisfy, and
+	// nothing asked again. The attempt died on the wall clock at 45 minutes.
+	RefereeAsks int
+
+	// SameFailure counts consecutive red verifications whose output was byte for
+	// byte the one before it.
+	//
+	// THIS IS WHAT BEING STUCK LOOKS LIKE, and it is the signal the loop was
+	// missing. A developer that is converging produces changing output: a new
+	// failing test, a different error, one more line passing. A developer that
+	// has stopped converging produces the identical block of text over and over.
+	// On run 21 the same four lines repeated for dozens of turns while every
+	// ceiling in the loop counted up toward a timeout, and nothing asked whether
+	// the target was reachable at all.
+	SameFailure int
 
 	// ParseFails counts consecutive replies that were not valid actions, and
 	// Refunded counts turns given back for reads.

@@ -462,13 +462,41 @@ func (a *Agent) preflight(
 // middle this exists for.
 const RefereeAfterFailures = 3
 
-// consultReferee asks whose fault the failures are, once there have been enough
-// of them to be worth asking about.
+// RefereeOnStall is how many IDENTICAL red verifications in a row re-open the
+// question of whose fault the failure is.
 //
-// ONCE PER ATTEMPT. The verdict is a judgement about the specification, and the
-// specification does not change while the developer works — so asking again buys
-// the same answer at the price of another large-model call, and a sampler's bad
-// day gets a second chance to send a healthy specification back.
+// The first consult happens early, on evidence that is necessarily thin. This is
+// the other end: a developer repeating one edit against one unchanged block of
+// output has stopped converging, and that is the moment the question is worth
+// asking again — with completely different evidence from the first time.
+//
+// EIGHT, because a handful of repeats is ordinary. A developer re-running the
+// same verification while it works through a multi-part failure repeats itself a
+// few times legitimately. Eight consecutive byte-identical outputs is not that;
+// on run 21 the count reached the dozens.
+const RefereeOnStall = 8
+
+// MaxRefereeAsks bounds the second opinion for the whole attempt, because the
+// referee is a large-model call and a stalled developer would otherwise buy one
+// every eight turns until the ceiling.
+const MaxRefereeAsks = 3
+
+// consultReferee asks whose fault the failures are, once there have been enough
+// of them to be worth asking about, and AGAIN if the attempt later stalls.
+//
+// IT USED TO ASK EXACTLY ONCE, on the grounds that the specification does not
+// change while the developer works. That is true and it is not the point: which
+// part of the specification the developer is stuck against changes completely.
+// Measured on run 21 — the referee was asked 90 seconds in, correctly answered
+// "dev" because there was a compile error in board.go, and that verdict was
+// frozen for the next 70 turns while the failure became an assertion no
+// implementation could satisfy. Nothing asked again and the attempt ran to the
+// 45-minute wall clock.
+//
+// SO THERE ARE TWO TRIGGERS, and they are deliberately different questions.
+// FailedVerifications asks "has this gone wrong enough to be worth a look" and
+// fires early. SameFailure asks "has this stopped moving", which is the shape
+// an unsatisfiable target actually makes, and can only fire late.
 //
 // IT DEFERS TO THE DETERMINISTIC ROUTE. If the matcher has already decided the
 // specification is broken there is nothing to arbitrate, and this does not run.
@@ -481,16 +509,22 @@ func (a *Agent) consultReferee(ctx context.Context, t ticket.Ticket, s *State) {
 	if a.ref == nil || a.mode != ModeDevelop {
 		return
 	}
-	if s.SpecBroken != "" || s.RefereeAsked {
+	if s.SpecBroken != "" || s.RefereeAsks >= MaxRefereeAsks {
 		return
 	}
-	if s.FailedVerifications < RefereeAfterFailures {
+	first := s.RefereeAsks == 0 && s.FailedVerifications >= RefereeAfterFailures
+	stalled := s.RefereeAsks > 0 && s.SameFailure >= RefereeOnStall
+	if !first && !stalled {
 		return
 	}
-	// Marked before the call, not after: a call that fails is still a call spent,
-	// and retrying it every iteration is how one unavailable referee becomes a
-	// hundred requests.
-	s.RefereeAsked = true
+	// Counted before the call, not after: a call that fails is still a call
+	// spent, and retrying it every iteration is how one unavailable referee
+	// becomes a hundred requests.
+	s.RefereeAsks++
+	// THE STALL COUNTER RESTARTS WITH THE QUESTION. Without this the condition
+	// stays true and every remaining turn buys another verdict on the same
+	// evidence, which is the runaway the ask ceiling would then have to absorb.
+	s.SameFailure = 0
 
 	if v := a.ref.Judge(ctx, recorderFrom(ctx), t, s.Read, s.LastTest); v.Blames(referee.OwnerSpec) {
 		s.SpecBroken = v.Reason
