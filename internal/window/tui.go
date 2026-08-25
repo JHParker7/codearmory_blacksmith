@@ -612,9 +612,8 @@ func (m Model) header() string {
 	return cHead.Render("blacksmith") + cDim.Render("  "+clip(line, width))
 }
 
-func (m Model) rule() int       { return Rule(m.width) }
-func (m Model) titleWidth() int { return TitleWidth(m.width) }
-func (m Model) hr() string      { return cRule.Render(strings.Repeat("─", m.rule())) }
+func (m Model) rule() int  { return Rule(m.width) }
+func (m Model) hr() string { return cRule.Render(strings.Repeat("─", m.rule())) }
 
 // listRows is how many ticket rows fit, once the fixed furniture is taken out:
 // the header, two rules, the summary, the headings, the ask line and the keys.
@@ -675,11 +674,19 @@ func (m Model) listView() string {
 	// which — and once the widths are shared, a heading that stops lining up is
 	// the first sign a cell has started padding itself wrong again.
 	if len(m.board.Rows) > 0 {
-		b.WriteString(cDim.Render(
-			"    "+PadTo("id", ShortIDLen)+"  "+PadTo("ticket", m.titleWidth())+
-				"  "+PadTo("priority", PriorityWidth)+
-				" "+PadLeft("took", RuntimeWidth)+
-				" state") + "\n")
+		// THE SAME WIDTHS THE ROWS USE, from the same call. A heading that computes
+		// its own is a heading that stops lining up the moment a row concedes a
+		// column, which is precisely when a person is trying to work out what the
+		// remaining columns are.
+		cols := m.cols()
+		head := "    " + PadTo("id", ShortIDLen) + "  " + PadRunes("ticket", cols.Title) + "  "
+		if cols.Priority > 0 {
+			head += PadRunes(clip("priority", cols.Priority), cols.Priority) + " "
+		}
+		if cols.Runtime > 0 {
+			head += PadLeft("took", cols.Runtime) + " "
+		}
+		b.WriteString(cDim.Render(head+"state") + "\n")
 	}
 
 	if m.err != nil {
@@ -716,7 +723,7 @@ func (m Model) listView() string {
 		if m.board.Rows[i].Depth == 0 && i > top {
 			b.WriteString("\n")
 		}
-		b.WriteString(m.line(m.board.Rows[i], i == m.selected, now) + "\n")
+		b.WriteString(m.line(m.board.Rows[i], i == m.selected, now, m.cols()) + "\n")
 	}
 	if len(m.board.Rows) > rows {
 		b.WriteString(cDim.Render(fmt.Sprintf("  %d-%d of %d rows",
@@ -739,8 +746,24 @@ func (m Model) listView() string {
 	return b.String()
 }
 
+// cols is how every row and the heading spend the terminal's width.
+//
+// COMPUTED ONCE FOR THE WHOLE BOARD, because the title column is sized to the
+// widest title on it — a per-row width would give each row a different column
+// and the board would stop being a table.
+func (m Model) cols() RowWidths {
+	want := 0
+	for _, r := range m.board.Rows {
+		w := len([]rune(r.Ticket.Title)) + 2*r.Depth
+		if w > want {
+			want = w
+		}
+	}
+	return LayOutRow(Rule(m.width), want)
+}
+
 // line renders one row.
-func (m Model) line(r Row, selected bool, now time.Time) string {
+func (m Model) line(r Row, selected bool, now time.Time, cols RowWidths) string {
 	t := r.Ticket
 	act := m.acts[t.ID]
 
@@ -754,10 +777,10 @@ func (m Model) line(r Row, selected bool, now time.Time) string {
 	// directly beneath their parent; the indent is what makes the nesting visible
 	// rather than merely true, so five tickets about task stores read as one
 	// request broken down instead of five unrelated jobs.
-	indent, width := "", m.titleWidth()
+	indent, width := "", cols.Title
 	if r.Depth > 0 {
 		indent = strings.Repeat("  ", r.Depth-1) + "└ "
-		width = m.titleWidth() - 2*r.Depth
+		width = cols.Title - 2*r.Depth
 		if width < 12 {
 			width = 12
 		}
@@ -794,8 +817,10 @@ func (m Model) line(r Row, selected bool, now time.Time) string {
 		}
 	}
 
+	// FITTED, NOT APPENDED. Whatever runs past the terminal is cut by bubbletea
+	// without a mark, and this is the cell that says whether a person is needed.
 	var state strings.Builder
-	for _, c := range StateCells(t, act, now) {
+	for _, c := range FitCells(StateCells(t, act, now), cols.State) {
 		state.WriteString(styleFor(c.Tone).Render(c.Text))
 	}
 
@@ -810,14 +835,22 @@ func (m Model) line(r Row, selected bool, now time.Time) string {
 	// ONE COLUMN PER CELL, each padded to its own display width. Built by
 	// concatenation rather than one format string because every cell may be
 	// styled and fmt cannot pad around escapes — see PadTo.
-	left := PadTo(cDim.Render(indent)+title, width+lipgloss.Width(indent)) +
-		"  " + PadTo(t.Priority, PriorityWidth) +
-		" " + PadLeft(took, RuntimeWidth)
+	// EACH CELL CARRIES ITS OWN TRAILING SEPARATOR, so a dropped column takes its
+	// separator with it — which is exactly how LayOutRow counted the width. A
+	// column dropped without its space leaves the row one column wider than the
+	// budget it was laid out to, and the state loses a character to it.
+	left := PadTo(cDim.Render(indent)+title, width+lipgloss.Width(indent)) + "  "
+	if cols.Priority > 0 {
+		left += PadTo(clip(t.Priority, cols.Priority), cols.Priority) + " "
+	}
+	if cols.Runtime > 0 {
+		left += PadLeft(took, cols.Runtime) + " "
+	}
 
 	if selected {
-		return cSel.Render("▸ "+ShortID(t.ID)+"  "+left) + " " + state.String()
+		return cSel.Render("▸ "+ShortID(t.ID)+"  "+left) + state.String()
 	}
-	return marker + cDim.Render(ShortID(t.ID)) + "  " + left + " " + state.String()
+	return marker + cDim.Render(ShortID(t.ID)) + "  " + left + state.String()
 }
 
 func (m Model) askView() string {
@@ -1030,13 +1063,34 @@ func (m Model) composeView() string {
 	return b.String()
 }
 
+// keys renders the hint line, dropping WHOLE hints that do not fit.
+//
+// A HALF A HINT IS WORSE THAN NONE. The line was joined at full length and left
+// to the terminal, which cuts wherever it happens to run out — so a sixty-column
+// window ended on "r " with the description gone, followed by the empty styling
+// of every hint that had been cut away entirely. It read as a broken render
+// rather than as a line that did not fit, and the hints that survived were the
+// arbitrary ones rather than the useful ones.
 func (m Model) keys(pairs ...string) string {
+	const lead = "  "
+	const sep = "  ·  "
+
+	budget := Rule(m.width) - len(lead)
 	out := make([]string, 0, len(pairs))
+	used := 0
 	for _, p := range pairs {
 		word, rest, _ := strings.Cut(p, " ")
+		cost := len([]rune(word)) + 1 + len([]rune(rest))
+		if len(out) > 0 {
+			cost += len(sep)
+		}
+		if used+cost > budget {
+			break
+		}
+		used += cost
 		out = append(out, cKey.Render(word)+cDim.Render(" "+rest))
 	}
-	return "  " + strings.Join(out, cDim.Render("  ·  "))
+	return lead + strings.Join(out, cDim.Render(sep))
 }
 
 func pluralRuns(n int) string {
