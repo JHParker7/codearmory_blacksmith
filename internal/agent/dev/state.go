@@ -138,7 +138,26 @@ type State struct {
 	ParseFails int
 	Refunded   int
 
-	Refusals         int
+	Refusals int
+
+	// SpecBroken names the test files judged unsatisfiable, or "" while they are
+	// not. See JudgeSpec.
+	SpecBroken string
+	// SpecBrokenTries counts verifications that came back with test-file-only
+	// compile faults AFTER the developer changed something. SpecBrokenWrites is
+	// the write count at the last advance, so repeat verifications with no edit
+	// between them cannot run the streak up.
+	SpecBrokenTries  int
+	SpecBrokenWrites int
+	// Writes counts edits that changed the tree, which is what SpecBrokenWrites
+	// is compared against.
+	Writes int
+	// RedIsExpected is whether the last verification's only fault was the red a
+	// test-first specification is supposed to produce.
+	RedIsExpected bool
+	// TestEditRefusals counts attempts to edit a test file. An agent being
+	// refused is not working, and may never reach another verification.
+	TestEditRefusals int
 	StaleReads       int
 	NoopEdits        int
 	ConsecutiveReads int

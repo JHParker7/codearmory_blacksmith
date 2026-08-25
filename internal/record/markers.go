@@ -29,6 +29,11 @@ const (
 	// any later tooling can find the reason without parsing prose.
 	EscalatedMarker = "**The department is out of options on this ticket.**"
 
+	// BrokenSpecMarker records a specification that has exhausted its repairs and
+	// now needs a person. Distinct from SpecRepairMarker so the two are countable
+	// apart: one is a hand-back, the other is the end of the road.
+	BrokenSpecMarker = "**Stopped: the specification cannot be satisfied.**"
+
 	// ReturnedMarker records work handed back to an earlier stage.
 	ReturnedMarker = "<!-- blacksmith:returned -->"
 
