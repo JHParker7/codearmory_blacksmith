@@ -82,6 +82,10 @@ type Model struct {
 	// finished filter is hiding.
 	full []ticket.Ticket
 	acts map[string]Activity
+	// thoughts is the reasoning per ticket, read with the board rather than at
+	// render time. See load: View must be pure and cheap, because it runs on the
+	// event loop and runs often.
+	thoughts map[string][]Thought
 
 	mode     mode
 	selected int
@@ -115,6 +119,7 @@ type Model struct {
 
 type loadedMsg struct {
 	tickets []ticket.Ticket
+	digest  Digest
 	err     error
 }
 
@@ -149,7 +154,24 @@ func (m Model) load() tea.Cmd {
 			}
 			full = append(full, ft)
 		}
-		return loadedMsg{tickets: full}
+
+		// THE TRANSCRIPTS ARE READ HERE, IN THE COMMAND'S OWN GOROUTINE, and never
+		// on the event loop.
+		//
+		// This used to happen in Update and in View. Both run on bubbletea's single
+		// thread, so every frame paid for a full parse of the corpus — measured at
+		// 220ms for the activity and 212ms for the reasoning against 48MB, on a
+		// board that refreshes every two seconds and re-renders on every keystroke.
+		// The result is not a deadlock but a UI that stops responding, which is
+		// indistinguishable from one that has hung and was reported as such.
+		//
+		// It grows with the corpus, so it gets worse rather than better: one busy
+		// day wrote 45MB by itself.
+		ids := make([]string, 0, len(full))
+		for _, t := range full {
+			ids = append(ids, t.ID)
+		}
+		return loadedMsg{tickets: full, digest: ReadDigest(m.opts.TranscriptDir, ids, time.Now())}
 	}
 }
 
@@ -208,7 +230,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastLoad = now
 		m.full = msg.tickets
 		m.board = Rows(msg.tickets, m.opts.Table, m.showFinished)
-		m.acts = RollUp(msg.tickets, ReadActivity(m.opts.TranscriptDir, now), now)
+		m.acts = RollUp(msg.tickets, msg.digest.Acts, now)
+		m.thoughts = msg.digest.Thoughts
 		m.clampSelection()
 		return m, nil
 	}
@@ -801,7 +824,7 @@ func (m Model) detailView() string {
 	// stuck ticket through counters gives "41 refusals" and leaves the cause to
 	// guesswork — the reasoning beside it names the fault outright. Placed last
 	// because it is the longest section and reads as a tail.
-	if th := ReadThoughts(m.opts.TranscriptDir, t.ID); len(th) > 0 {
+	if th := m.thoughts[t.ID]; len(th) > 0 {
 		b.WriteString(cKey.Render("  reasoning") +
 			cDim.Render(fmt.Sprintf("  (last %d turns)", len(th))) + "\n")
 		for _, x := range th {

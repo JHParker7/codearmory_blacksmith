@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1045,4 +1046,87 @@ func TestTheWindowDrawsBeforeItKnowsItsSize(t *testing.T) {
 	m.View() // must not panic at width 0
 	m, _ = apply(m, key("enter"))
 	m.View()
+}
+
+// VIEW MUST NOT TOUCH THE FILESYSTEM, and neither must Update.
+//
+// Both run on bubbletea's single event loop. Reading the transcripts there cost
+// a full parse of the corpus per frame — measured at 220ms for the activity and
+// 212ms for the reasoning against 48MB, on a board that refreshes every two
+// seconds and re-renders on every keystroke. That is not a deadlock; it is a UI
+// that stops responding, which is indistinguishable from one that has hung.
+//
+// Pinned by pointing the window at a corpus that EXISTS and would be read, then
+// rendering every screen and asserting nothing opened it. The reasoning still
+// has to appear — it comes from the load, which is the whole point.
+func TestTheEventLoopNeverReadsTheCorpus(t *testing.T) {
+	dir := t.TempDir()
+	writeTurns(t, dir, transcript.Record{
+		Kind: transcript.KindTurn, TaskID: "store", Role: "dev-agent",
+		Reasoning: "the router drops the leading slash", At: time.Now(),
+	})
+
+	m := model(&board{tickets: []ticket.Ticket{tk("store", "", workflow.ColInDev, 20)}})
+	m.opts.TranscriptDir = dir
+	m = loadInto(t, m) // the read belongs HERE
+
+	// Make the corpus unreadable. Anything that still needs it will now fail.
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Skipf("cannot revoke access to the corpus: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("access to the corpus could not be revoked (running as root?)")
+	}
+
+	// A RELOAD LANDING ON THE EVENT LOOP must not go back to the corpus either:
+	// Update runs on the same single thread as View. The digest is handed to it
+	// already built, so a live agent still shows as live with the files gone.
+	m, _ = apply(m, loadedMsg{
+		tickets: []ticket.Ticket{tk("store", "", workflow.ColInDev, 20)},
+		digest: Digest{
+			Acts:     map[string]Activity{"store": {Role: "dev-agent", What: "editing", At: time.Now()}},
+			Thoughts: map[string][]Thought{"store": {{Role: "dev-agent", Prose: "the router drops the leading slash"}}},
+		},
+	})
+	if !strings.Contains(m.View(), "dev-agent") {
+		t.Fatalf("the activity was re-read on the event loop rather than taken "+
+			"from the load:\n%s", m.View())
+	}
+
+	// Every screen, and a burst of keystrokes, with the corpus unreachable.
+	if !strings.Contains(m.View(), "store") {
+		t.Fatalf("the list did not draw:\n%s", m.View())
+	}
+	m, _ = apply(m, key("enter"))
+	detail := m.View()
+	if !strings.Contains(detail, "leading slash") {
+		t.Fatalf("the reasoning is missing, so it was being read at render time "+
+			"rather than carried by the load:\n%s", detail)
+	}
+	for i := 0; i < 20; i++ {
+		m, _ = apply(m, key("down"))
+		m.View()
+	}
+	m, _ = apply(m, key("esc"))
+	m, _ = apply(m, key("n"))
+	m.View()
+}
+
+// THE REASONING TRAVELS WITH THE BOARD. If the load stopped carrying it, the
+// detail view would silently lose the panel rather than fail loudly.
+func TestTheLoadCarriesTheReasoning(t *testing.T) {
+	dir := t.TempDir()
+	writeTurns(t, dir, transcript.Record{
+		Kind: transcript.KindTurn, TaskID: "store", Role: "dev-agent",
+		Reasoning: "the store is keyed by title", At: time.Now(),
+	})
+
+	m := model(&board{tickets: []ticket.Ticket{tk("store", "", workflow.ColInDev, 20)}})
+	m.opts.TranscriptDir = dir
+	m = loadInto(t, m)
+
+	if len(m.thoughts["store"]) == 0 {
+		t.Fatal("the load did not carry the reasoning for a ticket on the board")
+	}
 }
