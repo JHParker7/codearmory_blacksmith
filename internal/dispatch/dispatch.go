@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -564,6 +565,27 @@ func (d *Dispatcher) work(ctx context.Context, t ticket.Ticket) {
 	if span != nil {
 		span.SetAttributes(attribute.String("ticket.next_column", next))
 	}
+
+	// SAY WHY, ON THE TICKET, BEFORE MOVING IT OUT OF REACH.
+	//
+	// A ticket escalated to a person carried nothing but its claim comments: the
+	// board said "BLOCKED — needs you" and the ticket itself gave no reason at
+	// all. The cause was in the service log, which is the one place a person
+	// reading the board is not looking — and on a host that has since restarted,
+	// is not keeping either.
+	//
+	// Measured: a spec-agent that could not create a sandbox failed three times in
+	// the same second, exhausted the ticket and blocked it. Diagnosing that took
+	// reading the process log by hand; the ticket had recorded nothing. Written
+	// BEFORE the move so a failure to comment cannot leave the ticket escalated
+	// and silent — the reverse order loses the reason exactly when it is needed.
+	if next == d.stage.Exhausted {
+		if _, err := d.store.AddComment(moveCtx, t.ID, d.escalation(status, detail)); err != nil {
+			slog.WarnContext(ctx, "could not record why the ticket was escalated",
+				"ticket_id", t.ID, "role", d.handler.Role(), "error", err)
+		}
+	}
+
 	if err := d.store.MoveTo(moveCtx, t.ID, next); err != nil {
 		slog.WarnContext(ctx, "could not advance ticket; the next reconcile will return it to its queue",
 			"ticket_id", t.ID, "next", next, "error", err)
@@ -573,6 +595,33 @@ func (d *Dispatcher) work(ctx context.Context, t ticket.Ticket) {
 	// The ticket is now in another stage's queue. Tell everyone rather than
 	// leaving it to be discovered a poll interval later.
 	d.wake.Signal()
+}
+
+// escalation is what a ticket says about itself once the department has given
+// up on it.
+//
+// NAME THE CAUSE, NOT THE SYMPTOM. "blocked after 3 attempts" sends a correct
+// reader to the wrong place — to the model, or to the specification — when the
+// actual failure was a lease that could not be created. The last detail is the
+// only thing that distinguishes the two, so it is quoted verbatim rather than
+// summarised.
+func (d *Dispatcher) escalation(status workflow.Outcome, detail string) string {
+	var b strings.Builder
+	b.WriteString(record.EscalatedMarker + "\n\n")
+	fmt.Fprintf(&b, "`%s` stopped after %d attempts on this host (%s), and the "+
+		"pipeline has no further move.\n\n", d.handler.Role(), d.maxAttempts, d.host)
+
+	if detail = strings.TrimSpace(detail); detail != "" {
+		fmt.Fprintf(&b, "The last attempt ended `%s`:\n\n```\n%s\n```\n",
+			status, clip(detail, 1500))
+	} else {
+		// AN EMPTY DETAIL IS ITSELF THE FINDING. A stage that failed without saying
+		// anything is a different problem from one that failed with a reason, and
+		// the note must not read as though a reason was simply omitted here.
+		fmt.Fprintf(&b, "The last attempt ended `%s` and reported no detail, which "+
+			"is itself worth looking at — the stage failed without saying why.\n", status)
+	}
+	return b.String()
 }
 
 // Destination is the column an outcome sends this stage's ticket to.

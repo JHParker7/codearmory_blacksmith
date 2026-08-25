@@ -610,3 +610,112 @@ func TestAFailingTicketGetsEveryAttemptBeforeEscalating(t *testing.T) {
 		t.Errorf("the handler ran %d times, want the %d attempts the ticket was promised", got, max)
 	}
 }
+
+// noteOn returns the escalation note on a ticket, or "" if there is none.
+func noteOn(b *board, id string) string {
+	for _, c := range b.get(id).Comments {
+		if strings.Contains(c.Body, record.EscalatedMarker) {
+			return c.Body
+		}
+	}
+	return ""
+}
+
+// spend writes n claims, so the next attempt is the ticket's last.
+func spend(b *board, id, role string, n int) {
+	for i := 0; i < n; i++ {
+		body, _ := record.Render(record.Claim{Host: "gpu-1", Role: role})
+		b.AddComment(context.Background(), id, body)
+	}
+}
+
+// A TICKET ESCALATED TO A PERSON MUST SAY WHY, ON ITSELF.
+//
+// One carried nothing but its claim comments: the board read "BLOCKED — needs
+// you" and the ticket gave no reason at all. The cause was in the service log,
+// which is the one place a person reading the board is not looking — and on a
+// host that has restarted since, is not keeping either.
+func TestAnExhaustedTicketRecordsWhyItWasEscalated(t *testing.T) {
+	b := newBoard()
+	st := devStage(t)
+	tk := b.add(ticket.Ticket{Status: st.Ready})
+	spend(b, tk.ID, workflow.RoleDev, 2)
+
+	h := &stubHandler{role: workflow.RoleDev,
+		err: errors.New("sandbox: create: POST /leases: 400 Bad Request")}
+	d := newDispatcher(t, b, h, Options{MaxAttempts: 3})
+	drainOnce(t, d, 1)
+
+	if got := b.get(tk.ID); got.Status != st.Exhausted {
+		t.Fatalf("status = %q, want the ticket escalated", got.Status)
+	}
+	note := noteOn(b, tk.ID)
+	if note == "" {
+		t.Fatal("the ticket was escalated with no explanation on it at all")
+	}
+	// NAME THE CAUSE, NOT THE SYMPTOM. "blocked after 3 attempts" sends a correct
+	// reader to the model or the specification when the failure was a lease.
+	if !strings.Contains(note, "POST /leases: 400") {
+		t.Errorf("the note does not carry the actual failure:\n%s", note)
+	}
+	if !strings.Contains(note, workflow.RoleDev) {
+		t.Errorf("the note does not say which stage gave up:\n%s", note)
+	}
+}
+
+// A STAGE THAT FAILED WITHOUT SAYING ANYTHING is a different problem from one
+// that failed with a reason, and the note must not read as though the reason was
+// merely left out here.
+func TestAnEscalationWithNoDetailSaysSo(t *testing.T) {
+	b := newBoard()
+	st := devStage(t)
+	tk := b.add(ticket.Ticket{Status: st.Ready})
+	spend(b, tk.ID, workflow.RoleDev, 2)
+
+	h := &stubHandler{role: workflow.RoleDev, status: workflow.OutcomeFailed}
+	d := newDispatcher(t, b, h, Options{MaxAttempts: 3})
+	drainOnce(t, d, 1)
+
+	note := noteOn(b, tk.ID)
+	if note == "" {
+		t.Fatal("no escalation note was written")
+	}
+	if !strings.Contains(note, "reported no detail") {
+		t.Errorf("an empty detail is itself the finding and is not named:\n%s", note)
+	}
+}
+
+// A TICKET WITH ATTEMPTS LEFT IS NOT ESCALATED, so it must not be annotated as
+// though it were — the marker is what a person and the window key on.
+func TestATicketWithAttemptsLeftIsNotAnnotated(t *testing.T) {
+	b := newBoard()
+	st := devStage(t)
+	tk := b.add(ticket.Ticket{Status: st.Ready})
+
+	h := &stubHandler{role: workflow.RoleDev, err: errors.New("transient")}
+	d := newDispatcher(t, b, h, Options{MaxAttempts: 3})
+	drainOnce(t, d, 1)
+
+	if note := noteOn(b, tk.ID); note != "" {
+		t.Fatalf("a retryable failure was recorded as an escalation:\n%s", note)
+	}
+}
+
+// THE NOTE IS WRITTEN BEFORE THE MOVE, so a store that accepts the comment and
+// then fails the move still leaves the reason where a person will find it.
+// Written the other way round, the reason is lost exactly when it is needed.
+func TestTheReasonSurvivesAFailedMove(t *testing.T) {
+	b := newBoard()
+	st := devStage(t)
+	tk := b.add(ticket.Ticket{Status: st.Ready})
+	spend(b, tk.ID, workflow.RoleDev, 2)
+	b.failMove = true
+
+	h := &stubHandler{role: workflow.RoleDev, err: errors.New("sandbox never booted")}
+	d := newDispatcher(t, b, h, Options{MaxAttempts: 3})
+	drainOnce(t, d, 1)
+
+	if note := noteOn(b, tk.ID); note == "" {
+		t.Fatal("the move failed and took the reason with it")
+	}
+}
