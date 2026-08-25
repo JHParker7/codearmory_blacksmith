@@ -576,7 +576,27 @@ func (d *Dispatcher) work(ctx context.Context, t ticket.Ticket) {
 	tctx := d.rec.Start(ctx, t.ID+"@"+d.host, t.ID, d.handler.Role())
 
 	status, detail, err := d.handler.Handle(tctx, t)
-	if err != nil {
+
+	// A SHUTDOWN IS NOT A FAILED ATTEMPT, and charging it as one is how restarting
+	// to install a fix makes the ticket you were fixing unworkable.
+	//
+	// The handler returns an error because ITS context ended, which is
+	// indistinguishable from a real failure by the error alone — "terminated
+	// signal received" from a chat mid-flight reads exactly like a model that
+	// broke. But the ceiling counts claims, so three restarts in a morning put
+	// three claims on one ticket and the dispatcher then refuses it forever, with
+	// nothing on the board to say why.
+	//
+	// Reconcile forgives this on the NEXT start, but only for tickets still in the
+	// working column — and the failure path below moves it out of there, so the
+	// one route that could forgive it never sees it. Said here instead, while this
+	// host still knows it is the one that died.
+	if err != nil && ctx.Err() != nil {
+		status, detail = workflow.OutcomeAbandoned, "the host stopped mid-attempt"
+		slog.InfoContext(ctx, "attempt interrupted by shutdown; it costs the ticket "+
+			"nothing", "ticket_id", t.ID, "role", d.handler.Role())
+		d.forgiveAttempt(ctx, t.ID)
+	} else if err != nil {
 		status, detail = workflow.OutcomeFailed, err.Error()
 		if span != nil {
 			span.RecordError(err)
@@ -662,6 +682,25 @@ func (d *Dispatcher) work(ctx context.Context, t ticket.Ticket) {
 	// The ticket is now in another stage's queue. Tell everyone rather than
 	// leaving it to be discovered a poll interval later.
 	d.wake.Signal()
+}
+
+// forgiveAttempt records that this host died mid-attempt, so the claim it is
+// about to leave behind does not count against the ticket's ceiling.
+//
+// THE SAME NOTE RECONCILE WRITES, for the same reason and by the same mechanism:
+// it carries the returned marker, which attempt counting treats as a fresh start
+// and arbitration treats as the end of a claim round.
+//
+// Written on a DETACHED context, because the context that would carry it is the
+// one that just ended — the whole reason this is being written at all.
+func (d *Dispatcher) forgiveAttempt(ctx context.Context, id string) {
+	noteCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer stop()
+	if _, err := d.store.AddComment(noteCtx, id, InterruptedBody); err != nil {
+		slog.WarnContext(ctx, "could not forgive an interrupted attempt; it will "+
+			"count against the ticket until the next reconcile or the stale window",
+			"ticket_id", id, "error", err)
+	}
 }
 
 // closeClaim ends this role's claim round on a ticket.

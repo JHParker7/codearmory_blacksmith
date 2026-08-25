@@ -414,9 +414,50 @@ func run(
 
 	slog.Info("department ready", "host", cfg.Host, "stages", len(assembly.Stages))
 	<-ctx.Done()
-	slog.Info("stopping; waiting for in-flight work to finish")
-	wg.Wait()
+	slog.Info("stopping; waiting for in-flight work to finish",
+		"grace", ShutdownGrace)
+
+	if !waitFor(&wg, ShutdownGrace) {
+		// GIVING UP IS BETTER THAN HANGING. A stage that will not return holds the
+		// whole process, and the operator's next move is a harder signal — which
+		// kills it in exactly the state this grace period exists to avoid, with no
+		// note written and no claim closed.
+		//
+		// Nothing is lost by returning: the claims left standing are this host's,
+		// and the next start reconciles them. Said loudly because a shutdown that
+		// timed out is a stage ignoring its context, and that is a bug to find
+		// rather than a fact of life.
+		slog.Warn("in-flight work did not stop within the grace period; exiting "+
+			"anyway. Claims left standing are reconciled on the next start",
+			"grace", ShutdownGrace)
+	}
 	return nil
+}
+
+// ShutdownGrace bounds the wait for in-flight work on the way out.
+//
+// LONGER THAN THE LONGEST HONEST TAIL. A stage that finishes just as the signal
+// arrives still has to write its outcome and move its ticket, and those run on a
+// detached context with a thirty-second timeout of their own — so anything
+// shorter would cut off the very work that keeps the board consistent.
+//
+// Comfortably inside systemd's default TimeoutStopSec of ninety seconds, so the
+// process chooses how it exits rather than being killed mid-write.
+const ShutdownGrace = 60 * time.Second
+
+// waitFor waits for wg, and reports whether it finished inside the deadline.
+func waitFor(wg *sync.WaitGroup, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
 }
 
 // concurrencyFor is how many tickets a stage works at once.
