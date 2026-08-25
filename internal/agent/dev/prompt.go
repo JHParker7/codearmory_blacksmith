@@ -54,7 +54,7 @@ type Reasons struct {
 // Render is the whole turn state as one string, for callers and tests that want
 // it undivided. The loop sends the two halves separately — see RenderWorld.
 func Render(t ticket.Ticket, why Reasons, s *State) string {
-	return RenderWorld(t, why, s) + RenderProgress(s)
+	return RenderWorld(t, why, s) + RenderChanges(s) + RenderProgress(s)
 }
 
 // RenderWorld is the half of the prompt that does NOT change from turn to turn:
@@ -107,26 +107,58 @@ func RenderWorld(t ticket.Ticket, why Reasons, s *State) string {
 		fmt.Fprintf(&b, "  %s\n", f)
 	}
 
-	if len(s.Read) > 0 {
+	// AS READ, IN THE ORDER THEY WERE READ, AND NEVER REWRITTEN. This is the
+	// expensive half of the prompt and the half a backend caches, so it has to be
+	// APPEND-ONLY: a new read costs the tail and nothing before it, and an edit
+	// costs nothing here at all. What the agent has since changed is shown late,
+	// by RenderChanges.
+	//
+	// Sorting these would be worse than it looks. A file read later can sort
+	// before one read earlier, which inserts text into the middle of the cached
+	// prefix and invalidates everything after it — the same fault as rewriting,
+	// arriving on reads instead of writes.
+	if len(s.ReadOrder) > 0 {
 		b.WriteString("\nFILES YOU HAVE READ:\n")
-		for _, p := range sortedKeys(s.Read) {
-			fmt.Fprintf(&b, "\n--- %s ---\n%s\n", p, NumberLines(s.Read[p]))
+		for _, p := range s.ReadOrder {
+			fmt.Fprintf(&b, "\n--- %s ---\n%s\n", p, NumberLines(s.AsRead[p]))
 		}
 	}
 
-	if len(s.Staged) > 0 {
-		b.WriteString("\nFILES YOU HAVE ALREADY CHANGED (staged, not yet committed):\n")
-		for _, p := range sortedKeys(s.Staged) {
-			fmt.Fprintf(&b, "  %s\n", p)
+	return b.String()
+}
+
+// RenderChanges is what the agent has done to those files since, and it is
+// rendered LATE for the reason RenderWorld is rendered early: this is the part
+// that changes every time an edit lands, and putting it in the cached prefix is
+// what made the developer reprocess a 25,000-token prompt on every productive
+// turn.
+//
+// ONLY WHAT ACTUALLY DIFFERS. A file read and not edited is already above in
+// full; repeating it would pay the tokens twice for nothing. A file the agent
+// CREATED was never read, so it has no entry above and appears here whole, which
+// is correct — it is entirely the agent's own work.
+func RenderChanges(s *State) string {
+	var changed []string
+	for _, p := range sortedKeys(s.Read) {
+		if was, seen := s.AsRead[p]; !seen || was != s.Read[p] {
+			changed = append(changed, p)
 		}
-		// Reading a staged file back is the specific waste this prevents: the
-		// contents above are ALREADY the staged version, so a read to "check the
-		// write landed" returns exactly what the model just wrote and teaches it
-		// nothing, while costing one of very few turns.
-		b.WriteString("The contents shown above are the staged versions — " +
-			"reading them again returns your own writes.\n")
+	}
+	if len(changed) == 0 {
+		return ""
 	}
 
+	var b strings.Builder
+	b.WriteString("FILES AS YOU HAVE CHANGED THEM (staged, not yet committed).\n")
+	b.WriteString("These supersede the copies above — this is what is on disk now.\n")
+	for _, p := range changed {
+		fmt.Fprintf(&b, "\n--- %s ---\n%s\n", p, NumberLines(s.Read[p]))
+	}
+	// Reading a staged file back is the specific waste this prevents: the contents
+	// here are ALREADY the staged version, so a read to "check the write landed"
+	// returns exactly what the model just wrote and teaches it nothing, while
+	// costing one of very few turns.
+	b.WriteString("\nReading any of these again returns your own writes.\n")
 	return b.String()
 }
 

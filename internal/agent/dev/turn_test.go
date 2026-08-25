@@ -9,13 +9,18 @@ import (
 )
 
 func loopState() *State {
-	return &State{
-		Tree:     []string{"store.go"},
-		Read:     map[string]string{"store.go": storeGo},
-		Staged:   map[string]string{},
-		Baseline: map[string]string{"store.go": storeGo},
-		Missing:  map[string]bool{},
+	// Through RecordRead, so AsRead and ReadOrder are filled the way the loop
+	// fills them. A state that assigns Read directly reads as a file the agent
+	// has already CHANGED — Read differs from AsRead — and renders an extra
+	// message no real turn would carry.
+	s := &State{
+		Tree:    []string{"store.go"},
+		Read:    map[string]string{},
+		Staged:  map[string]string{},
+		Missing: map[string]bool{},
 	}
+	s.RecordRead([]string{"store.go"}, map[string]string{"store.go": storeGo})
+	return s
 }
 
 // THE MESSAGES ARE ORDERED BY VOLATILITY, not by topic. A few hundred changed

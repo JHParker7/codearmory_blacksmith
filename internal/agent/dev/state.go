@@ -65,6 +65,24 @@ type State struct {
 	Read   map[string]string
 	Staged map[string]string
 
+	// AsRead is each file's contents WHEN IT WAS FIRST READ, and ReadOrder is the
+	// order they arrived in. Neither is ever rewritten.
+	//
+	// THEY EXIST FOR THE PROMPT CACHE. Read is deliberately updated with staged
+	// content so the agent sees its own edits — and Read was rendered inside the
+	// half of the prompt a backend caches, so every successful edit rewrote the
+	// cached prefix and the whole thing was reprocessed. Measured on a live run:
+	// the developer paid ~30s per turn against a 25,000-token prompt whatever it
+	// asked for, one turn emitting 29 tokens in 30.8s, while spec-merge at 19,000
+	// tokens dropped from 30.1s to 11.6s the moment its prefix stopped changing.
+	// The developer never once dropped, because it was the only stage editing on
+	// nearly every turn.
+	//
+	// Rendered append-only, so reading a NEW file costs the tail and nothing
+	// before it, and editing an old one costs nothing here at all.
+	AsRead    map[string]string
+	ReadOrder []string
+
 	// Iteration and Budget are where the attempt is in its allowance. Zero budget
 	// means unknown, and the denominator is left off rather than printed as
 	// "OF 0".
