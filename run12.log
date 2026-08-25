@@ -1,0 +1,32 @@
+2026/08/26 09:13:25 INFO agents host starting host=osiris classes=2
+2026/08/26 09:13:25 INFO transcript capture enabled dir=/home/jhp1403/.local/share/codearmory-agents/transcripts
+2026/08/26 09:13:25 INFO metrics exporting over OTLP service=blacksmith
+2026/08/26 09:13:25 INFO model class routed class=large endpoint=http://192.168.58.1:11434/v1 model=qwen3.8:latest slots=1 authenticated=false
+2026/08/26 09:13:25 INFO model class routed class=small endpoint=http://192.168.58.1:11434/v1 model=qwen3.8:latest slots=1 authenticated=true
+2026/08/26 09:13:25 INFO sandbox session renews on expiry login_url=http://192.168.58.2:30081 email=admin@blacksmith.invalid
+2026/08/26 09:13:25 INFO sandboxes run on a LOCAL forge with its own gatekeeper url=http://192.168.58.2:30083
+2026/08/26 09:13:25 INFO STANDALONE: this host's own store holds the tickets and the platform is not consulted url=http://192.168.58.2:30086
+2026/08/26 09:13:25 INFO stage running role=architect-agent class=large
+2026/08/26 09:13:25 INFO stage running role=pm-agent class=small
+2026/08/26 09:13:25 INFO stage running role=ticket-merge-agent class=none
+2026/08/26 09:13:25 INFO stage running role=test-agent class=large
+2026/08/26 09:13:25 INFO stage running role=spec-agent class=large
+2026/08/26 09:13:25 INFO stage running role=spec-merge-agent class=large
+2026/08/26 09:13:25 INFO stage running role=dev-agent class=large
+2026/08/26 09:13:25 INFO stage running role=maintenance-agent class=large
+2026/08/26 09:13:25 INFO stage running role=sec-agent class=small
+2026/08/26 09:13:25 INFO stage running role=integrator class=none
+2026/08/26 09:13:25 INFO stage running role=resolver class=small
+2026/08/26 09:13:25 INFO department ready host=osiris stages=11
+2026/08/26 09:13:35 WARN metrics are not reaching a collector; counters are being dropped. Reported once — the total follows at shutdown error="failed to upload metrics: Post \"http://localhost:4318/v1/metrics\": dial tcp [::1]:4318: connect: connection refused"
+2026/08/26 09:14:19 INFO stage finished ticket_id=d9e652a3-9a21-445a-9164-eedbee85ca71 role=architect-agent status=success detail="designed: README.md, ARCHITECTURE.md"
+2026/08/26 09:15:39 INFO split a task into specification sections ticket_id=d9e652a3-9a21-445a-9164-eedbee85ca71 title="In-memory ticket store with validation and sentinel error" criteria=5 sections=3
+2026/08/26 09:15:47 INFO split a task into specification sections ticket_id=d9e652a3-9a21-445a-9164-eedbee85ca71 title="JSON API handlers for /tickets routes" criteria=5 sections=2
+2026/08/26 09:16:09 INFO stage finished ticket_id=d9e652a3-9a21-445a-9164-eedbee85ca71 role=pm-agent status=success detail="opened 4 tasks and 0 specification sections"
+2026/08/26 09:16:10 INFO merged the plan's tasks into one ticket_id=76df8e90-1397-49f0-bb8e-872117ee44d2 absorbed=3 sections=4
+2026/08/26 09:16:10 INFO stage finished ticket_id=76df8e90-1397-49f0-bb8e-872117ee44d2 role=ticket-merge-agent status=success detail="merged 4 tasks into one"
+2026/08/26 09:38:25 INFO stopping; waiting for in-flight work to finish grace=1m0s
+2026/08/26 09:38:25 INFO attempt interrupted by shutdown; it costs the ticket nothing ticket_id=ce83f77f-c268-4034-9589-59976d1f5598 role=spec-agent
+2026/08/26 09:38:25 INFO stage finished ticket_id=ce83f77f-c268-4034-9589-59976d1f5598 role=spec-agent status=abandoned detail="the host stopped mid-attempt"
+2026/08/26 09:38:25 WARN metrics never reached a collector failed_exports=150
+2026/08/26 09:38:25 WARN metrics did not flush on the way out error="failed to upload metrics: Post \"http://localhost:4318/v1/metrics\": dial tcp [::1]:4318: connect: connection refused"

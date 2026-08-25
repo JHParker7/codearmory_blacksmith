@@ -211,6 +211,26 @@ func NonUndefinedCompileErrors(out string) []string {
 			continue
 		}
 		msg := l[len(m[0]):]
+		// NOT A DEFECT — GO SAYING IT STOPPED COUNTING. The toolchain caps a
+		// package at ten errors and prints "file.go:54:7: too many errors" as the
+		// eleventh, carrying a file, line and column like any other. It therefore
+		// reads as "a compile error that is not an undefined symbol", which is
+		// exactly the shape this function exists to catch.
+		//
+		// Measured on run 12: an in-memory store's specification names eleven
+		// undefined symbols before its implementation exists — NewStore,
+		// StatusOpen, Status, ErrNotFound and the rest — so Go truncated, and the
+		// truncation marker alone made RedIsExpected false for a specification
+		// that was completely correct. The author was refused, rewrote the
+		// identical file, was refused again, and did that for 65 turns; its own
+		// summary read "the tests are already written and fail against the
+		// current code (as expected)". It was right.
+		//
+		// The bigger the specification, the likelier this fires — it needs only
+		// enough undefined symbols to reach the cap.
+		if strings.TrimSpace(msg) == "too many errors" {
+			continue
+		}
 		sym := undefinedSymbol(msg)
 		if sym == "" {
 			found = append(found, l) // not an undefined error at all

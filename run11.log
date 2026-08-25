@@ -36,3 +36,6 @@
 2026/08/26 08:43:00 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=dev-agent status=returned detail="specification is unsatisfiable; returned to its author"
 2026/08/26 08:43:31 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=spec-merge-agent status=success detail="1 file(s) in 2 turns"
 2026/08/26 08:44:22 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=dev-agent status=blocked detail="specification is unsatisfiable"
+2026/08/26 09:11:52 INFO stopping; waiting for in-flight work to finish grace=1m0s
+2026/08/26 09:11:52 WARN metrics never reached a collector failed_exports=233
+2026/08/26 09:11:52 WARN metrics did not flush on the way out error="failed to upload metrics: Post \"http://localhost:4318/v1/metrics\": dial tcp [::1]:4318: connect: connection refused"
