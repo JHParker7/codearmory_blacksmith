@@ -94,7 +94,18 @@ func runWindow(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return window.Open(ctx, store, department.Table(cfg), cfg.BoardID)
+	where, mode := cfg.PlatformURL, "platform"
+	if cfg.Standalone() {
+		where, mode = cfg.TicketsURL, "standalone"
+	}
+	return window.Open(ctx, store, window.Options{
+		Table:         department.Table(cfg),
+		BoardID:       cfg.BoardID,
+		TranscriptDir: cfg.TranscriptDir,
+		RepoURL:       cfg.Repo.URL,
+		Where:         where,
+		Mode:          mode,
+	})
 }
 
 // runService starts the department.
