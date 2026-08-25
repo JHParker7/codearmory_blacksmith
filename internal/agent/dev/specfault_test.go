@@ -164,14 +164,34 @@ func TestIntrinsicTestErrors(t *testing.T) {
 	}
 }
 
+// A CONFLICT BETWEEN TWO TESTS IS THE AUTHOR'S: the developer may not edit
+// either file, so no edit it can make compiles.
 func TestPackageConflictFiles(t *testing.T) {
-	out := "found packages demo (main.go) and tracker (store_test.go) in /tmp/work\n"
+	out := "found packages demo (store_test.go) and tracker (board_test.go) in /tmp/work\n"
 	got := PackageConflictFiles(out)
-	if len(got) != 2 || got[0] != "main.go" || got[1] != "store_test.go" {
+	if len(got) != 2 || got[0] != "store_test.go" || got[1] != "board_test.go" {
 		t.Fatalf("PackageConflictFiles = %v", got)
 	}
 	if PackageConflictFiles("no conflict here") != nil {
 		t.Fatal("a clean run reported a package conflict")
+	}
+}
+
+// AND A CONFLICT INVOLVING THE DEVELOPER'S OWN FILE IS THE DEVELOPER'S.
+//
+// This blamed the author for exactly that. Read off a live hand-back:
+//
+//	found packages main (board_test.go) and store (store.go)
+//
+// The tests said "main" and the developer's own store.go said "store" — a file
+// it had written one turn earlier and could have corrected in one edit. The
+// specification was sound, and a repair attempt was spent telling its author to
+// fix a file it does not own.
+func TestAPackageConflictWithAnImplementationFileIsNotTheSpecificationsFault(t *testing.T) {
+	out := "found packages main (board_test.go) and store (store.go) in /workspace\n"
+	if got := PackageConflictFiles(out); got != nil {
+		t.Errorf("the author was blamed for %v; store.go is the developer's own file "+
+			"and one edit fixes it", got)
 	}
 }
 
