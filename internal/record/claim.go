@@ -69,6 +69,14 @@ func CloseClaim(role string) (string, error) {
 // empty role matches any close, because "who holds this ticket" is a question
 // about the ticket rather than about one stage.
 func closesClaim(body, role string) bool {
+	// A HAND-BACK ENDS EVERY ROUND ON THE TICKET, whatever role wrote it: the
+	// ticket goes back a stage, so no claim standing on it is live any more.
+	// Reconcile's interrupted note carries this marker too, which is what makes a
+	// ticket stranded by a restart claimable again — forgiving the ATTEMPT was
+	// never enough on its own, because the dead claim still won the race.
+	if isReset(body) {
+		return true
+	}
 	rest, ok := strings.CutPrefix(body, ClaimClosedMarker)
 	if !ok {
 		return false

@@ -156,10 +156,7 @@ func TestATicketAtItsCeilingIsNotClaimed(t *testing.T) {
 	st := devStage(t)
 	tk := b.add(ticket.Ticket{Status: st.Ready})
 
-	for i := 0; i < 3; i++ {
-		body, _ := record.Render(record.Claim{Host: "gpu-1", Role: workflow.RoleDev})
-		b.AddComment(context.Background(), tk.ID, body)
-	}
+	spend(b, tk.ID, workflow.RoleDev, 3)
 
 	before := len(b.get(tk.ID).Comments)
 
@@ -375,10 +372,7 @@ func TestAFailureRetriesThenEscalates(t *testing.T) {
 		b := newBoard()
 		tk := b.add(ticket.Ticket{Status: st.Ready})
 		// Two spent, and the claim about to be made is the third.
-		for i := 0; i < 2; i++ {
-			body, _ := record.Render(record.Claim{Host: "gpu-1", Role: workflow.RoleDev})
-			b.AddComment(context.Background(), tk.ID, body)
-		}
+		spend(b, tk.ID, workflow.RoleDev, 2)
 		h := &stubHandler{role: workflow.RoleDev, status: workflow.OutcomeFailed}
 		d := newDispatcher(t, b, h, Options{MaxAttempts: 3})
 		drainOnce(t, d, 1)
@@ -621,11 +615,19 @@ func noteOn(b *board, id string) string {
 	return ""
 }
 
-// spend writes n claims, so the next attempt is the ticket's last.
+// spend writes n FINISHED attempts, so the next one is the ticket's last.
+//
+// A finished attempt leaves TWO comments: the claim, and the close that ends its
+// round. Seeding bare claims models a state the department cannot produce — a
+// claim with no close means a host is working the ticket right now, so "two
+// attempts spent" written that way really says "two hosts are on this", and the
+// next claim correctly loses a race it should have won.
 func spend(b *board, id, role string, n int) {
 	for i := 0; i < n; i++ {
-		body, _ := record.Render(record.Claim{Host: "gpu-1", Role: role})
-		b.AddComment(context.Background(), id, body)
+		claim, _ := record.Render(record.Claim{Host: "gpu-1", Role: role})
+		b.AddComment(context.Background(), id, claim)
+		closed, _ := record.CloseClaim(role)
+		b.AddComment(context.Background(), id, closed)
 	}
 }
 
