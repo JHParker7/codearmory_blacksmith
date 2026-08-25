@@ -611,12 +611,6 @@ func (m Model) line(r Row, selected bool, now time.Time) string {
 	// THE COUNT IS RESERVED FOR, NOT APPENDED. Appending it and clipping the
 	// result meant the count was the first thing cut, and these titles are already
 	// past the cap — so it never appeared on the rows that most needed it.
-	suffix := ""
-	if r.Progress.Total > 0 {
-		suffix = "  " + ProgressBar(r.Progress.Done, r.Progress.Total,
-			now.Sub(t.CreatedAt), ProgressBarWidth)
-	}
-
 	// INDENTED UNDER WHAT IT CAME FROM, one level per generation. Rows already sit
 	// directly beneath their parent; the indent is what makes the nesting visible
 	// rather than merely true, so five tickets about task stores read as one
@@ -629,6 +623,16 @@ func (m Model) line(r Row, selected bool, now time.Time) string {
 			width = 12
 		}
 	}
+
+	// A BAR AND AN ESTIMATE, not just a count. "4/19 done" says where a request
+	// is; it does not say whether to wait for it.
+	//
+	// THE CELL IS SIZED AGAINST THIS ROW'S REMAINING WIDTH, and gives up detail
+	// rather than the title. Reserving for the full bar unconditionally left every
+	// broken-down request on an eighty-column terminal rendering as "…".
+	suffix := ProgressSuffix(r.Progress.Done, r.Progress.Total,
+		now.Sub(t.CreatedAt), width)
+
 	// clip ADDS its ellipsis to the length it was given, so a title clipped to n
 	// comes back n+1 columns wide; without allowing for it the row overruns its
 	// budget by one.

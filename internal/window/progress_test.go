@@ -60,8 +60,76 @@ func TestProgressBarWithholdsTheETAUntilItMeansSomething(t *testing.T) {
 func TestProgressBarETAIsThisRunsOwnPace(t *testing.T) {
 	// Four done in twenty minutes is five minutes each; six remain, so thirty.
 	got := ProgressBar(4, 10, 20*time.Minute, 10)
-	if !strings.Contains(got, "30m00s left") {
-		t.Fatalf("ProgressBar = %q, want ~30m00s left — elapsed/done × remaining", got)
+	if !strings.Contains(got, "~30m left") {
+		t.Fatalf("ProgressBar = %q, want ~30m left — elapsed/done × remaining", got)
+	}
+}
+
+// AN ESTIMATE IS NOT A MEASUREMENT. Rendered to the second and recomputed every
+// two seconds, it is a number that visibly disagrees with itself while the
+// reader watches.
+func TestTheETAUsesTheCoarseClock(t *testing.T) {
+	got := ProgressBar(4, 10, 20*time.Minute+38*time.Second, 10)
+	if strings.Contains(got, "s left") && !strings.Contains(got, "0s left") {
+		t.Fatalf("ProgressBar = %q, want the estimate rounded rather than "+
+			"rendered to the second", got)
+	}
+}
+
+// ---- ProgressSuffix ----
+
+// A ROW THAT IDENTIFIES NOTHING IS NOT A ROW. Measured on the live board at
+// eighty columns: three of the top rows showed one character of title between
+// them, because the full bar was reserved for unconditionally.
+func TestProgressSuffixGivesUpDetailRatherThanTheTitle(t *testing.T) {
+	full := ProgressSuffix(3, 4, time.Hour, 60)
+	if !strings.Contains(full, "█") || !strings.Contains(full, "left") {
+		t.Fatalf("with room to spare the cell should be complete, got %q", full)
+	}
+
+	// Narrower: the estimate goes first — it is the least missed.
+	noETA := ProgressSuffix(3, 4, time.Hour, 34)
+	if strings.Contains(noETA, "left") {
+		t.Fatalf("got %q, want the estimate dropped at 34 columns", noETA)
+	}
+	if !strings.Contains(noETA, "█") {
+		t.Fatalf("got %q, want the bar kept while it fits", noETA)
+	}
+
+	// Narrower still: the bar goes, the count stays. "3/4" is the part someone
+	// quotes and it survives at any width.
+	countOnly := ProgressSuffix(3, 4, time.Hour, 25)
+	if strings.Contains(countOnly, "█") {
+		t.Fatalf("got %q, want the bar dropped at 25 columns", countOnly)
+	}
+	if !strings.Contains(countOnly, "3/4") {
+		t.Fatalf("got %q, want the count kept", countOnly)
+	}
+}
+
+// EVERY FORM LEAVES A READABLE TITLE, or it is not used at all.
+func TestProgressSuffixAlwaysLeavesRoomForATitle(t *testing.T) {
+	for room := 0; room <= 80; room++ {
+		s := ProgressSuffix(3, 4, time.Hour, room)
+		if s == "" {
+			continue
+		}
+		if left := room - len([]rune(s)) - 1; left < MinTitle {
+			t.Fatalf("room %d: suffix %q leaves %d columns for the title, want at "+
+				"least %d", room, s, left, MinTitle)
+		}
+	}
+}
+
+func TestProgressSuffixVanishesWhenNothingFits(t *testing.T) {
+	if got := ProgressSuffix(3, 4, time.Hour, 12); got != "" {
+		t.Fatalf("got %q, want nothing: 12 columns cannot hold a title and a count", got)
+	}
+}
+
+func TestProgressSuffixWithoutABreakdown(t *testing.T) {
+	if got := ProgressSuffix(0, 0, time.Hour, 60); got != "" {
+		t.Fatalf("got %q, want nothing for a ticket with no children", got)
 	}
 }
 
