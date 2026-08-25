@@ -143,20 +143,3 @@ func Rule(termWidth int) int {
 	// the safe assumption; guessing wide would wrap every row of the first frame.
 	return 78
 }
-
-// TitleWidth is what is left for the title once the fixed columns are taken.
-//
-// A TITLE IS THE MOST COMPRESSIBLE THING ON THE ROW. An id that wrapped would be
-// unusable for the cross-referencing it is there to serve, and a runtime that
-// wrapped would be worse than absent — so both keep their width and the title
-// gives way.
-func TitleWidth(termWidth int) int {
-	w := Rule(termWidth) - 52 - RuntimeWidth - 1
-	if w < 20 {
-		return 20
-	}
-	if w > 60 {
-		return 60
-	}
-	return w
-}

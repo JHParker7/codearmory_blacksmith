@@ -227,25 +227,3 @@ func TestRuleBeforeTheTerminalIsMeasured(t *testing.T) {
 		t.Fatalf("Rule(120) = %d, want 119", got)
 	}
 }
-
-func TestTitleWidthIsBounded(t *testing.T) {
-	if got := TitleWidth(40); got != 20 {
-		t.Fatalf("TitleWidth(40) = %d, want the floor of 20 — a narrow terminal "+
-			"still needs a readable title", got)
-	}
-	if got := TitleWidth(400); got != 60 {
-		t.Fatalf("TitleWidth(400) = %d, want the ceiling of 60 — on a very wide "+
-			"terminal the state column should not be pushed off the eye's path", got)
-	}
-}
-
-// THE FIXED COLUMNS KEEP THEIR WIDTH AND THE TITLE GIVES WAY. An id or a runtime
-// that wrapped would be useless; a clipped title is still readable.
-func TestTitleWidthLeavesRoomForTheFixedColumns(t *testing.T) {
-	const term = 120
-	fixed := ShortIDLen + 2 + PriorityWidth + RuntimeWidth + 2
-	if TitleWidth(term)+fixed >= Rule(term) {
-		t.Fatalf("TitleWidth(%d) = %d plus %d of fixed columns does not fit in %d",
-			term, TitleWidth(term), fixed, Rule(term))
-	}
-}
