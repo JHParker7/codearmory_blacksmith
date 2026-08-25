@@ -98,6 +98,17 @@ type State struct {
 	// work was kept.
 	Restart string
 
+	// Missing records a path the tree listed but a read could not find, so a
+	// create is not refused as an overwrite of something that is not there.
+	Missing map[string]bool
+
+	// UndoStack is the staged tree as it stood before each accepted write, newest
+	// last, so undo_edit can put a file back.
+	UndoStack []map[string]string
+
+	// Repairs names the files the harness repaired on the agent's behalf.
+	Repairs []string
+
 	// History is what this agent has already done and what came of it, as a RECAP
 	// IT IS SHOWN rather than a conversation it appears to have had.
 	//
