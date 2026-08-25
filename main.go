@@ -16,8 +16,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
+
+	"github.com/charmbracelet/x/term"
 
 	"github.com/code-armory-app/blacksmith/internal/config"
 	"github.com/code-armory-app/blacksmith/internal/department"
@@ -40,6 +44,17 @@ func main() {
 	switch {
 	case len(args) == 0:
 		if err := runWindow(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			// TO A FILE AS WELL AS THE SCREEN.
+			//
+			// The window draws on an ALTERNATE screen, and leaving it restores
+			// whatever was underneath — which can take this message with it. That
+			// is how the same failure was reported four times with nothing to go
+			// on: the cause was printed each time and never survived long enough
+			// to be read.
+			//
+			// A file outlives the terminal, and it is the difference between
+			// "it broke again" and knowing which of two paths it took.
+			noteWindowFailure(err)
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -305,4 +320,45 @@ func concurrencyFor(cfg config.Config, role string) int {
 		return cfg.DevConcurrency
 	}
 	return cfg.Concurrency
+}
+
+// WindowLog is where a failed window records what happened. Under the state
+// directory rather than a temporary one, because the whole point is that it is
+// still there later.
+func WindowLog() string {
+	dir := os.Getenv("XDG_STATE_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		dir = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(dir, "blacksmith", "window.log")
+}
+
+// noteWindowFailure appends what went wrong, with the details that decide which
+// failure it was.
+//
+// BEST EFFORT THROUGHOUT: this runs while something has already gone wrong, and
+// failing to write a note is not worth a second error on top of the first.
+func noteWindowFailure(cause error) {
+	path := WindowLog()
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	// The three facts that separate the causes: whether there was a terminal at
+	// all, what kind, and what the window itself said.
+	fmt.Fprintf(f, "%s  term=%q stdin_tty=%v stdout_tty=%v\n    %v\n",
+		time.Now().Format(time.RFC3339), os.Getenv("TERM"),
+		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd()), cause)
 }

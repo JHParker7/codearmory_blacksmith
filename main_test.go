@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -319,4 +320,54 @@ func TestAHostWithNoPlaneCredentialStillBuildsItsClients(t *testing.T) {
 	if _, _, err := clients(cfg); err != nil {
 		t.Errorf("clients: %v", err)
 	}
+}
+
+// A WINDOW FAILURE MUST OUTLIVE THE TERMINAL.
+//
+// The window draws on an alternate screen, and leaving it restores whatever was
+// underneath — which can take the error with it. That is how the same failure
+// was reported four times with nothing to go on: the cause was printed each
+// time and never survived long enough to be read.
+func TestAWindowFailureIsRecordedToAFile(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	noteWindowFailure(errors.New("the window needs a terminal: stdin is not one"))
+
+	body, err := os.ReadFile(WindowLog())
+	if err != nil {
+		t.Fatalf("nothing was written: %v", err)
+	}
+	got := string(body)
+
+	// THE CAUSE, and the three facts that separate one cause from another.
+	for _, want := range []string{"stdin is not one", "term=", "stdin_tty=", "stdout_tty="} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the note does not carry %q:\n%s", want, got)
+		}
+	}
+}
+
+// IT APPENDS. A second failure must not erase the first — a recurring fault is
+// most readable as a series.
+func TestRepeatedWindowFailuresAccumulate(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	noteWindowFailure(errors.New("first"))
+	noteWindowFailure(errors.New("second"))
+
+	body, err := os.ReadFile(WindowLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+	if !strings.Contains(got, "first") || !strings.Contains(got, "second") {
+		t.Fatalf("a failure overwrote the one before it:\n%s", got)
+	}
+}
+
+// RECORDING IS BEST EFFORT. It runs when something has already gone wrong, and
+// failing to write a note is not worth a second error on top of the first.
+func TestRecordingAFailureNeverPanics(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/proc/nonexistent/cannot-create")
+	noteWindowFailure(errors.New("boom")) // must simply do nothing
 }
