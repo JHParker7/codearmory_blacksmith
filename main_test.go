@@ -52,7 +52,7 @@ func TestTheBinaryExplainsItselfWithoutConfiguration(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 
-	for _, args := range [][]string{nil, {"--help"}, {"help"}} {
+	for _, args := range [][]string{{"--help"}, {"help"}} {
 		cmd := exec.Command(bin, args...)
 		// An empty environment: no config file, no tokens, nothing.
 		cmd.Env = []string{"HOME=" + t.TempDir()}
@@ -62,8 +62,28 @@ func TestTheBinaryExplainsItselfWithoutConfiguration(t *testing.T) {
 		if err := cmd.Run(); err != nil {
 			t.Errorf("%v: exited %v\n%s", args, err, out.String())
 		}
-		if !strings.Contains(out.String(), "blacksmith service") {
-			t.Errorf("%v: the usage does not say how to run it:\n%s", args, out.String())
+		// BOTH COMMANDS ARE LISTED, or the window is a feature nobody finds.
+		for _, want := range []string{"blacksmith service", "open the window"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%v: the usage does not mention %q:\n%s", args, want, out.String())
+			}
+		}
+	}
+
+	// BARE `blacksmith` OPENS THE WINDOW, so with no board configured it says
+	// which variables it needs rather than printing usage. A usage screen would
+	// tell a reader whose config is merely incomplete that they typed the command
+	// wrong.
+	bare := exec.Command(bin)
+	bare.Env = []string{"HOME=" + t.TempDir()}
+	var bareOut bytes.Buffer
+	bare.Stdout, bare.Stderr = &bareOut, &bareOut
+	if err := bare.Run(); err == nil {
+		t.Errorf("the window opened with no board configured:\n%s", bareOut.String())
+	}
+	for _, want := range []string{"no board to read", "CODEARMORY_URL"} {
+		if !strings.Contains(bareOut.String(), want) {
+			t.Errorf("the window does not say what it needs (%q):\n%s", want, bareOut.String())
 		}
 	}
 
