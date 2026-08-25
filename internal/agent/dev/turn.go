@@ -105,6 +105,26 @@ func TurnRecord(act Action, reply string) string {
 // off" makes it write less. The finish reason is the only thing that separates
 // them, so it is reported rather than guessed at.
 func ParseFailureNotice(res model.ChatResult, err error) string {
+	// THE QUOTING IS THE FAULT, AND SAYING SO IS THE WHOLE FIX. A model that
+	// stringifies its own arguments has to escape Go source three levels deep —
+	// every quote becomes \\\" and every newline \\\\n — and a small model does not
+	// get through a test file's worth of that without breaking it.
+	//
+	// It is not truncation: measured at 2,334 and 3,033 completion tokens against
+	// a 4,000 ceiling, so the reply ended on its own, malformed. Told only "your
+	// reply was rejected", the model sent the identical shape again and the stage
+	// died on the third attempt. Naming the cause is what lets it choose the shape
+	// that does not need escaping at all.
+	if stringifiedArguments(res) {
+		return "Your \"edits\" arrived as a QUOTED STRING containing JSON, and the " +
+			"quoting broke partway through — that is why the reply could not be read. " +
+			"Send edits as a JSON ARRAY, not as a string:\n\n" +
+			"  RIGHT: {\"edits\": [{\"path\": \"store_test.go\", \"decl\": \"TestX\", \"replace\": \"...\"}]}\n" +
+			"  WRONG: {\"edits\": \"[{\\\"path\\\": ...}]\"}\n\n" +
+			"The array form needs one level of escaping instead of three, which is " +
+			"what is failing. Send one file per turn if it is still long."
+	}
+
 	if res.Truncated(model.MaxReplyTokens) {
 		return "Your previous reply was CUT OFF at the token limit — it was not malformed, it was " +
 			"too long. Do not send it again unchanged. Make a SMALLER edit: write one function or " +
@@ -112,6 +132,22 @@ func ParseFailureNotice(res model.ChatResult, err error) string {
 			"rather than sending a whole file at once."
 	}
 	return "Your previous reply was rejected: " + err.Error()
+}
+
+// stringifiedArguments reports whether the reply put a JSON array inside a JSON
+// string, which is the shape that cannot survive its own escaping.
+//
+// Matched on the RAW REPLY rather than on the decode error, because the error is
+// whatever the JSON parser happened to trip over — "unexpected EOF", "invalid
+// character" — and says nothing about the shape that caused it.
+func stringifiedArguments(res model.ChatResult) bool {
+	raw := res.Content
+	for _, c := range res.Calls {
+		raw += c.Arguments
+	}
+	stripped := strings.ReplaceAll(raw, " ", "")
+	return strings.Contains(stripped, `"edits":"[`) ||
+		strings.Contains(stripped, `"paths":"[`)
 }
 
 // Budget is the turn allowance including the refunds.
