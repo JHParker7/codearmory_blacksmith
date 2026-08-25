@@ -567,17 +567,6 @@ func TestTheRenderedReviewSaysWhatItFound(t *testing.T) {
 	}
 }
 
-func TestReviewedReadsBackOffATicket(t *testing.T) {
-	tk := pushed()
-	if Reviewed(tk) {
-		t.Error("an unreviewed ticket read back as reviewed")
-	}
-	tk.Comments = append(tk.Comments, ticket.Comment{Body: Render(Review{Verdict: VerdictClean}, "agent/t-1")})
-	if !Reviewed(tk) {
-		t.Error("a reviewed ticket did not read back as reviewed")
-	}
-}
-
 func TestTheStageIdentifiesItself(t *testing.T) {
 	a := New(&gateway{}, &sandbox{}, &board{}, model.ClassSmall, repo())
 	if a.Role() != workflow.RoleReview {

@@ -173,16 +173,6 @@ func (a *Agent) Class() model.Class { return a.class }
 // case worth refusing.
 func (a *Agent) Wants(t ticket.Ticket) bool { return record.HasBranch(t) }
 
-// Reviewed reports whether a branch has already been judged.
-func Reviewed(t ticket.Ticket) bool {
-	for _, c := range t.Comments {
-		if strings.Contains(c.Body, Marker) {
-			return true
-		}
-	}
-	return false
-}
-
 // ReturnsSoFar counts how many times this ticket has been handed back.
 func ReturnsSoFar(t ticket.Ticket) int {
 	var n int

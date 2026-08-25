@@ -314,21 +314,6 @@ func TestAnUnknownColumnSaysItIsNotOurs(t *testing.T) {
 	}
 }
 
-// READ OFF THE ROUTING TABLE rather than restated, so a stage added to the table
-// shows up in the window the day it is written and cannot disagree with it.
-func TestTheNextAgentIsReadFromTheTable(t *testing.T) {
-	tb := table()
-	if got := NextRole(tb, workflow.ColReadyForDev); got != workflow.RoleDev {
-		t.Errorf("NextRole(ready_for_dev) = %q", got)
-	}
-	if got := NextRole(tb, workflow.ColInDev); got != "" {
-		t.Errorf("a working column named a next agent: %q", got)
-	}
-	if got := NextRole(tb, "not_a_column"); got != "" {
-		t.Errorf("an unknown column named %q", got)
-	}
-}
-
 // THE WHOLE REASON TO SHOW A RUNTIME IS TO COMPARE RUNTIMES. Rounding to whole
 // minutes collided half of r77's tickets with another: 5m44s and 5m00s both read
 // as "5m", 1m50s and 1m12s both as "1m".

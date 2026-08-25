@@ -60,7 +60,6 @@ One `package main` at the root. The clusters, by prefix:
 |---|---|
 | `agent_*.go` | one file per stage; `agent_dev.go` is the developer loop and by far the largest |
 | `agent_dev_prompt.go` | the developer's prompt, tool schema and reply parsing |
-| `agent_delegate.go` | runs an EXTERNAL coding agent as the developer instead of the native loop |
 | `dispatch.go`, `workflow.go`, `projdispatch.go` | claiming, columns, per-project scheduling |
 | `codearmory.go`, `forge.go`, `sandbox.go` | platform, forge and lease clients |
 | `inference.go`, `classes.go`, `queue.go` | the model gateway, serving classes, admission |
@@ -97,7 +96,6 @@ them, so `FOO=2 # note` sets `2 # note` and blacksmith crash-loops silently.
 
 | variable | effect |
 |---|---|
-| `AGENTS_DEV_ENGINE` | empty = native loop; `qwen-code` = delegate the developer to an external agent in the sandbox |
 | `AGENTS_REPO_IMAGE` | runner image; must also be in forge's `ALLOWED_IMAGES` |
 | `AGENTS_LARGE_ENDPOINT` | model endpoint — must be reachable **from the cluster** if delegating |
 | `AGENTS_LARGE_SLOTS` | must match llama-server's `--parallel` |

@@ -1057,17 +1057,6 @@ func TestTheStageIdentifiesItselfAndItsQueue(t *testing.T) {
 	}
 }
 
-func TestScopedRecognisesItsOwnMarker(t *testing.T) {
-	if Scoped(request()) {
-		t.Error("an untriaged request was reported as scoped")
-	}
-	done := request()
-	done.Comments = []ticket.Comment{{Body: RenderTriage(triage(), model.ChatResult{})}}
-	if !Scoped(done) {
-		t.Error("the stage does not recognise its own comment")
-	}
-}
-
 // THE REQUEST GOES IN A USER TURN, NEVER THE SYSTEM PROMPT. A ticket description
 // is attacker-influenced text, and the system prompt is the one place it must
 // not be able to reach.

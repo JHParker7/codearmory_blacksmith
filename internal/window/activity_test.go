@@ -41,7 +41,7 @@ func TestReadActivityNewestRecordWins(t *testing.T) {
 		transcript.Record{Kind: transcript.KindAction, TaskID: "t1", Role: "dev-agent", Tool: "run", Detail: "git push origin x", At: now.Add(-time.Minute)},
 	)
 
-	got := ReadActivity(dir, now)
+	got := readActs(dir, now)
 	a := got["t1"]
 	if a.What != "pushing a branch" {
 		t.Fatalf("the newest record must decide the verb, got %q", a.What)
@@ -63,7 +63,7 @@ func TestReadActivityTurnNamesTheModel(t *testing.T) {
 	writeTranscript(t, dir, "2026-08-25",
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "t1", Model: "qwen3-coder", At: now})
 
-	if got := ReadActivity(dir, now)["t1"].What; got != "thinking · qwen3-coder" {
+	if got := readActs(dir, now)["t1"].What; got != "thinking · qwen3-coder" {
 		t.Fatalf("What = %q, want the model named — on a multi-model host the row "+
 			"must say WHICH model is being waited on", got)
 	}
@@ -75,7 +75,7 @@ func TestReadActivityTurnWithoutModelStillReads(t *testing.T) {
 	writeTranscript(t, dir, "2026-08-25",
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "t1", At: now})
 
-	if got := ReadActivity(dir, now)["t1"].What; got != "thinking" {
+	if got := readActs(dir, now)["t1"].What; got != "thinking" {
 		t.Fatalf("What = %q, want %q — a missing model must not leave a dangling separator", got, "thinking")
 	}
 }
@@ -87,7 +87,7 @@ func TestReadActivityOutcomeFinishes(t *testing.T) {
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "t1", At: now.Add(-time.Minute)},
 		transcript.Record{Kind: transcript.KindOutcome, TaskID: "t1", Status: "merged", At: now})
 
-	a := ReadActivity(dir, now)["t1"]
+	a := readActs(dir, now)["t1"]
 	if !a.Finished {
 		t.Fatal("an outcome record marks the task finished")
 	}
@@ -112,7 +112,7 @@ func TestReadActivityRestartClearsTheOutcome(t *testing.T) {
 		transcript.Record{Kind: transcript.KindOutcome, TaskID: "t1", Status: "returned", At: now.Add(-3 * time.Minute)},
 		transcript.Record{Kind: transcript.KindStart, TaskID: "t1", Role: "dev-agent", At: now.Add(-time.Minute)})
 
-	a := ReadActivity(dir, now)["t1"]
+	a := readActs(dir, now)["t1"]
 	if a.Finished {
 		t.Fatal("a start after an outcome is a new attempt — it must clear Finished")
 	}
@@ -136,7 +136,7 @@ func TestReadActivityShowsRefusals(t *testing.T) {
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "t1", At: now.Add(-time.Minute)},
 		transcript.Record{Kind: transcript.KindRefusal, TaskID: "t1", Tool: "test_file", Detail: "store_test.go", At: now})
 
-	if got := ReadActivity(dir, now)["t1"].What; !strings.Contains(got, "test_file") {
+	if got := readActs(dir, now)["t1"].What; !strings.Contains(got, "test_file") {
 		t.Fatalf("What = %q, want the refusal code — an agent looping on a refused "+
 			"edit renders as thinking otherwise", got)
 	}
@@ -149,7 +149,7 @@ func TestReadActivityReadsOnlyTheNewestTwoFiles(t *testing.T) {
 	writeTranscript(t, dir, "2026-08-24", transcript.Record{Kind: transcript.KindTurn, TaskID: "yesterday", At: now})
 	writeTranscript(t, dir, "2026-08-25", transcript.Record{Kind: transcript.KindTurn, TaskID: "today", At: now})
 
-	got := ReadActivity(dir, now)
+	got := readActs(dir, now)
 	if _, ok := got["old"]; ok {
 		t.Fatal("anything older than yesterday is not happening now and must not be read")
 	}
@@ -171,7 +171,7 @@ func TestReadActivityReadsRecordsPastTheDefaultScannerLimit(t *testing.T) {
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "big", Completion: huge, At: now},
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "after", At: now})
 
-	got := ReadActivity(dir, now)
+	got := readActs(dir, now)
 	if _, ok := got["after"]; !ok {
 		t.Fatal("a record after a 200KB one must still be read")
 	}
@@ -189,7 +189,7 @@ func TestReadActivitySkipsAMalformedLine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := ReadActivity(dir, now); got["t1"].Turns != 2 {
+	if got := readActs(dir, now); got["t1"].Turns != 2 {
 		t.Fatalf("Turns = %d, want 2 — a torn line must be skipped, not stop the read", got["t1"].Turns)
 	}
 }
@@ -197,7 +197,7 @@ func TestReadActivitySkipsAMalformedLine(t *testing.T) {
 func TestReadActivityWithoutACorpus(t *testing.T) {
 	now := time.Now()
 	for _, dir := range []string{"", config.TranscriptOff, filepath.Join(t.TempDir(), "absent")} {
-		if got := ReadActivity(dir, now); len(got) != 0 {
+		if got := readActs(dir, now); len(got) != 0 {
 			t.Fatalf("dir %q: want an empty map, got %d — a missing corpus is not an "+
 				"error and the board is still worth drawing", dir, len(got))
 		}
@@ -210,7 +210,7 @@ func TestReadActivityIgnoresRecordsWithNoTask(t *testing.T) {
 	writeTranscript(t, dir, "2026-08-25",
 		transcript.Record{Kind: transcript.KindTurn, At: now})
 
-	if got := ReadActivity(dir, now); len(got) != 0 {
+	if got := readActs(dir, now); len(got) != 0 {
 		t.Fatalf("a record with no task id joins to no row, got %d entries", len(got))
 	}
 }

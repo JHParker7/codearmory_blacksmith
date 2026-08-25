@@ -67,21 +67,6 @@ func (a Activity) Live(now time.Time) bool {
 	return !a.Finished && now.Sub(a.At) < StaleAfter
 }
 
-// ReadActivity reads the newest state of every task the transcripts mention.
-//
-// A MISSING OR UNREADABLE CORPUS IS NOT AN ERROR. This is a window, and the
-// board is still worth drawing without it, so every failure here degrades to an
-// empty map rather than refusing to render.
-func ReadActivity(dir string, now time.Time) map[string]Activity {
-	out := map[string]Activity{}
-	scanRecords(dir, func(r transcript.Record) {
-		if r.TaskID != "" {
-			applyActivity(out, r)
-		}
-	})
-	return out
-}
-
 // applyActivity folds one record into the activity map.
 func applyActivity(out map[string]Activity, r transcript.Record) {
 	{

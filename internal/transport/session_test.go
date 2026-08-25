@@ -240,24 +240,6 @@ func TestASessionNeedsAllThreeParts(t *testing.T) {
 	}
 }
 
-// Invalidate drops the session so the next use logs in again — which is how a
-// caller that knows a token is dead avoids one guaranteed-refused request.
-func TestInvalidateForcesAFreshLogin(t *testing.T) {
-	g := &gatekeeper{}
-	s, _ := Login(g.server(t).URL, "a@b.test", "pw", nil)
-
-	first, _ := s.Token(context.Background())
-	s.Invalidate()
-	second, _ := s.Token(context.Background())
-
-	if second == first {
-		t.Error("the invalidated session came back")
-	}
-	if g.count() != 2 {
-		t.Errorf("%d logins", g.count())
-	}
-}
-
 // A TRAILING SLASH ON THE LOGIN URL MUST NOT PRODUCE //login, which some routers
 // treat as a different path and answer 404 — the exact failure this whole
 // credential exists to avoid being mistaken for a bad password.

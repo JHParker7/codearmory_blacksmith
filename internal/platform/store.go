@@ -246,31 +246,6 @@ func (s *Store) MoveTo(ctx context.Context, id, column string) error {
 	return nil
 }
 
-// CreateBoard makes a board and returns its id.
-//
-// Here so the window can add a project without sending someone to another tool
-// for a board id first. That round trip is what makes adding a project feel like
-// configuration rather than use, and pasting an id between two places is a step
-// with nothing to check it.
-func (s *Store) CreateBoard(ctx context.Context, name string) (string, error) {
-	var out struct {
-		BoardID string `json:"board_id"`
-	}
-	if err := s.http.Do(ctx, transport.Request{
-		Method: http.MethodPost, Path: s.path("/boards"),
-		Body: map[string]string{"name": name}, Out: &out,
-	}); err != nil {
-		return "", fmt.Errorf("create board %q: %w", name, err)
-	}
-	if out.BoardID == "" {
-		// A 200 WITH NO ID IS NOT A SUCCESS. Returning "" here would give the
-		// caller a project pointing at no board, which fails later and somewhere
-		// else.
-		return "", fmt.Errorf("create board %q: the store returned no id", name)
-	}
-	return out.BoardID, nil
-}
-
 // fieldDef is a board column as the store models it.
 type fieldDef struct {
 	FieldDefID string `json:"field_def_id,omitempty"`

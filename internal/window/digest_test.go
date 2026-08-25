@@ -23,7 +23,7 @@ func TestASmallFileIsReadFromTheStart(t *testing.T) {
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "first", At: now},
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "last", At: now})
 
-	got := ReadActivity(dir, now)
+	got := readActs(dir, now)
 	if _, ok := got["first"]; !ok {
 		t.Fatal("the first record of a small file was skipped")
 	}
@@ -59,7 +59,7 @@ func TestOnlyTheTailOfALargeFileIsRead(t *testing.T) {
 	fmt.Fprintf(fh, "%s\n", recent)
 	fh.Close()
 
-	got := ReadActivity(dir, now)
+	got := readActs(dir, now)
 	if _, ok := got["recent"]; !ok {
 		t.Fatal("the newest record was not read — the tail is what the window is for")
 	}
@@ -93,7 +93,7 @@ func TestThePartialLineAtTheSeekIsDiscarded(t *testing.T) {
 	fmt.Fprintf(fh, "%s\n", good)
 	fh.Close()
 
-	got := ReadActivity(dir, now)
+	got := readActs(dir, now)
 	// The point is that the scan produced coherent records rather than garbage:
 	// the final one is intact and nothing was invented.
 	if got["good"].What == "" {
@@ -195,7 +195,7 @@ func TestTheDigestAgreesWithTheDirectRead(t *testing.T) {
 		transcript.Record{Kind: transcript.KindRefusal, TaskID: "t1", Role: "dev-agent",
 			Tool: "test_file", Detail: "store_test.go is the author's", At: now})
 
-	direct := ReadThoughts(dir, "t1")
+	direct := readThoughts(dir, "t1")
 	viaDigest := ReadDigest(dir, []string{"t1"}, now).Thoughts["t1"]
 
 	if len(direct) != len(viaDigest) {
@@ -239,7 +239,7 @@ func TestTheScannerCanHoldAnythingTheTailCanProduce(t *testing.T) {
 	fmt.Fprintf(fh, "%s\n", good)
 	fh.Close()
 
-	got := ReadActivity(dir, now)
+	got := readActs(dir, now)
 	if _, ok := got["after"]; !ok {
 		t.Fatal("the record after an oversized one was lost — the scanner gave up " +
 			"on the whole file rather than skipping the fragment")
