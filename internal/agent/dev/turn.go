@@ -190,6 +190,10 @@ func (s *State) Advance(act Action, mode Mode) (verify bool, err error) {
 		}
 
 		s.NoopEdits = 0
+		// COUNTED HERE, where an edit is known to have changed the tree. The
+		// spec-broken streak advances only when the developer has really tried
+		// something since the last verification.
+		s.Writes++
 		s.Progress()
 		// THE CHECKS FOLLOW A REAL EDIT BY THEMSELVES. The model cannot ask for
 		// them, so an edit that changed the tree is the whole trigger.
@@ -204,16 +208,27 @@ func (s *State) Advance(act Action, mode Mode) (verify bool, err error) {
 
 // RecordVerification files what the checks decided, and resets what that
 // decision has made stale.
-func (s *State) RecordVerification(output string, pass bool) {
+func (s *State) RecordVerification(output string, pass bool, mode Mode) {
 	s.LastTest = output
 	s.TestsPass = pass
 	// THE FINGERPRINT, NOT A COUNTER. See TreeHash.
 	s.VerifiedTree = TreeHash(s.Staged)
-	if !pass {
-		s.FailedVerifications++
+
+	// WHOSE FAULT IS THIS RED? Judged HERE because the verification is the only
+	// evidence there is, and this is the one place every verification passes
+	// through — a judgement made at the call site is one a second call site can
+	// forget.
+	//
+	// A PASS SETTLES IT. Whatever earlier reds suggested, tests that now go green
+	// were plainly satisfiable, and a verdict left standing would hand the ticket
+	// back after it had actually succeeded.
+	if pass {
+		s.FailedVerifications = 0
+		s.clearSpecVerdict()
 		return
 	}
-	s.FailedVerifications = 0
+	s.FailedVerifications++
+	s.JudgeSpec(output, mode)
 }
 
 // Finished reports whether the stage's own success condition is met, so the loop

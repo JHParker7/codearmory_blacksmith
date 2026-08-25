@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/code-armory-app/blacksmith/internal/config"
+	"github.com/code-armory-app/blacksmith/internal/edit"
 	"github.com/code-armory-app/blacksmith/internal/forge"
 	"github.com/code-armory-app/blacksmith/internal/gate"
 	"github.com/code-armory-app/blacksmith/internal/model"
@@ -162,6 +164,13 @@ func (a *Agent) loop(
 		// THE BUDGET INCLUDES THE REFUNDS, and the prompt has to show the same
 		// number the loop enforces.
 		s.Budget = Budget(a.maxTurns, s.Refunded)
+		// BEFORE THE CEILINGS. An unsatisfiable specification is not an attempt
+		// that ran out — it is one that could never have succeeded, and saying so
+		// sends the ticket to the agent that can fix it rather than to a person
+		// with "ran to 200 turns".
+		if outcome, detail, done := a.endOnBrokenSpec(ctx, t, s); done {
+			return outcome, detail, nil
+		}
 		if why, done := s.Exhausted(a.deadCeiling()); done {
 			return a.giveUp(ctx, t, s, why)
 		}
@@ -192,6 +201,11 @@ func (a *Agent) loop(
 		s.ParseFails = 0
 
 		verify, applyErr := s.Advance(act, a.mode)
+		// A REFUSAL IS EVIDENCE TOO. An agent being told it may not edit a test is
+		// not working, so it may never reach another verification to be judged at.
+		if applyErr != nil && edit.IsTestFile(firstEditPath(act)) {
+			s.NoteTestEditRefusal(a.mode)
+		}
 		s.Remember(TurnRecord(act, res.Content), a.outcomeOf(ctx, sb, s, act, applyErr))
 
 		if !verify {
@@ -288,7 +302,7 @@ func (a *Agent) verify(ctx context.Context, sb Box, t ticket.Ticket, s *State, b
 		// A PUSH THAT FAILED IS THE AGENT'S PROBLEM TO SEE, not the stage's to
 		// die on: a rejected commit hook is something it can act on.
 		s.RecordVerification("the branch could not be pushed:\n"+
-			clip(gate.StripToolChatter(res.Stdout+res.Stderr), MaxTestOutput), false)
+			clip(gate.StripToolChatter(res.Stdout+res.Stderr), MaxTestOutput), false, a.mode)
 		return nil
 	}
 
@@ -296,7 +310,8 @@ func (a *Agent) verify(ctx context.Context, sb Box, t ticket.Ticket, s *State, b
 	if err != nil {
 		return err
 	}
-	s.RecordVerification(clip(gate.StripToolChatter(res.Stdout+res.Stderr), MaxTestOutput), res.OK())
+	s.RecordVerification(clip(gate.StripToolChatter(res.Stdout+res.Stderr), MaxTestOutput),
+		res.OK(), a.mode)
 	return nil
 }
 
@@ -331,6 +346,67 @@ func (a *Agent) finish(ctx context.Context, t ticket.Ticket, s *State, branch st
 		fmt.Sprintf("%d file(s) in %d turns", len(s.Staged), s.Iteration), nil
 }
 
+// SpecRepairsSoFar counts how many times this ticket has already been handed
+// back to its author.
+func SpecRepairsSoFar(t ticket.Ticket) int {
+	var n int
+	for _, c := range t.Comments {
+		if strings.Contains(c.Body, record.SpecRepairMarker) {
+			n++
+		}
+	}
+	return n
+}
+
+// endOnBrokenSpec ends the attempt when the specification has been judged
+// unsatisfiable: back to its author while there is budget for that, and stopping
+// for a person once there is not.
+//
+// BACK TO THE AUTHOR FIRST. Stopping dead treats an unsatisfiable specification
+// as a decision to make, and that holds for a contradiction. It does not hold
+// for what actually arrives, which is a mechanical defect — a helper missing its
+// *testing.T, an import left out, a symbol declared twice — and the one agent
+// allowed to fix it is never asked.
+//
+// Bounded, because an author that cannot fix its own tests twice will not manage
+// it on a third pass, and then a person really is the right answer.
+//
+// THE NOTE IS THE POINT. It goes back with the fault named and the output
+// quoted, because the author is about to be asked to fix something it cannot
+// reproduce — it does not run the implementation, and without the evidence it
+// is being told only that someone was unhappy.
+func (a *Agent) endOnBrokenSpec(
+	ctx context.Context, t ticket.Ticket, s *State,
+) (workflow.Outcome, string, bool) {
+	if s.SpecBroken == "" {
+		return "", "", false
+	}
+
+	repairs := SpecRepairsSoFar(t)
+	if repairs < MaxSpecRepairs {
+		a.comment(ctx, t, fmt.Sprintf(
+			"%s\n\nThe tests in `%s` cannot be satisfied, and this stage may not edit "+
+				"test files — so no change to the implementation could make them pass. "+
+				"The fault is in the specification, not in the code.\n\nGoing back to the "+
+				"agent that CAN correct it. Repair attempt %d of %d.\n\nWhat it tried: %s"+
+				"\n\nLast verification:\n\n```\n%s\n```",
+			record.SpecRepairMarker, s.SpecBroken, repairs+1, MaxSpecRepairs,
+			TrailSummary(s.Trail), clip(s.LastTest, 2000)))
+		return workflow.OutcomeReturned,
+			"specification is unsatisfiable; returned to its author", true
+	}
+
+	a.comment(ctx, t, fmt.Sprintf(
+		"%s\n\nThe tests in `%s` cannot be satisfied, and this stage may not edit test "+
+			"files — so no change to the implementation can make them pass.\n\nIt has been "+
+			"sent back to its author %d times and still cannot be, so a person needs to "+
+			"correct the tests or the ticket needs re-scoping.\n\nWhat it tried: %s"+
+			"\n\nLast verification:\n\n```\n%s\n```",
+		record.BrokenSpecMarker, s.SpecBroken, MaxSpecRepairs,
+		TrailSummary(s.Trail), clip(s.LastTest, 2000)))
+	return workflow.OutcomeBlocked, "specification is unsatisfiable", true
+}
+
 // giveUp reports an attempt that ran out.
 //
 // IT SAYS WHAT THE ATTEMPT ACTUALLY DID. An exhausted attempt otherwise reports
@@ -363,4 +439,13 @@ func (a *Agent) comment(ctx context.Context, t ticket.Ticket, body string) {
 // a third of the board could never say what it was doing.
 func recorderFrom(ctx context.Context) *transcript.Recorder {
 	return transcript.RecorderFrom(ctx)
+}
+
+// firstEditPath names the file an action tried to write, or "" when it wrote
+// nothing. Used to tell a refused test-file edit from any other refusal.
+func firstEditPath(act Action) string {
+	if len(act.Edits) == 0 {
+		return ""
+	}
+	return act.Edits[0].Path
 }

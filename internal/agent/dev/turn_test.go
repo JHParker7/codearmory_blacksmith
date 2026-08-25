@@ -238,7 +238,7 @@ func TestTheStageFinishesOnItsOwnSuccessCondition(t *testing.T) {
 	}
 
 	s.Staged["store.go"] = storeGo + "\nfunc List2() {}\n"
-	s.RecordVerification("ok  store 0.1s", true)
+	s.RecordVerification("ok  store 0.1s", true, ModeDevelop)
 	if !s.Finished() {
 		t.Error("a verified, passing, non-empty tree did not finish")
 	}
@@ -251,7 +251,7 @@ func TestTheStageFinishesOnItsOwnSuccessCondition(t *testing.T) {
 
 	// Nor is a pass with nothing written: there is nothing to hand on.
 	empty := loopState()
-	empty.RecordVerification("ok", true)
+	empty.RecordVerification("ok", true, ModeDevelop)
 	if empty.Finished() {
 		t.Error("an empty tree finished the stage")
 	}
@@ -263,8 +263,8 @@ func TestVerificationsAreCountedAndTheTreeIsFingerprinted(t *testing.T) {
 	s := loopState()
 	s.Staged["store.go"] = "package main\n"
 
-	s.RecordVerification("FAIL", false)
-	s.RecordVerification("FAIL", false)
+	s.RecordVerification("FAIL", false, ModeDevelop)
+	s.RecordVerification("FAIL", false, ModeDevelop)
 	if s.FailedVerifications != 2 {
 		t.Errorf("FailedVerifications = %d", s.FailedVerifications)
 	}
@@ -272,7 +272,7 @@ func TestVerificationsAreCountedAndTheTreeIsFingerprinted(t *testing.T) {
 		t.Error("the tree that was just verified reports as unverified")
 	}
 
-	s.RecordVerification("ok", true)
+	s.RecordVerification("ok", true, ModeDevelop)
 	if s.FailedVerifications != 0 {
 		t.Errorf("a green verification did not clear the run: %d", s.FailedVerifications)
 	}
