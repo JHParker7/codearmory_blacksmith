@@ -284,38 +284,6 @@ func ResolveOrAppend(before, name, replace string) (Span, error) {
 	return Span{}, err
 }
 
-// DeclExists reports whether a file already declares a name, which is what lets
-// a caller tell "replace this" from "add this" before it resolves anything.
-func DeclExists(before, name string) bool {
-	f, err := parser.ParseFile(token.NewFileSet(), "src.go", before, parser.SkipObjectResolution)
-	if err != nil {
-		return false
-	}
-	want := strings.TrimSpace(name)
-	for _, d := range f.Decls {
-		if got := declName(d); got != "" && matchesDecl(got, want) {
-			return true
-		}
-	}
-	return false
-}
-
-// DeclNames lists what a file declares, for the message that says a name is not
-// among them.
-func DeclNames(before string) []string {
-	f, err := parser.ParseFile(token.NewFileSet(), "src.go", before, parser.SkipObjectResolution)
-	if err != nil {
-		return nil
-	}
-	var have []string
-	for _, d := range f.Decls {
-		if got := declName(d); got != "" {
-			have = append(have, got)
-		}
-	}
-	return have
-}
-
 func declName(d ast.Decl) string {
 	switch t := d.(type) {
 	case *ast.FuncDecl:
