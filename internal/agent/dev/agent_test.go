@@ -219,9 +219,15 @@ func TestAnAttemptThatWorksReadsWritesVerifiesAndStops(t *testing.T) {
 	if len(g.reqs) != 2 {
 		t.Errorf("%d turns for a two-action job; the stage did not end itself", len(g.reqs))
 	}
-	// THE BRANCH IS PUBLISHED, or nothing downstream can find the work.
-	if !brd.saidAny(record.BranchMarker) && !brd.saidAny("agent/t-42") {
-		t.Errorf("the branch was not recorded on the ticket: %v", brd.comments)
+	// THE BRANCH IS PUBLISHED IN A FORM THE NEXT STAGE CAN FIND. Asserting the
+	// branch NAME appears is not enough — it appeared all along while the marker
+	// did not, and the readers key on the marker.
+	published := ticket.Ticket{Comments: commentsOf(brd)}
+	if !record.HasBranch(published) {
+		t.Errorf("nothing downstream can find the branch: %v", brd.comments)
+	}
+	if got := record.BranchOf(published); got != "agent/t-42" {
+		t.Errorf("BranchOf = %q, want agent/t-42", got)
 	}
 	// AND THE SANDBOX WAS GIVEN BACK.
 	if b.released != 1 {
@@ -765,5 +771,63 @@ func TestTheDevLoopSurvivesNoTranscript(t *testing.T) {
 	}}
 	if _, _, err := devAgent(g, b, &board{}, Options{}).Handle(context.Background(), devTicket()); err != nil {
 		t.Fatalf("Handle without a transcript: %v", err)
+	}
+}
+
+// commentsOf turns what a stage said into a ticket the readers can be asked
+// about, which is the only way to check the two halves agree.
+func commentsOf(b *board) []ticket.Comment {
+	out := make([]ticket.Comment, 0, len(b.comments))
+	for _, body := range b.comments {
+		out = append(out, ticket.Comment{Body: body})
+	}
+	return out
+}
+
+// EVERY MODE PUBLISHES A BRANCH ITS READERS CAN FIND.
+//
+// The developer announced its push headed with the ROLE NAME rather than one of
+// the three markers, so record.HasBranch answered no and the reviewer never
+// wanted the ticket. Measured on a clean run: the developer finished in 23
+// turns, wrote its branch, and the ticket sat in ready_for_review for half an
+// hour. The pipeline dead-ends there — everything before it succeeds and nothing
+// after it ever starts.
+//
+// Checked THROUGH the reader rather than against a string, because the bug was
+// precisely that the writer and the reader disagreed.
+func TestEveryModePublishesABranchTheNextStageCanFind(t *testing.T) {
+	for _, mode := range []Mode{ModeDevelop, ModeTest, ModeCoverage, ModeSpecMerge} {
+		t.Run(fmt.Sprintf("mode%d", mode), func(t *testing.T) {
+			body := record.PublishBranch(mode.BranchMarker(), "agent/t-42")
+			tk := ticket.Ticket{Comments: []ticket.Comment{{Body: body}}}
+
+			if !record.HasBranch(tk) {
+				t.Fatalf("a branch published by this mode is invisible to the "+
+					"reviewer, the integrator and the resolver:\n%s", body)
+			}
+			if got := record.BranchOf(tk); got != "agent/t-42" {
+				t.Fatalf("BranchOf = %q, want agent/t-42", got)
+			}
+		})
+	}
+}
+
+// AND THE MARKER SAYS WHAT WAS PUSHED. A route that skipped the developer still
+// has to be readable by whoever reads it next, so the test author and the
+// coverage stage do not claim to be the developer.
+func TestTheMarkerNamesWhatWasPushed(t *testing.T) {
+	cases := []struct {
+		mode Mode
+		want string
+	}{
+		{ModeDevelop, record.BranchMarker},
+		{ModeTest, record.TestsWrittenMarker},
+		{ModeSpecMerge, record.TestsWrittenMarker},
+		{ModeCoverage, record.CoverageMarker},
+	}
+	for _, c := range cases {
+		if got := c.mode.BranchMarker(); got != c.want {
+			t.Errorf("mode %d published %q, want %q", c.mode, got, c.want)
+		}
 	}
 }
