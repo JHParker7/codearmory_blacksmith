@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +37,10 @@ type board struct {
 	beforeClaim func(id string)
 
 	moves []string
+
+	// closedAtMove records, for each move, whether the ticket already carried a
+	// claim close as it left. The ORDER is the invariant, not just the presence.
+	closedAtMove []bool
 }
 
 func newBoard() *board {
@@ -103,6 +108,15 @@ func (b *board) Get(_ context.Context, id string) (ticket.Ticket, error) {
 	return *t, nil
 }
 
+// clock reads the board's time UNDER THE LOCK. AddComment advances it, and
+// several stages comment concurrently — reading the field directly is a race
+// the detector only reaches once two goroutines really do comment at once.
+func (b *board) clock() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.now
+}
+
 func (b *board) AddComment(_ context.Context, id, body string) (ticket.Comment, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -131,6 +145,19 @@ func (b *board) MoveTo(_ context.Context, id, column string) error {
 	}
 	t.Status = column
 	t.AssigneeID = nil
+
+	// SAMPLED AS THE TICKET LEAVES, because the ORDER is the invariant. A claim
+	// closed after the move would retroactively release a claim another host
+	// wrote in between, letting a third host win over one already working.
+	closed := false
+	for _, cm := range t.Comments {
+		if strings.HasPrefix(cm.Body, record.ClaimClosedMarker) {
+			closed = true
+			break
+		}
+	}
+	b.closedAtMove = append(b.closedAtMove, closed)
+
 	b.moves = append(b.moves, id+"→"+column)
 	return nil
 }
@@ -231,7 +258,7 @@ func newDispatcher(t *testing.T, b *board, h Handler, opts Options) *Dispatcher 
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d.now = func() time.Time { return b.now }
+	d.now = b.clock
 	return d
 }
 

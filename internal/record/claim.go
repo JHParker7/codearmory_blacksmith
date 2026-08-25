@@ -55,6 +55,40 @@ func Parse(body string) (Claim, error) {
 	return c, nil
 }
 
+// CloseClaim is the comment body that ends a role's current claim round. See
+// ClaimClosedMarker for why a round needs an end at all.
+func CloseClaim(role string) (string, error) {
+	payload, err := json.Marshal(Claim{Role: role})
+	if err != nil {
+		return "", fmt.Errorf("encode claim close: %w", err)
+	}
+	return ClaimClosedMarker + string(payload) + " -->", nil
+}
+
+// closesClaim reports whether a comment ends the claim round for a role. An
+// empty role matches any close, because "who holds this ticket" is a question
+// about the ticket rather than about one stage.
+func closesClaim(body, role string) bool {
+	rest, ok := strings.CutPrefix(body, ClaimClosedMarker)
+	if !ok {
+		return false
+	}
+	if role == "" {
+		return true
+	}
+	rest, ok = strings.CutSuffix(strings.TrimSpace(rest), "-->")
+	if !ok {
+		// AN UNREADABLE CLOSE DOES NOT CLOSE. Treating one as a close for every role
+		// would silently discard live claims and hand a ticket to a second host.
+		return false
+	}
+	var c Claim
+	if err := json.Unmarshal([]byte(strings.TrimSpace(rest)), &c); err != nil {
+		return false
+	}
+	return c.Role == role
+}
+
 // Oldest picks the winning claim among a ticket's comments: earliest created_at,
 // breaking ties on comment id.
 //
@@ -86,8 +120,27 @@ func Oldest(comments []ticket.Comment) (ticket.Comment, bool) {
 // rather than a queue — each takes from a different column, so only one role is
 // ever competing for a given ticket.
 func OldestForRole(comments []ticket.Comment, role string) (ticket.Comment, bool) {
+	// SORTED FIRST, because the answer now depends on which side of a close each
+	// claim falls on, and file order is not a documented guarantee. Attempts sorts
+	// for the same reason.
+	ordered := make([]ticket.Comment, len(comments))
+	copy(ordered, comments)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if !ordered[i].CreatedAt.Equal(ordered[j].CreatedAt) {
+			return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
+		}
+		return ordered[i].ID < ordered[j].ID
+	})
+
 	var claims []ticket.Comment
-	for _, cm := range comments {
+	for _, cm := range ordered {
+		// A CLOSED ROUND IS NOT ARBITRATED. Claims before this point belong to
+		// attempts that have already ended; leaving them in means every retry loses
+		// to a claim its own previous attempt wrote. See ClaimClosedMarker.
+		if closesClaim(cm.Body, role) {
+			claims = nil
+			continue
+		}
 		if !IsClaim(cm.Body) {
 			continue
 		}
