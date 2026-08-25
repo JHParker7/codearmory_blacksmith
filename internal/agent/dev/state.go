@@ -114,6 +114,30 @@ type State struct {
 	// last actually ran. See TreeHash for why this is not a counter.
 	VerifiedTree string
 
+	// Summary and CommitType are carried forward from whichever action supplied
+	// them. The commit is written during verification, which is BEFORE any
+	// finish, so waiting for one would commit an empty description — and amending
+	// afterwards would mean the commit the pipeline verified is not the commit
+	// that was pushed.
+	Summary    string
+	CommitType string
+
+	// FailedVerifications counts verifications that came back red this attempt,
+	// whatever the reason.
+	//
+	// SEPARATE FROM THE BROKEN-SPEC COUNTER ON PURPOSE. That one advances only
+	// inside the compile-error branch, which is the very case the referee exists
+	// to complement — gating the referee on it meant a semantic failure, where
+	// the tests compile and merely assert against unreachable state, could never
+	// reach it. Shipped that way and measured: zero verdicts on the ticket it was
+	// built for.
+	FailedVerifications int
+
+	// ParseFails counts consecutive replies that were not valid actions, and
+	// Refunded counts turns given back for reads.
+	ParseFails int
+	Refunded   int
+
 	Refusals         int
 	StaleReads       int
 	NoopEdits        int
