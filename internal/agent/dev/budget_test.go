@@ -13,8 +13,8 @@ func TestEveryWayAnAttemptEndsNamesTheBoundItHit(t *testing.T) {
 		state State
 		want  string
 	}{
-		{"the turn budget", State{Iteration: 50, Budget: 50}, "budget of 50"},
-		{"the diagnostic ceiling", State{Iteration: MaxTotalIterations, Budget: 0},
+		{"the turn budget", State{Iteration: 51, Budget: 50}, "budget of 50"},
+		{"the diagnostic ceiling", State{Iteration: MaxTotalIterations + 1, Budget: 0},
 			"diagnostic ceiling"},
 		{"reading and never writing", State{ConsecutiveReads: MaxConsecutiveReads},
 			"read 100 times in a row"},
@@ -52,8 +52,26 @@ func TestAnUnsetBudgetDoesNotEndTheAttempt(t *testing.T) {
 		t.Errorf("an unset budget ended the attempt: %s", why)
 	}
 	// The diagnostic ceiling still applies, which is what makes it safe.
-	if _, done := (&State{Iteration: MaxTotalIterations, Budget: 0}).Exhausted(MaxDeadRefusals); !done {
+	if _, done := (&State{Iteration: MaxTotalIterations + 1, Budget: 0}).Exhausted(MaxDeadRefusals); !done {
 		t.Error("an unset budget let a runaway run forever")
+	}
+}
+
+// A BUDGET OF N GIVES N TURNS, NOT N-1. The check runs at the TOP of a turn, so
+// at the start of turn N the agent has taken N-1 actions — and a budget of one
+// with a ">=" test gives the agent no turn at all.
+func TestABudgetOfNGivesExactlyNTurns(t *testing.T) {
+	for _, budget := range []int{1, 2, 8, 50} {
+		// The last turn it is entitled to.
+		last := State{Iteration: budget, Budget: budget}
+		if why, done := last.Exhausted(MaxDeadRefusals); done {
+			t.Errorf("budget %d: turn %d was refused (%s)", budget, budget, why)
+		}
+		// And the one after it is not.
+		past := State{Iteration: budget + 1, Budget: budget}
+		if _, done := past.Exhausted(MaxDeadRefusals); !done {
+			t.Errorf("budget %d: turn %d was allowed", budget, budget+1)
+		}
 	}
 }
 
@@ -69,7 +87,7 @@ func TestTheRefusalCeilingCanBeTurnedOff(t *testing.T) {
 		t.Errorf("a disabled ceiling still fired: %s", why)
 	}
 	// And the budget is then the only bound, which is what it was before.
-	s.Iteration = 50
+	s.Iteration = 51
 	if _, done := s.Exhausted(0); !done {
 		t.Error("with the ceiling off, the budget did not end the attempt")
 	}
@@ -167,8 +185,16 @@ func TestAResetKeepsTheWorkAndDiscardsTheConfusion(t *testing.T) {
 	if s.Trail != nil || s.History != nil {
 		t.Error("the reset kept the trail the agent was imitating")
 	}
-	if s.Refusals != 0 || s.NoopEdits != 0 || s.ConsecutiveReads != 0 || s.Notice != "" {
+	if s.Refusals != 0 || s.NoopEdits != 0 || s.Notice != "" {
 		t.Errorf("the reset kept a counter: %+v", s)
+	}
+	// THE READ RUN DELIBERATELY SURVIVES. It is not memory of how the agent got
+	// here, it is evidence about the agent itself — and clearing it every forty
+	// turns means an agent that only ever reads can never reach the hundred-read
+	// ceiling, so the ticket reports "ran to 200 turns" instead of naming the
+	// actual failure.
+	if s.ConsecutiveReads != 30 {
+		t.Errorf("ConsecutiveReads = %d; the read ceiling can now never fire", s.ConsecutiveReads)
 	}
 	if s.UndoStack != nil {
 		t.Error("the reset kept an undo stack pointing at a tree the agent no longer knows")
@@ -233,7 +259,7 @@ func TestAResetIsNotDueImmediatelyAfterOne(t *testing.T) {
 // AN AGENT TOLD ONLY THAT ITS MEMORY WAS CLEARED has every reason to start over,
 // which is the one outcome the reset exists to prevent.
 func TestTheRestartBriefSaysTheWorkIsKept(t *testing.T) {
-	got := RestartBrief([]string{"store.go", "filter.go"}, 2)
+	got := RestartBrief(ModeDevelop, []string{"store.go", "filter.go"}, 2)
 	for _, want := range []string{
 		"ALREADY WRITTEN", "store.go", "filter.go",
 		"rather than starting over", "restart 2",
@@ -248,7 +274,7 @@ func TestTheRestartBriefSaysTheWorkIsKept(t *testing.T) {
 
 	// AN AGENT WITH NOTHING WRITTEN MUST NOT BE TOLD ITS WORK IS ON THE BRANCH.
 	// It would then look for files that are not there.
-	fresh := RestartBrief(nil, 1)
+	fresh := RestartBrief(ModeDevelop, nil, 1)
 	if strings.Contains(fresh, "ALREADY WRITTEN") {
 		t.Errorf("an agent with no work was told it had some:\n%s", fresh)
 	}
@@ -296,5 +322,37 @@ func TestTheBoundsDoNotMakeEachOtherUnreachable(t *testing.T) {
 	// MaxAgentResets is decoration.
 	if AgentResetTurns*2 > MaxTotalIterations {
 		t.Error("only one reset fits inside the diagnostic ceiling")
+	}
+}
+
+// THE BRIEF MUST MATCH THE JOB. One loop serves three stages, and the first
+// version told all of them to "make the remaining test failures pass" — which is
+// the developer's job and the EXACT INVERSE of the specification author's, whose
+// tests are supposed to fail. Observed on a live ticket: an author was restarted
+// twice and instructed, in its own prompt, to do the one thing its gate refuses.
+func TestARestartedStageIsToldItsOwnJob(t *testing.T) {
+	author := RestartBrief(ModeTest, []string{"store_test.go"}, 1)
+	if strings.Contains(author, "make the remaining test failures pass") {
+		t.Errorf("the author was told to do the inverse of its job:\n%s", author)
+	}
+	if !strings.Contains(author, "must FAIL against the current code") {
+		t.Errorf("the author was not told what makes its tests a specification:\n%s", author)
+	}
+
+	dev := RestartBrief(ModeDevelop, []string{"store.go"}, 1)
+	if !strings.Contains(dev, "make the remaining test failures pass") {
+		t.Errorf("the developer was not told its job:\n%s", dev)
+	}
+
+	cover := RestartBrief(ModeCoverage, []string{"coverage_test.go"}, 1)
+	if !strings.Contains(cover, "must not be edited") {
+		t.Errorf("the coverage stage was not told the specification is not its to change:\n%s", cover)
+	}
+
+	// EVERY MODE SAYS SOMETHING, or a restarted agent is briefed on nothing.
+	for _, mode := range []Mode{ModeDevelop, ModeTest, ModeCoverage} {
+		if strings.TrimSpace(mode.RestartJob()) == "" {
+			t.Errorf("mode %d has no restart brief", mode)
+		}
 	}
 }
