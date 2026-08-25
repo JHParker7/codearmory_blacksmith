@@ -33,8 +33,8 @@ import (
 
 // Action is the one thing a model turn may request.
 type Action struct {
-	Action string   `json:"action"`
-	Paths  []string `json:"paths,omitempty"`
+	Action string     `json:"action"`
+	Paths  StringList `json:"paths,omitempty"`
 
 	// Edits are addressed changes.
 	//
@@ -44,7 +44,7 @@ type Action struct {
 	// struct deleted an entire HTTP server, and only the reviewer noticed. An
 	// edit that names what it is replacing cannot do that, and says loudly when
 	// the file is not what the model thought.
-	Edits []edit.Edit `json:"edits,omitempty"`
+	Edits EditList `json:"edits,omitempty"`
 
 	Summary string `json:"summary,omitempty"`
 
@@ -55,6 +55,78 @@ type Action struct {
 	Type string `json:"type,omitempty"`
 
 	Reason string `json:"reason,omitempty"`
+}
+
+// EditList is the edits, and it accepts the array EITHER AS AN ARRAY OR AS A
+// JSON STRING CONTAINING ONE.
+//
+// THE MODEL DOUBLE-ENCODES ITS OWN ARGUMENTS, and it is not a rare slip. Every
+// hosted tool-calling API takes the arguments object as a string, so a model
+// that has learned to stringify its arguments stringifies the values inside them
+// too, and emits:
+//
+//	{"tool":"write_files","arguments":{"edits":"[{\"path\": \"store_test.go\", ...}]"}}
+//
+// Refusing that is refusing a reply that DID WHAT WAS ASKED for a reason the
+// model cannot see: the content is right, the assertions are right, only the
+// quoting is one layer deep. Measured on a live run — a spec-agent emitted this
+// exact shape on three consecutive attempts, ~3,500 completion tokens each, was
+// told only "unparseable model output", and the stage died having thrown away
+// work that was correct.
+//
+// Accepting it here is the file's own principle: make the mistake
+// unrepresentable, and where it cannot be, accept what the model actually emits.
+type EditList []edit.Edit
+
+func (l *EditList) UnmarshalJSON(b []byte) error {
+	var direct []edit.Edit
+	if err := json.Unmarshal(b, &direct); err == nil {
+		*l = direct
+		return nil
+	}
+
+	var wrapped string
+	if err := json.Unmarshal(b, &wrapped); err != nil {
+		// Neither an array nor a string. Report the ARRAY's error, because that is
+		// the shape that was asked for and the one worth correcting.
+		return json.Unmarshal(b, &direct)
+	}
+	if err := json.Unmarshal([]byte(wrapped), &direct); err != nil {
+		return fmt.Errorf("edits arrived as a string, and its contents are not a "+
+			"JSON array of edits: %w", err)
+	}
+	*l = direct
+	return nil
+}
+
+// StringList is the same tolerance for a list of paths, which arrives
+// double-encoded from the same models for the same reason.
+type StringList []string
+
+func (l *StringList) UnmarshalJSON(b []byte) error {
+	var direct []string
+	if err := json.Unmarshal(b, &direct); err == nil {
+		*l = direct
+		return nil
+	}
+
+	var wrapped string
+	if err := json.Unmarshal(b, &wrapped); err != nil {
+		return json.Unmarshal(b, &direct)
+	}
+	// A BARE PATH IS NOT AN ERROR EITHER. "main.go" is a string that is not a
+	// JSON array, and it plainly means one file.
+	if err := json.Unmarshal([]byte(wrapped), &direct); err != nil {
+		trimmed := strings.TrimSpace(wrapped)
+		if trimmed == "" || strings.HasPrefix(trimmed, "[") {
+			return fmt.Errorf("paths arrived as a string, and its contents are not "+
+				"a JSON array of paths: %w", err)
+		}
+		*l = StringList{trimmed}
+		return nil
+	}
+	*l = direct
+	return nil
 }
 
 // ConventionalTypes is the Conventional Commits allowlist, as commitlint
