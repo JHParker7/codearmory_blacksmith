@@ -294,6 +294,11 @@ func (a *Agent) comment(ctx context.Context, t ticket.Ticket, body string) {
 // recorderFrom is the transcript on this context, or nil — which every recorder
 // method tolerates.
 func recorderFrom(ctx context.Context) *transcript.Recorder {
+	// Prefer the one Start attached; fall back to a locally attached recorder so
+	// a test that wires its own still works.
+	if r := transcript.RecorderFrom(ctx); r != nil {
+		return r
+	}
 	r, _ := ctx.Value(recorderKey{}).(*transcript.Recorder)
 	return r
 }

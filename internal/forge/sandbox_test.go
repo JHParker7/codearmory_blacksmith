@@ -110,6 +110,13 @@ func TestAPublicRepositoryIsClonedWithoutASecretReference(t *testing.T) {
 	if lease.Env["GIT_CLONE_URL"] != "git://git-local:9418/demo.git" {
 		t.Errorf("the clone URL did not reach the sandbox: %v", lease.Env)
 	}
+	// AND IT JOINS THE ENVIRONMENT RATHER THAN REPLACING IT. Assigning a fresh
+	// map here drops everything the toolchain needs, and only on the path with no
+	// credential — which is the local plane, where it would never be noticed by a
+	// test that always supplies one.
+	if lease.Env["HOME"] == "" || lease.Env["GOCACHE"] == "" {
+		t.Errorf("the clone URL replaced the toolchain environment: %v", lease.Env)
+	}
 	if lease.Checkout == nil || lease.Checkout.Env != "GIT_CLONE_URL" {
 		t.Errorf("the checkout does not read the same name: %+v", lease.Checkout)
 	}
@@ -170,7 +177,7 @@ func TestASandboxWithNoRepositoryClonesNothing(t *testing.T) {
 // EVERY SCRIPT STARTS WITH THE PREAMBLE. Forge runs sandboxes with a read-only
 // root and one writable tmpfs, so a script assuming it can write anywhere fails
 // on "Read-only file system" in a way that reads like a broken toolchain.
-func TestEveryCommandCarriesThePreamble(t *testing.T) {
+func TestALeasedCommandRunsInTheCheckoutRatherThanElsewhere(t *testing.T) {
 	f, c := newFakeForge(t)
 	sb := acquire(t, f, c)
 
@@ -178,15 +185,60 @@ func TestEveryCommandCarriesThePreamble(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := lastCommand(t, f)
-	if !strings.Contains(got, "set -e") || !strings.Contains(got, "cd /tmp/work") {
-		t.Errorf("the command does not carry the preamble:\n%s", got)
+	if !strings.Contains(got, "set -e") {
+		t.Errorf("the command does not carry the leased prelude:\n%s", got)
+	}
+	// A LEASE ALREADY HOLDS A CHECKOUT, cloned by forge at boot into the
+	// container's own working directory. Moving anywhere else runs every command
+	// outside the repository.
+	//
+	// Measured by booting a real sandbox: the checkout is at /workspace, the
+	// one-off preamble moved to an empty /tmp/work, and `git status` answered
+	// "fatal: not a git repository". Every verification failed, and the agent read
+	// and rewrote the same files to the 200-turn ceiling with nothing on the
+	// ticket to say why — which reads exactly like a model that will not converge.
+	if strings.Contains(got, "cd ") {
+		t.Errorf("a leased command changes directory, so it runs outside the "+
+			"checkout forge made for it:\n%s", got)
 	}
 
 	if _, err := sb.RunOnBranch(context.Background(), nil, "agent/t-1", "echo hi\n"); err != nil {
 		t.Fatal(err)
 	}
-	if got := lastCommand(t, f); !strings.Contains(got, "cd /tmp/work") {
-		t.Errorf("a branch command does not carry the preamble:\n%s", got)
+	if got := lastCommand(t, f); strings.Contains(got, "cd ") {
+		t.Errorf("a branch command changes directory:\n%s", got)
+	}
+}
+
+// THE ENVIRONMENT COMES FROM THE LEASE, since the leased prelude exports
+// nothing. Without it the toolchain fails in several unrelated-looking ways
+// against a read-only root — see Preamble.
+func TestTheLeaseCarriesTheEnvironmentTheToolchainNeeds(t *testing.T) {
+	f, c := newFakeForge(t)
+	acquire(t, f, c)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	env := f.created[0].Env
+	for _, name := range []string{"HOME", "GOCACHE", "GOMODCACHE", "GOPATH",
+		"XDG_CACHE_HOME", "COMMIT_MSG_FILE"} {
+		if env[name] == "" {
+			t.Errorf("the lease does not set %s; a leased command exports nothing "+
+				"itself, so nothing else will", name)
+		}
+	}
+}
+
+// THE TWO PRELUDES MUST NOT DRIFT. They set the same names for opposite
+// situations, and a build whose cache moved depending on which ran it would
+// produce results that differ by caller.
+func TestTheLeaseEnvironmentAgreesWithTheOneOffPreamble(t *testing.T) {
+	for name, value := range SandboxEnv() {
+		want := "export " + name + "=" + value
+		if !strings.Contains(Preamble, want) {
+			t.Errorf("Preamble does not carry %q, so a one-off execution and a "+
+				"leased one disagree about where %s points", want, name)
+		}
 	}
 }
 

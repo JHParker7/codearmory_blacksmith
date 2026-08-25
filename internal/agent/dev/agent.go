@@ -12,6 +12,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/model"
 	"github.com/code-armory-app/blacksmith/internal/record"
 	"github.com/code-armory-app/blacksmith/internal/ticket"
+	"github.com/code-armory-app/blacksmith/internal/transcript"
 	"github.com/code-armory-app/blacksmith/internal/workflow"
 )
 
@@ -247,7 +248,7 @@ func (a *Agent) outcomeOf(
 }
 
 func (a *Agent) survey(ctx context.Context, sb Box) ([]string, error) {
-	res, err := sb.Run(ctx, nil, SurveyScript())
+	res, err := sb.Run(ctx, recorderFrom(ctx), SurveyScript())
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +259,7 @@ func (a *Agent) survey(ctx context.Context, sb Box) ([]string, error) {
 }
 
 func (a *Agent) read(ctx context.Context, sb Box, paths []string) (map[string]string, error) {
-	res, err := sb.Run(ctx, nil, ReadScript(paths))
+	res, err := sb.Run(ctx, recorderFrom(ctx), ReadScript(paths))
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +282,7 @@ func (a *Agent) verify(ctx context.Context, sb Box, t ticket.Ticket, s *State, b
 		FormatCommand:     a.repo.FormatCommand,
 		DepsCommand:       a.repo.DepsCommand,
 	})
-	if res, err := sb.Run(ctx, nil, push); err != nil {
+	if res, err := sb.Run(ctx, recorderFrom(ctx), push); err != nil {
 		return err
 	} else if !res.OK() {
 		// A PUSH THAT FAILED IS THE AGENT'S PROBLEM TO SEE, not the stage's to
@@ -291,7 +292,7 @@ func (a *Agent) verify(ctx context.Context, sb Box, t ticket.Ticket, s *State, b
 		return nil
 	}
 
-	res, err := sb.RunOnBranch(ctx, nil, branch, a.checkScript())
+	res, err := sb.RunOnBranch(ctx, recorderFrom(ctx), branch, a.checkScript())
 	if err != nil {
 		return err
 	}
@@ -352,4 +353,14 @@ func (a *Agent) comment(ctx context.Context, t ticket.Ticket, body string) {
 		slog.ErrorContext(ctx, "could not write the stage's comment; its work is invisible on the ticket",
 			"ticket_id", t.ID, "role", a.role, "error", err)
 	}
+}
+
+// recorderFrom is the transcript this attempt is being written to.
+//
+// THE DEV LOOP RECORDED NO ACTIONS AT ALL until this existed: all four sandbox
+// calls passed nil. It serves four of the eleven stages — the developer, the
+// specification author, the coverage author and the spec merger — so more than
+// a third of the board could never say what it was doing.
+func recorderFrom(ctx context.Context) *transcript.Recorder {
+	return transcript.RecorderFrom(ctx)
 }

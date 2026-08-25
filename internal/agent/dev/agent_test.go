@@ -15,6 +15,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/model"
 	"github.com/code-armory-app/blacksmith/internal/record"
 	"github.com/code-armory-app/blacksmith/internal/ticket"
+	"github.com/code-armory-app/blacksmith/internal/transcript"
 	"github.com/code-armory-app/blacksmith/internal/workflow"
 )
 
@@ -36,14 +37,20 @@ type box struct {
 	pushFails  bool
 	surveyFail bool
 	readFail   bool
+
+	// recorders keeps the recorder each call was given. The VALUE, not a bool: a
+	// nil *transcript.Recorder inside a forge.Recorder interface is not equal to
+	// nil, so "was one passed" answers yes to exactly the bug this catches.
+	recorders []forge.Recorder
 }
 
 func (b *box) AdoptBranch(branch string) { b.adopted = branch }
 func (b *box) AlsoMerge(script string)   { b.merged = script }
 func (b *box) Release(context.Context)   { b.released++ }
 
-func (b *box) Run(_ context.Context, _ forge.Recorder, script string) (forge.Result, error) {
+func (b *box) Run(_ context.Context, rec forge.Recorder, script string) (forge.Result, error) {
 	b.scripts = append(b.scripts, script)
+	b.recorders = append(b.recorders, rec)
 
 	switch {
 	case strings.Contains(script, "git ls-files"):
@@ -74,7 +81,8 @@ func (b *box) Run(_ context.Context, _ forge.Recorder, script string) (forge.Res
 	}
 }
 
-func (b *box) RunOnBranch(_ context.Context, _ forge.Recorder, branch, _ string) (forge.Result, error) {
+func (b *box) RunOnBranch(_ context.Context, rec forge.Recorder, branch, _ string) (forge.Result, error) {
+	b.recorders = append(b.recorders, rec)
 	b.branchRun = append(b.branchRun, branch)
 	i := min(len(b.branchRun)-1, len(b.verdicts)-1)
 	if i < 0 {
@@ -691,5 +699,71 @@ func TestAFailedReadTellsTheAgentRatherThanEndingTheStage(t *testing.T) {
 	}
 	if !told {
 		t.Error("the agent was never told its read failed")
+	}
+}
+
+// EVERY SANDBOX CALL IS GIVEN THE STAGE'S OWN RECORDER.
+//
+// All four passed nil, so this loop — which serves the developer, the
+// specification author, the coverage author and the spec merger, four of the
+// eleven stages — recorded no actions at all. The board could say which column a
+// ticket sat in and never what was being done to it, because the activity feed
+// was rendering from a stream with no producer. Found by reading a stuck run's
+// transcript by hand: 119 turns, zero actions.
+//
+// The recorder is compared BY IDENTITY. A nil *transcript.Recorder wrapped in a
+// forge.Recorder interface is not equal to nil, so a "was one passed" check
+// would pass on the very bug this exists to catch. The recording itself happens
+// in the forge client, which has its own tests; what is pinned here is the call
+// site, which is where the nil was.
+func TestEverySandboxCallIsGivenTheRecorder(t *testing.T) {
+	b := &box{
+		tree:     []string{"store.go", "store_test.go"},
+		files:    map[string]string{"store.go": storeGo},
+		verdicts: []forge.Result{green()},
+	}
+	g := &gw{replies: []model.ChatResult{
+		readCall("store.go"),
+		writeCall(edit.Edit{Path: "store.go", OldStr: "return nil", Replace: "return []Task{}"}),
+	}}
+
+	rec := transcript.New(nil, "test-host")
+	ctx := rec.Start(context.Background(), "tr-1", "t-42", "dev-agent")
+
+	if _, _, err := devAgent(g, b, &board{}, Options{}).Handle(ctx, devTicket()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	// The survey, the read, the push and the check.
+	if len(b.recorders) < 3 {
+		t.Fatalf("only %d sandbox calls were made; the attempt did not run far "+
+			"enough to prove anything", len(b.recorders))
+	}
+	for i, got := range b.recorders {
+		if got != forge.Recorder(rec) {
+			t.Errorf("sandbox call %d of %d was given %v, want the stage's own "+
+				"recorder — whatever it did is otherwise absent from the transcript",
+				i+1, len(b.recorders), got)
+		}
+	}
+}
+
+// A STAGE OUTSIDE A TRANSCRIPT STILL RUNS. Capture is optional, and a nil
+// recorder is what every method on it already expects.
+func TestTheDevLoopSurvivesNoTranscript(t *testing.T) {
+	if got := recorderFrom(context.Background()); got != nil {
+		t.Fatalf("got %v, want nil outside a transcript", got)
+	}
+
+	b := &box{
+		tree:     []string{"store.go"},
+		files:    map[string]string{"store.go": storeGo},
+		verdicts: []forge.Result{green()},
+	}
+	g := &gw{replies: []model.ChatResult{
+		writeCall(edit.Edit{Path: "store.go", OldStr: "return nil", Replace: "return []Task{}"}),
+	}}
+	if _, _, err := devAgent(g, b, &board{}, Options{}).Handle(context.Background(), devTicket()); err != nil {
+		t.Fatalf("Handle without a transcript: %v", err)
 	}
 }

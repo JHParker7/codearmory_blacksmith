@@ -88,7 +88,10 @@ func (r *Recorder) Start(ctx context.Context, transcriptID, taskID, role string)
 		TaskID:       taskID,
 		Role:         role,
 	})
-	return With(ctx, transcriptID, taskID, role)
+	// THE RECORDER TRAVELS WITH THE IDENTITY. Attached here rather than by each
+	// stage, because a stage that forgets records nothing and says nothing about
+	// having forgotten — see recorderKey.
+	return WithRecorder(With(ctx, transcriptID, taskID, role), r)
 }
 
 // Turn records one model call, successful or not. It satisfies the gateway's
