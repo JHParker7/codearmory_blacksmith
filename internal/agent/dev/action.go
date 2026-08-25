@@ -348,6 +348,13 @@ func (m Mode) BranchMarker() string {
 	}
 }
 
+// WritesSpec reports whether this stage is the one AUTHORING the tests, and so
+// owns whether they compile. Both such stages may edit test files and only test
+// files; every other stage is handed the result and may not touch it.
+func (m Mode) WritesSpec() bool {
+	return m == ModeTest || m == ModeSpecMerge
+}
+
 // CheckDescription says what this stage's check actually does, which differs by
 // stage and is the thing a model most often assumes wrongly.
 func (m Mode) CheckDescription() string {
