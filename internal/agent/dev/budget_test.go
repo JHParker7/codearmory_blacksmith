@@ -127,8 +127,20 @@ func TestTheDirectiveNamesTheOneActionThatCanHelp(t *testing.T) {
 	}
 
 	s.NoProgress("Rejected: something")
-	if !strings.Contains(s.Notice, "write_files") {
-		t.Errorf("the directive does not name the action that helps: %q", s.Notice)
+	if !strings.Contains(s.Notice, "actually different") {
+		t.Errorf("the directive does not say what would help: %q", s.Notice)
+	}
+	// IT NAMES NO TOOL AT ALL. It used to name write_files, and went on naming it
+	// after the write tool was flattened to write_file — pointing an agent that
+	// was already making no progress at a tool it could not call. The model can
+	// see which tools it has; naming one was never the useful part and was the
+	// part that went stale. The test that should have caught the drift asserted
+	// the same literal, so it drifted too.
+	for _, tool := range Actions {
+		if strings.Contains(s.Notice, tool) {
+			t.Errorf("the directive names the tool %q; it will be wrong the next "+
+				"time a tool is renamed: %q", tool, s.Notice)
+		}
 	}
 	if strings.Contains(s.Notice, "run_tests") {
 		t.Errorf("the directive names an action the agent cannot choose: %q", s.Notice)

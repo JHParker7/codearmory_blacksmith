@@ -137,9 +137,15 @@ func (s *State) Directive() string {
 	if s.Refusals < 2 {
 		return ""
 	}
+	// IT DOES NOT NAME A TOOL. This said "write_files" and went on saying it after
+	// the write tool was flattened to write_file, so an agent already making no
+	// progress was pointed at a tool it could not call. Naming the tool was never
+	// the useful part — the model can see which tools it has — and naming it is
+	// the part that goes stale. What is worth saying is that the turns are being
+	// spent and that repeating the same edit will not stop that.
 	return fmt.Sprintf("\n\nYou have now made %d actions in a row that changed nothing,"+
-		" and each one has cost a turn from your budget. Your next action should be "+
-		"write_files (make a change that is actually different).", s.Refusals)
+		" and each one has cost a turn from your budget. Make a change that is"+
+		" actually different.", s.Refusals)
 }
 
 // Exhausted reports whether the attempt should stop, and why.
