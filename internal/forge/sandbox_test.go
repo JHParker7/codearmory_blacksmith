@@ -79,6 +79,79 @@ func TestTheLeaseCarriesACredentialReferenceRatherThanACredential(t *testing.T) 
 	}
 }
 
+// A PUBLIC REPOSITORY HAS NO CREDENTIAL TO REFERENCE, and forge rejects an
+// empty one.
+//
+// Sending secret_refs {"GIT_CLONE_URL": ""} earns a 400 naming the four forms
+// forge accepts. On the local plane, where no AGENTS_REPO_SECRET_REF is set,
+// that failed every stage that wanted a sandbox in the same second it claimed —
+// so a ticket burned all three attempts and was blocked before anything ran.
+// The clone URL goes as a plain env var instead; forge's checkout reads the same
+// name either way.
+func TestAPublicRepositoryIsClonedWithoutASecretReference(t *testing.T) {
+	f, c := newFakeForge(t)
+	_, err := c.Acquire(context.Background(), SandboxSpec{
+		Image:    "golang:1.25",
+		CloneURL: "git://git-local:9418/demo.git",
+		Branch:   "main",
+	})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	lease := f.created[0]
+	if _, ok := lease.SecretRefs["GIT_CLONE_URL"]; ok {
+		t.Errorf("an empty credential reference was sent: %v — forge rejects it "+
+			"with a 400 and the ticket dies before it starts", lease.SecretRefs)
+	}
+	if lease.Env["GIT_CLONE_URL"] != "git://git-local:9418/demo.git" {
+		t.Errorf("the clone URL did not reach the sandbox: %v", lease.Env)
+	}
+	if lease.Checkout == nil || lease.Checkout.Env != "GIT_CLONE_URL" {
+		t.Errorf("the checkout does not read the same name: %+v", lease.Checkout)
+	}
+}
+
+// AND A PRIVATE ONE STILL SENDS NO URL IN THE CLEAR. The two paths are mutually
+// exclusive: a credential resolved by forge must not be shadowed by a plain
+// value this process put beside it.
+func TestACredentialledRepositorySendsNoPlainURL(t *testing.T) {
+	f, c := newFakeForge(t)
+	acquire(t, f, c)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	lease := f.created[0]
+	if lease.SecretRefs["GIT_CLONE_URL"] != "git:repo" {
+		t.Errorf("the reference was not sent: %v", lease.SecretRefs)
+	}
+	if _, ok := lease.Env["GIT_CLONE_URL"]; ok {
+		t.Errorf("a plain clone URL was sent alongside the reference: %v — it would "+
+			"shadow the credential forge resolves", lease.Env)
+	}
+}
+
+// FULL HISTORY, NOT SHALLOW. One checkout serves the agent's reads and its
+// verification, and the dependency-regression check diffs the branch against its
+// base — which a single-commit clone has no base for.
+func TestTheCheckoutAsksForFullHistory(t *testing.T) {
+	f, c := newFakeForge(t)
+	acquire(t, f, c)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	co := f.created[0].Checkout
+	if co == nil || co.Depth == nil {
+		t.Fatalf("no depth was asked for: %+v — forge's default is shallow, and "+
+			"unset is indistinguishable from it", co)
+	}
+	if *co.Depth != 0 {
+		t.Errorf("depth = %d, want 0 (a complete clone)", *co.Depth)
+	}
+}
+
 // A REPOSITORY IS NOT ALWAYS WANTED: a sandbox used for a one-off command has
 // nothing to clone, and asking forge to check out an empty URL fails the boot.
 func TestASandboxWithNoRepositoryClonesNothing(t *testing.T) {

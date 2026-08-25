@@ -24,6 +24,11 @@ const (
 	// which resets attempt counts and un-holds work that is being worked.
 	ClaimMarker = "<!-- blacksmith:claim "
 
+	// EscalatedMarker prefixes the note left when a stage runs out of attempts
+	// and the ticket becomes a person's problem. It is a marker so the window and
+	// any later tooling can find the reason without parsing prose.
+	EscalatedMarker = "**The department is out of options on this ticket.**"
+
 	// ReturnedMarker records work handed back to an earlier stage.
 	ReturnedMarker = "<!-- blacksmith:returned -->"
 

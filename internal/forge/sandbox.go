@@ -16,6 +16,11 @@ import (
 // class's worth of memory held until a timeout collects it.
 const ReleaseTimeout = 20 * time.Second
 
+// full is the checkout depth meaning a complete clone. Forge's default is
+// shallow, and the field is a pointer precisely so "0" can be said explicitly
+// rather than being indistinguishable from "unset".
+var full = func() *int { d := 0; return &d }()
+
 // SandboxSpec is what a held sandbox is booted with.
 type SandboxSpec struct {
 	Image       string
@@ -75,8 +80,28 @@ func (c *Client) Acquire(ctx context.Context, spec SandboxSpec) (*Sandbox, error
 		MaxLifetime: spec.MaxLifetimeSecs,
 	}
 	if spec.CloneURL != "" {
-		lease.Checkout = &CheckoutSpec{Env: "GIT_CLONE_URL", Ref: spec.Branch}
-		lease.SecretRefs = map[string]string{"GIT_CLONE_URL": spec.SecretRef}
+		// FULL HISTORY, NOT SHALLOW. This one checkout serves the agent's reads and
+		// its verification, and the dependency-regression check diffs the branch
+		// against its base — which a single-commit clone has no base for. Paid once
+		// per ticket rather than once per command, which is the point of holding
+		// the sandbox at all.
+		lease.Checkout = &CheckoutSpec{Env: "GIT_CLONE_URL", Ref: spec.Branch, Depth: full}
+
+		// THE CLONE URL REACHES THE SANDBOX AS AN ENV VAR EITHER WAY: as a resolved
+		// credential when there is a SecretRef, and as the plain URL for a public
+		// repository. forge's checkout reads that one name in both cases.
+		//
+		// Sending the reference unconditionally is what broke the local plane: with
+		// no AGENTS_REPO_SECRET_REF set it posted secret_refs {"GIT_CLONE_URL": ""},
+		// and forge rejects an empty reference with a 400 naming the four forms it
+		// accepts. Every stage that wanted a sandbox failed in the same second it
+		// claimed, so a ticket burned all three attempts and was blocked before
+		// anything had run.
+		if spec.SecretRef != "" {
+			lease.SecretRefs = map[string]string{"GIT_CLONE_URL": spec.SecretRef}
+		} else {
+			lease.Env = map[string]string{"GIT_CLONE_URL": spec.CloneURL}
+		}
 	}
 
 	created, err := c.CreateLease(ctx, lease)
