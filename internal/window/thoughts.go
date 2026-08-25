@@ -39,30 +39,39 @@ func ReadThoughts(dir, ticketID string) []Thought {
 		return nil
 	}
 	var out []Thought
-	for _, r := range recentRecords(dir) {
+	scanRecords(dir, func(r transcript.Record) {
 		if r.TaskID != ticketID {
-			continue
+			return
 		}
-		switch r.Kind {
-		case transcript.KindTurn:
-			out = append(out, Thought{
-				At: r.At, Role: r.Role, Tool: ToolOf(r.Completion), Prose: ProseOf(r),
-			})
-		case transcript.KindRefusal:
-			// A REFUSAL BELONGS IN THE STREAM, not just in the counters. The reason
-			// an agent is looping is almost always in the refusal it keeps earning,
-			// and reading the turns without them shows an agent that appears to
-			// decide the same thing repeatedly for no reason.
-			out = append(out, Thought{
-				At: r.At, Role: r.Role, Tool: r.Tool,
-				Prose: strings.TrimSpace(r.Detail), Failed: true,
-			})
+		if th, ok := thoughtOf(r); ok {
+			out = append(out, th)
+			if len(out) > MaxThoughtsShown {
+				out = out[len(out)-MaxThoughtsShown:]
+			}
 		}
-	}
-	if len(out) > MaxThoughtsShown {
-		out = out[len(out)-MaxThoughtsShown:]
-	}
+	})
 	return out
+}
+
+// thoughtOf is the one rule for turning a record into something the reasoning
+// panel shows, shared so the digest and the direct read cannot drift.
+func thoughtOf(r transcript.Record) (Thought, bool) {
+	switch r.Kind {
+	case transcript.KindTurn:
+		return Thought{
+			At: r.At, Role: r.Role, Tool: ToolOf(r.Completion), Prose: ProseOf(r),
+		}, true
+	case transcript.KindRefusal:
+		// A REFUSAL BELONGS IN THE STREAM, not just in the counters. The reason an
+		// agent is looping is almost always in the refusal it keeps earning, and
+		// reading the turns without them shows an agent that appears to decide the
+		// same thing repeatedly for no reason.
+		return Thought{
+			At: r.At, Role: r.Role, Tool: r.Tool,
+			Prose: strings.TrimSpace(r.Detail), Failed: true,
+		}, true
+	}
+	return Thought{}, false
 }
 
 // ProseOf is what the model MEANT, as distinct from what it emitted.
