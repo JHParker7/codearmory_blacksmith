@@ -250,7 +250,10 @@ func trimRight(s string) string { return strings.TrimRight(s, " \t") }
 // see: what the replacement contains.
 func ResolveDecl(before, name string) (from, to int, err error) {
 	fset := token.NewFileSet()
-	f, perr := parser.ParseFile(fset, "src.go", before, parser.SkipObjectResolution)
+	// PARSED WITH ITS COMMENTS, because the span has to include the doc comment.
+	// See below.
+	f, perr := parser.ParseFile(fset, "src.go", before,
+		parser.ParseComments|parser.SkipObjectResolution)
 	if perr != nil {
 		return 0, 0, fmt.Errorf(
 			"the file does not parse, so a declaration cannot be located in it: %v. Use undo_edit if "+
@@ -266,7 +269,7 @@ func ResolveDecl(before, name string) (from, to int, err error) {
 		}
 		have = append(have, got)
 		if matchesDecl(got, want) {
-			return fset.Position(d.Pos()).Line, fset.Position(d.End()).Line, nil
+			return fset.Position(declStart(d)).Line, fset.Position(d.End()).Line, nil
 		}
 	}
 
@@ -297,6 +300,37 @@ func ResolveOrAppend(before, name, replace string) (Span, error) {
 		return Span{Append: true}, nil
 	}
 	return Span{}, err
+}
+
+// declStart is where a declaration begins FOR THE PURPOSE OF REPLACING IT, which
+// is its doc comment when it has one rather than the keyword.
+//
+// AN AGENT REWRITING A FUNCTION SENDS ITS COMMENT WITH IT. Pos() is the "func"
+// keyword, so replacing from there left the OLD comment stranded above the new
+// one and the file grew a duplicate every time:
+//
+//	// handleBoard serves the HTML board at /, ...
+//	// handleBoard serves the HTML board at /, ...
+//	func handleBoard(...)
+//
+// Observed live, and it does not merely look untidy — it does not converge. The
+// developer saw the duplicate, spent a turn deleting it with old_str, rewrote
+// the declaration, and duplicated it again: nine turns of that on one function,
+// alternating between two signatures it could no longer tell apart, until the
+// attempt was spent. The comment is part of the declaration to anyone reading
+// it, so it is part of the declaration to anyone replacing it.
+func declStart(d ast.Decl) token.Pos {
+	switch t := d.(type) {
+	case *ast.FuncDecl:
+		if t.Doc != nil {
+			return t.Doc.Pos()
+		}
+	case *ast.GenDecl:
+		if t.Doc != nil {
+			return t.Doc.Pos()
+		}
+	}
+	return d.Pos()
 }
 
 func declName(d ast.Decl) string {
