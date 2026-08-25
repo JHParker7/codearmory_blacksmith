@@ -305,8 +305,14 @@ const MaxTestOutput = 8000
 
 // checkScript is this stage's own definition of done.
 func (a *Agent) checkScript() string {
-	if a.mode == ModeTest {
+	switch a.mode {
+	case ModeTest:
 		return gate.SpecScript(a.repo.TestCommand, false)
+	case ModeSpecMerge:
+		// REPAIRING RELAXES THE RED REQUIREMENT, NOT THE COMPILE CHECK. A merge
+		// is a repair by definition: the sections were already red, and what is
+		// being fixed is that they do not build together.
+		return gate.SpecScript(a.repo.TestCommand, true)
 	}
 	return gate.Script(gate.Options{
 		LintCommand:     a.repo.LintCommand,

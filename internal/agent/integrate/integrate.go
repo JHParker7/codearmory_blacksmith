@@ -88,8 +88,10 @@ func New(sandbox Sandbox, store Store, repo config.Repo, branch string) *Agent {
 
 func (a *Agent) Role() string { return workflow.RoleIntegrate }
 
-// Class is required by the dispatcher and unused: this stage calls no model.
-func (a *Agent) Class() model.Class { return model.ClassSmall }
+// Class is ClassNone: this stage calls no model, and saying "small" instead
+// would leave it unassembled on a host that does not serve small — stranding
+// every ticket in its column.
+func (a *Agent) Class() model.Class { return model.ClassNone }
 
 // Wants takes tickets a reviewer has finished with that have something to merge.
 //

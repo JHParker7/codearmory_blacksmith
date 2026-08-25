@@ -149,6 +149,17 @@ const (
 	ModeDevelop Mode = iota
 	ModeTest
 	ModeCoverage
+
+	// ModeSpecMerge reconciles the sections several authors wrote onto ONE
+	// branch so they compile as one package.
+	//
+	// It exists because the sections are written by agents that cannot see each
+	// other: two of them declare the same helper, or the same fixture type, and
+	// the package then does not build — which the developer would be handed as
+	// though it were its own fault. It may edit only test files, because the
+	// implementation is not its to change, and it MAY WEAKEN NOTHING: every
+	// assertion that was there must still be there when it finishes.
+	ModeSpecMerge
 )
 
 // EditRule is the sentence stating which files this stage may write.
@@ -163,6 +174,10 @@ func (m Mode) EditRule() string {
 	case ModeCoverage:
 		return "Add tests. You may ONLY create NEW *_test.go files — the tests that were " +
 			"here before you are the specification and cannot be edited."
+	case ModeSpecMerge:
+		return "Reconcile the tests on this branch so they compile as ONE package. You may " +
+			"ONLY edit *_test.go files, and you may WEAKEN NOTHING: rename a duplicate, fold " +
+			"two identical helpers into one, and leave every assertion standing."
 	default:
 		return "Edit the implementation. You may NOT edit *_test.go files."
 	}
@@ -175,7 +190,7 @@ func (m Mode) CheckDescription() string {
 	case ModeCoverage:
 		return "Run the suite and report statement coverage. The suite must pass and coverage " +
 			"must reach the target before you finish."
-	case ModeTest:
+	case ModeTest, ModeSpecMerge:
 		return "Push your tests and check they are VALID GO. It does not run them — they cannot " +
 			"pass yet, because the code they describe does not exist."
 	default:

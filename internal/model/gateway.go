@@ -33,6 +33,23 @@ const (
 // them in.
 var Classes = []Class{ClassTiny, ClassSmall, ClassLarge}
 
+// ClassNone is what a stage that calls NO MODEL asks for.
+//
+// It exists because "required by the dispatcher and unused" is not the same as
+// "small", and treating it as small has a consequence: a host is only assembled
+// with the stages whose class it can serve, so an integrator reported as small
+// is left out on a host serving only the large class — and every reviewed branch
+// then sits in ready_for_integration with nothing coming to merge it.
+//
+// A stage on this class cannot be blocked by a missing endpoint, because it
+// never asks one for anything.
+//
+// A DISTINCT VALUE, NOT THE ZERO VALUE. Spelling it "" would make "calls no
+// model" indistinguishable from "nobody configured a class", so a resolver that
+// fell through to an empty string would silently bypass the check that a host
+// can actually serve the stage it is about to assemble.
+const ClassNone Class = "none"
+
 // ClassConfig is one class as this host serves it.
 type ClassConfig struct {
 	Endpoint string

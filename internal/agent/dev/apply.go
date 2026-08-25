@@ -336,6 +336,10 @@ func (m Mode) mayWrite(p string, tree []string) error {
 			"developer was held to and must not be edited. Put your new tests in a new file, "+
 			"for example coverage_test.go", p)
 
+	case m == ModeSpecMerge && !edit.IsTestFile(p):
+		return fmt.Errorf("%s is not a test file. You are reconciling the tests several authors "+
+			"wrote onto this branch; the implementation is not yours to change", p)
+
 	case m == ModeTest && !edit.IsTestFile(p):
 		return fmt.Errorf("%s is not a test file. You may only edit *_test.go — "+
 			"the implementation is another agent's work, and changing it to make your test pass "+
