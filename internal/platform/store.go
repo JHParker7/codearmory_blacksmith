@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/code-armory-app/blacksmith/internal/ticket"
 	"github.com/code-armory-app/blacksmith/internal/transport"
@@ -37,6 +38,19 @@ type Store struct {
 	// comment: this is the difference between the two stores, and the one place
 	// it can be got wrong is here.
 	prefix string
+
+	// now is the clock the claim protocol judges staleness against. Injectable
+	// because the behaviour is entirely about where a timestamp falls relative to
+	// the present, which is not testable against the real clock.
+	now func() time.Time
+}
+
+// clock is the store's notion of the present, defaulting to the real one.
+func (s *Store) clock() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 // Routed builds a store reached through conductor — the platform.

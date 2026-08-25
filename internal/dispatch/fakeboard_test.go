@@ -181,16 +181,46 @@ func (b *board) Claim(_ context.Context, id string, st workflow.Stage, c record.
 		b.mu.Unlock()
 		return fmt.Errorf("claim %s: %w: the ticket is in %s", id, transport.ErrConflict, t.Status)
 	}
-	holder := c.Role + "@" + c.Host
-	t.Status, t.AssigneeID = st.Working, &holder
 	b.mu.Unlock()
 
+	// THE APPEND PROTOCOL, NOT THE CONDITIONAL WRITE.
+	//
+	// This fake used to move the ticket and then record the claim, which is the
+	// versioned store's path — so the arbitration the fallback does was never
+	// exercised by a single dispatch test. That is exactly how a stall shipped: a
+	// retry lost the race to the claim its own previous attempt had written, and
+	// every test here passed because none of them arbitrated at all.
+	//
+	// Modelling the HARDER path means every test in this package now runs against
+	// it. See platform.claimByAppend, which this mirrors.
 	body, err := record.Render(c)
 	if err != nil {
 		return err
 	}
-	_, err = b.AddComment(context.Background(), id, body)
-	return err
+	mine, err := b.AddComment(context.Background(), id, body)
+	if err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	t, ok = b.tickets[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", transport.ErrNotFound, id)
+	}
+	// LIVE CLAIMS ONLY, the same notion the ceiling uses — a claim left by a host
+	// that died must not go on winning the race forever.
+	winner, found := record.OldestForRole(record.PruneStale(*t, b.now).Comments, c.Role)
+	if !found {
+		return fmt.Errorf("claim %s: %w: the claim is not visible on read-back", id, transport.ErrConflict)
+	}
+	if winner.ID != mine.ID {
+		return fmt.Errorf("claim %s: %w: %s got there first", id, transport.ErrConflict, winner.ID)
+	}
+
+	holder := c.Role + "@" + c.Host
+	t.Status, t.AssigneeID = st.Working, &holder
+	return nil
 }
 
 func (b *board) seenMoves() []string {

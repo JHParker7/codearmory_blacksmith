@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/code-armory-app/blacksmith/internal/record"
 	"github.com/code-armory-app/blacksmith/internal/ticket"
@@ -263,6 +264,82 @@ func TestTheFallbackStillYieldsToAnUnclosedClaimForThisRole(t *testing.T) {
 	if !transport.Conflict(err) {
 		t.Fatalf("err = %v, want a conflict: gpu-other holds an OPEN claim and two "+
 			"hosts would now work the same ticket", err)
+	}
+}
+
+// A DEAD HOST MUST NOT WIN THE RACE FOREVER.
+//
+// A claim is written when work starts and nothing closes it if the process is
+// killed. The ceiling already forgives those — PruneStale — but arbitration did
+// not, so the dead claim went on winning: the ticket was ELIGIBLE AND
+// UNCLAIMABLE at the same time, sitting in its queue with nothing on the board
+// to say why. Forgiving the attempt was only half the fix, and the half that was
+// missing had no test because no fake ever arbitrated.
+func TestAClaimLeftByADeadHostStopsWinningOnceItIsStale(t *testing.T) {
+	f, store := newFakeStore(t)
+	f.versioned = false
+	st := devStage()
+	tk := f.add(ticket.Ticket{Status: st.Ready})
+
+	dead, _ := record.Render(record.Claim{Host: "gpu-dead", Role: st.Role})
+	f.appendComment(tk.ID, "gpu-dead", dead)
+
+	// The process is gone and the window has passed.
+	f.mu.Lock()
+	f.now = f.now.Add(record.StaleAfter + time.Hour)
+	f.mu.Unlock()
+
+	if err := store.Claim(context.Background(), tk.ID, st, record.Claim{Host: "gpu-1", Role: st.Role}); err != nil {
+		t.Fatalf("a ticket whose only claim had aged out was still unclaimable: %v", err)
+	}
+	got, _ := f.get(tk.ID)
+	if got.Status != st.Working {
+		t.Errorf("the ticket is in %q, want the working column", got.Status)
+	}
+}
+
+// A claim inside the window is LIVE, and staleness must not release it early —
+// that would put two hosts on one ticket, which is the unrecoverable direction.
+func TestAClaimInsideTheWindowStillWins(t *testing.T) {
+	f, store := newFakeStore(t)
+	f.versioned = false
+	st := devStage()
+	tk := f.add(ticket.Ticket{Status: st.Ready})
+
+	live, _ := record.Render(record.Claim{Host: "gpu-other", Role: st.Role})
+	f.appendComment(tk.ID, "gpu-other", live)
+
+	f.mu.Lock()
+	f.now = f.now.Add(record.StaleAfter - time.Minute)
+	f.mu.Unlock()
+
+	err := store.Claim(context.Background(), tk.ID, st, record.Claim{Host: "gpu-1", Role: st.Role})
+	if !transport.Conflict(err) {
+		t.Fatalf("err = %v, want a conflict: gpu-other's claim is still inside the "+
+			"staleness window and two hosts would now work the same ticket", err)
+	}
+}
+
+// RECONCILE'S NOTE MUST RELEASE THE RACE, NOT JUST THE COUNTER.
+//
+// A host that restarts leaves a claim behind, and reconcile writes a note that
+// forgives the attempt. It carries the returned marker, which attempt counting
+// treats as a fresh start — but arbitration did not, so the stranded ticket
+// stayed unclaimable anyway and the note fixed nothing anyone could see.
+func TestReconcilesInterruptedNoteMakesTheTicketClaimableAgain(t *testing.T) {
+	f, store := newFakeStore(t)
+	f.versioned = false
+	st := devStage()
+	tk := f.add(ticket.Ticket{Status: st.Ready})
+
+	stranded, _ := record.Render(record.Claim{Host: "gpu-1", Role: st.Role})
+	f.appendComment(tk.ID, "gpu-1", stranded)
+	// The body dispatch.InterruptedBody writes. Spelled out rather than imported:
+	// dispatch depends on this package, so the test cannot depend on dispatch.
+	f.appendComment(tk.ID, "gpu-1", "**Attempt interrupted.**\n\n"+record.ReturnedMarker)
+
+	if err := store.Claim(context.Background(), tk.ID, st, record.Claim{Host: "gpu-1", Role: st.Role}); err != nil {
+		t.Fatalf("the ticket reconcile released was still unclaimable: %v", err)
 	}
 }
 

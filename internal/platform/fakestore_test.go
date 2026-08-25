@@ -66,6 +66,12 @@ func newFakeStore(t *testing.T) (*fakeStore, *Store) {
 		t.Fatalf("Routed: %v", err)
 	}
 	store.http.Backoff = time.Millisecond
+
+	// THE STORE JUDGES STALENESS AGAINST THIS FAKE'S CLOCK, not the real one.
+	// Comments here are stamped at a fixed date, so against time.Now() every
+	// claim — including the one just written — reads as hours old and is pruned
+	// as abandoned, leaving the claimant unable to find its own comment.
+	store.now = f.clock
 	return f, store
 }
 
@@ -82,6 +88,13 @@ func (f *fakeStore) add(t ticket.Ticket) *ticket.Ticket {
 }
 
 // appendComment writes a comment the way the store does: a server-assigned id
+// clock reads the fake's time under its lock. appendComment advances it.
+func (f *fakeStore) clock() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.now
+}
+
 // and a server-assigned timestamp, in arrival order.
 func (f *fakeStore) appendComment(id, author, body string) (ticket.Comment, bool) {
 	f.mu.Lock()

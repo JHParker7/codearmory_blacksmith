@@ -82,8 +82,17 @@ func (s *Store) claimByAppend(ctx context.Context, id string, st workflow.Stage,
 		return fmt.Errorf("claim %s: verify: %w", id, err)
 	}
 
+	// ARBITRATE OVER LIVE CLAIMS ONLY, and it must be the SAME notion of live the
+	// ceiling uses. A claim is written when work starts and nothing closes it if
+	// the process dies, so a host that was killed leaves one standing. The ceiling
+	// already forgives those — PruneStale — but arbitration did not, so the dead
+	// claim went on winning the race forever: the ticket was eligible and
+	// unclaimable at the same time, sitting in its queue with nothing on the board
+	// to say why. Forgiving the attempt was only half the fix.
+	live := record.PruneStale(t, s.clock())
+
 	// Arbitrate against claims from THIS ROLE only — see record.OldestForRole.
-	winner, ok := record.OldestForRole(t.Comments, c.Role)
+	winner, ok := record.OldestForRole(live.Comments, c.Role)
 	if !ok {
 		// Our own claim is missing from the read-back: replica lag, or a deletion.
 		// Same reasoning as above — yield.
