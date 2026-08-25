@@ -235,3 +235,88 @@ func TestAStageThatCannotBeDispatchedStopsStartup(t *testing.T) {
 		t.Errorf("the failure does not name the stage: %v", err)
 	}
 }
+
+// STANDALONE MEANS THE LOCAL PLANE IS THE AUTHORITY: the store on this host
+// holds the tickets, nothing is synced, and the platform is NOT CONSULTED. A
+// department that reached for the platform anyway would fail on a host whose
+// platform is unreachable — which is the normal state of a machine running the
+// pipeline against its own plane.
+func TestStandaloneReadsThisHostsOwnStore(t *testing.T) {
+	cfg := config.Config{
+		// A platform that must not be contacted, and would fail if it were.
+		PlatformURL: "https://platform.invalid", PlatformToken: "tok",
+		TicketsURL: "http://127.0.0.1:30086",
+		ForgeURL:   "http://127.0.0.1:30083",
+		ForgeToken: "plane-tok",
+	}
+	if !cfg.Standalone() {
+		t.Fatal("a configured tickets URL did not put the host in standalone mode")
+	}
+
+	store, runner, err := clients(cfg)
+	if err != nil {
+		t.Fatalf("clients: %v", err)
+	}
+	if store == nil || runner == nil {
+		t.Fatal("clients returned nothing")
+	}
+}
+
+// AND CONNECTED IS THE OTHER SHAPE, unchanged: with no local store the platform
+// holds the tickets.
+func TestWithoutALocalStoreThePlatformHoldsTheTickets(t *testing.T) {
+	cfg := config.Config{PlatformURL: "https://platform.example", PlatformToken: "tok"}
+	if cfg.Standalone() {
+		t.Fatal("a host with no tickets URL reported as standalone")
+	}
+	if _, _, err := clients(cfg); err != nil {
+		t.Fatalf("clients: %v", err)
+	}
+}
+
+// A LOCAL STORE THAT IS NOT A URL IS A STARTUP FAILURE, not something to
+// discover on the first claim.
+func TestAnInvalidLocalStoreURLStopsStartup(t *testing.T) {
+	cfg := config.Config{PlatformURL: "https://p.example", TicketsURL: "not a url"}
+	if _, _, err := clients(cfg); err == nil {
+		t.Error("an invalid tickets URL was accepted")
+	}
+}
+
+// THE PLANE CREDENTIAL IS A SESSION WHERE ONE CAN BE OBTAINED. The gatekeeper
+// issues short tokens, so a department that cannot renew stops working when the
+// first expires — and reports "unauthorized" against a healthy plane, which
+// reads as a broken deployment rather than an expired session.
+func TestAnEmailAndPasswordProduceARenewingPlaneCredential(t *testing.T) {
+	cfg := config.Config{
+		PlatformURL: "https://p.example",
+		TicketsURL:  "http://127.0.0.1:30086",
+		ForgeURL:    "http://127.0.0.1:30083",
+		// No AGENTS_FORGE_TOKEN at all: the plane is reached by logging in.
+		ForgeEmail: "agent@example.test", ForgePassword: "pw",
+	}
+	if _, _, err := clients(cfg); err != nil {
+		t.Fatalf("clients: %v", err)
+	}
+
+	// The login address defaults to the forge's when none is given, and an
+	// explicit one wins — which is what points it at the GATEKEEPER, a different
+	// service on a different port from the forge.
+	if got := cfg.SandboxLoginURL(); got != "http://127.0.0.1:30083" {
+		t.Errorf("SandboxLoginURL = %q", got)
+	}
+	withLogin := cfg
+	withLogin.ForgeLoginURL = "http://127.0.0.1:30081"
+	if got := withLogin.SandboxLoginURL(); got != "http://127.0.0.1:30081" {
+		t.Errorf("an explicit login URL was ignored: %q", got)
+	}
+}
+
+// A HOST WITH NO PLANE CREDENTIAL AT ALL still starts — it may be running
+// entirely against the platform — but it must not pretend it has one.
+func TestAHostWithNoPlaneCredentialStillBuildsItsClients(t *testing.T) {
+	cfg := config.Config{PlatformURL: "https://p.example", ForgeURL: "http://127.0.0.1:30083"}
+	if _, _, err := clients(cfg); err != nil {
+		t.Errorf("clients: %v", err)
+	}
+}

@@ -144,7 +144,8 @@ func runService(ctx context.Context) error {
 	}
 
 	assembly, err := department.Assemble(department.Deps{
-		Gateway: gw, Runner: runner, Leases: runner, Store: store, Config: cfg,
+		Gateway: gw, Runner: runner, Leases: runner,
+		Store: store, Config: cfg,
 	})
 	if err != nil {
 		return err
@@ -159,21 +160,74 @@ func runService(ctx context.Context) error {
 	return run(ctx, cfg, assembly, store, recorder)
 }
 
-// clients builds the platform and forge clients this host talks to.
+// clients builds the ticket store and the sandbox runner this host talks to.
+//
+// TWO SHAPES, AND WHICH ONE IS IN USE IS STATED RATHER THAN INFERRED from
+// whichever variables happen to be set. STANDALONE means the local plane is the
+// AUTHORITY: the store on this host holds the tickets, nothing is synced, and
+// the platform is not consulted at all. CONNECTED means the platform holds them
+// and this host pulls work through conductor.
+//
+// They are the only two shapes. A third — both stores writable and reconciled —
+// is master-master on mutable rows, where status and priority become
+// last-write-wins and the claim protocol loses the single ordering authority it
+// relies on to stop two agents working one ticket.
 func clients(cfg config.Config) (*platform.Store, *forge.Client, error) {
+	// THE PLANE HAS ITS OWN CREDENTIAL, and it is a SESSION rather than a fixed
+	// token: the gatekeeper issues short ones, so a department that cannot renew
+	// stops working when the first expires — every stage then reports
+	// "unauthorized" against a plane that is perfectly healthy, which reads as a
+	// broken deployment rather than an expired session.
+	//
+	// One credential for the whole plane, because the store and the forge
+	// authenticate against the same gatekeeper: issuing two would mean two
+	// sessions for one trust domain, drifting out of step.
+	var plane transport.Credential
+	if cfg.ForgeEmail != "" && cfg.ForgePassword != "" {
+		session, err := transport.Login(cfg.SandboxLoginURL(), cfg.ForgeEmail, cfg.ForgePassword, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("sandbox credential: %w", err)
+		}
+		plane = session
+		slog.Info("sandbox session renews on expiry",
+			"login_url", cfg.SandboxLoginURL(), "email", cfg.ForgeEmail)
+	} else {
+		plane = transport.Static(cfg.ForgeToken)
+		if cfg.ForgeToken == "" {
+			slog.Warn("no plane credential: set AGENTS_FORGE_EMAIL and AGENTS_FORGE_PASSWORD, " +
+				"or AGENTS_FORGE_TOKEN")
+		} else {
+			slog.Warn("the sandbox token is STATIC and will stop working when it expires; " +
+				"set AGENTS_FORGE_EMAIL and AGENTS_FORGE_PASSWORD to renew")
+		}
+	}
+
+	runner := forge.Routed(cfg.PlatformURL, transport.Static(cfg.PlatformToken))
+	if cfg.ForgeURL != "" {
+		// SANDBOXES ON THE LOCAL FORGE is the intended deployment: it puts the
+		// sandbox on the same machine as the model.
+		runner = forge.Local(cfg.ForgeURL, plane)
+		slog.Info("sandboxes run on a LOCAL forge with its own gatekeeper", "url", cfg.ForgeURL)
+	} else {
+		slog.Warn("sandboxes run on the PLATFORM's forge; set AGENTS_FORGE_URL to run them here")
+	}
+
+	if cfg.Standalone() {
+		store, err := platform.Local(cfg.TicketsURL, plane)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ticket store: %w", err)
+		}
+		slog.Info("STANDALONE: this host's own store holds the tickets and the platform "+
+			"is not consulted", "url", cfg.TicketsURL)
+		return store, runner, nil
+	}
+
 	store, err := platform.Routed(cfg.PlatformURL, transport.Static(cfg.PlatformToken))
 	if err != nil {
 		return nil, nil, fmt.Errorf("platform client: %w", err)
 	}
-
-	// SANDBOXES RUN ON A LOCAL FORGE WHERE ONE IS CONFIGURED, which is the
-	// intended deployment: it puts the sandbox on the same machine as the model.
-	if cfg.ForgeURL != "" {
-		slog.Info("sandboxes run on a LOCAL forge with its own gatekeeper", "url", cfg.ForgeURL)
-		return store, forge.Local(cfg.ForgeURL, transport.Static(cfg.ForgeToken)), nil
-	}
-	slog.Warn("sandboxes run on the PLATFORM's forge; set AGENTS_FORGE_URL to run them on this host")
-	return store, forge.Routed(cfg.PlatformURL, transport.Static(cfg.PlatformToken)), nil
+	slog.Info("CONNECTED: tickets are pulled from the platform", "url", cfg.PlatformURL)
+	return store, runner, nil
 }
 
 // run starts one dispatcher per stage and waits for the context to end.
