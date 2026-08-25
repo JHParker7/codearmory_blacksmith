@@ -2,12 +2,15 @@ package window
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/code-armory-app/blacksmith/internal/agent/review"
 	"github.com/code-armory-app/blacksmith/internal/record"
@@ -51,8 +54,35 @@ type Options struct {
 	Where, Mode string
 }
 
+// ErrNoTerminal means there is no terminal to draw on.
+var ErrNoTerminal = errors.New("the window needs a terminal")
+
 // Open runs the window until the reader quits or the context ends.
+//
+// IT REFUSES RATHER THAN EXITING QUIETLY when there is no terminal.
+//
+// A full-screen program whose input is not a terminal reaches EOF at once and
+// quits CLEANLY — exit zero, having drawn a board into an alternate screen that
+// is torn down on the way out, restoring whatever was there before. From the
+// outside that is indistinguishable from a program that did nothing at all, and
+// it is what a reader sees: three lines of startup log, no board, and a shell
+// prompt back immediately.
+//
+// Reported exactly that way. Saying so costs one check and turns a silent
+// nothing into a sentence naming the cause.
 func Open(ctx context.Context, tickets Tickets, opts Options) error {
+	if !term.IsTerminal(os.Stdin.Fd()) {
+		return fmt.Errorf("%w: stdin is not one, so there is nothing to read keys "+
+			"from and the board would close as soon as it opened. Run it from a "+
+			"terminal, or use `blacksmith service` for the department itself",
+			ErrNoTerminal)
+	}
+	if !term.IsTerminal(os.Stdout.Fd()) {
+		return fmt.Errorf("%w: stdout is not one, so there is nowhere to draw it. "+
+			"Redirecting the window's output cannot work — it is a screen, not a "+
+			"stream", ErrNoTerminal)
+	}
+
 	p := tea.NewProgram(newModel(tickets, opts), tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err := p.Run()
 	return err

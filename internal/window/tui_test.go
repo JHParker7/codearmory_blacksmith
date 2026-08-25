@@ -1258,3 +1258,41 @@ func TestOpeningTheWindowMarksItsFirstReadInFlight(t *testing.T) {
 		t.Fatal("the opening frame does not know it is still reading")
 	}
 }
+
+// A FULL-SCREEN PROGRAM WITH NO TERMINAL MUST REFUSE, not exit quietly.
+//
+// Reported from a real shell: three lines of startup log, no board, and the
+// prompt back immediately with a zero exit. That is what bubbletea does when
+// input is not a terminal — it reaches EOF at once and quits CLEANLY, and the
+// alternate screen is torn down on the way out, restoring whatever was there
+// before. From the outside it is indistinguishable from a program that did
+// nothing at all.
+func TestTheWindowRefusesWhenThereIsNoTerminal(t *testing.T) {
+	// The test binary's stdin is not a terminal, which is precisely the case.
+	err := Open(context.Background(), &board{}, Options{Table: table(), TranscriptDir: "off"})
+	if err == nil {
+		t.Fatal("the window returned no error with no terminal to draw on; a " +
+			"reader sees a silent exit and nothing else")
+	}
+	if !errors.Is(err, ErrNoTerminal) {
+		t.Fatalf("err = %v, want it to be ErrNoTerminal so a caller can tell this "+
+			"from a store that could not be reached", err)
+	}
+	// AND IT MUST SAY WHAT TO DO INSTEAD. Naming the cause without the remedy
+	// leaves the reader where they started.
+	if !strings.Contains(err.Error(), "service") {
+		t.Errorf("err = %v, want it to point at the command that does not need a "+
+			"terminal", err)
+	}
+}
+
+// THE REFUSAL IS NOT A STORE PROBLEM, and must not be reported as one — the two
+// send a reader to opposite places.
+func TestTheTerminalRefusalIsDistinctFromAReadFailure(t *testing.T) {
+	err := Open(context.Background(), &board{err: errors.New("unreachable")},
+		Options{Table: table(), TranscriptDir: "off"})
+	if !errors.Is(err, ErrNoTerminal) {
+		t.Fatalf("err = %v, want the terminal named: it is checked before anything "+
+			"is read, so an unreachable store cannot be the explanation", err)
+	}
+}
