@@ -34,6 +34,24 @@ const (
 	// apart: one is a hand-back, the other is the end of the road.
 	BrokenSpecMarker = "**Stopped: the specification cannot be satisfied.**"
 
+	// ClaimClosedMarker ends the round a claim belongs to.
+	//
+	// WITHOUT IT A RETRY LOSES TO ITSELF. Append-protocol arbitration picks the
+	// OLDEST claim for the role, and a claim comment outlives the attempt that
+	// wrote it — so on the second attempt the oldest claim is the first attempt's,
+	// the claimant reads back a winner that is not the comment it just wrote, and
+	// yields. It then re-claims every poll: the ticket never leaves its queue,
+	// never escalates, and grows a claim comment per tick forever. Measured on the
+	// integration plane: one dev-agent failure, then 30s of silence with three
+	// claims on the ticket and no second attempt.
+	//
+	// Written BEFORE the ticket leaves the working column, and the order matters.
+	// Claim refuses a ticket that is not in the Ready column, so nothing can claim
+	// during that window; close it AFTER the move instead and a claim written in
+	// between would be retroactively closed by it, letting a third host win over a
+	// host that is already working.
+	ClaimClosedMarker = "<!-- blacksmith:claim-closed "
+
 	// ReturnedMarker records work handed back to an earlier stage.
 	ReturnedMarker = "<!-- blacksmith:returned -->"
 

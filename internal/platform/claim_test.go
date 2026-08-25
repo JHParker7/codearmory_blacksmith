@@ -205,6 +205,67 @@ func TestTheFallbackIgnoresAnEarlierStagesClaim(t *testing.T) {
 	}
 }
 
+// THE SECOND ATTEMPT MUST NOT LOSE TO THE FIRST.
+//
+// A claim comment outlives the attempt that wrote it, and the fallback picks the
+// oldest claim for the role — so a retry read back its own dead claim as the
+// winner and yielded. The ticket then sat in its queue growing one claim comment
+// per poll: never worked again, never escalated, and nothing on the board saying
+// why. Measured on the integration plane: one dev-agent failure, then thirty
+// seconds of silence with three claims on the ticket.
+//
+// The test above covers an EARLIER STAGE's claim; this one covers this stage's
+// earlier ATTEMPT, which is a different comment and was the one that stalled.
+func TestTheFallbackDoesNotLoseToThisRolesPreviousAttempt(t *testing.T) {
+	f, store := newFakeStore(t)
+	f.versioned = false
+	st := devStage()
+	tk := f.add(ticket.Ticket{Status: st.Ready})
+	ctx := context.Background()
+
+	// A full first attempt: claim, then the round ends as the ticket goes back.
+	if err := store.Claim(ctx, tk.ID, st, record.Claim{Host: "gpu-1", Role: st.Role}); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	closed, err := record.CloseClaim(st.Role)
+	if err != nil {
+		t.Fatalf("CloseClaim: %v", err)
+	}
+	f.appendComment(tk.ID, "gpu-1", closed)
+	if err := store.MoveTo(ctx, tk.ID, st.Ready); err != nil {
+		t.Fatalf("return the ticket to its queue: %v", err)
+	}
+
+	if err := store.Claim(ctx, tk.ID, st, record.Claim{Host: "gpu-1", Role: st.Role}); err != nil {
+		t.Fatalf("the retry lost to its own previous attempt, so the ticket stalls "+
+			"in its queue forever: %v", err)
+	}
+	got, _ := f.get(tk.ID)
+	if got.Status != st.Working {
+		t.Errorf("the ticket is in %q, want the working column: the second attempt "+
+			"never started", got.Status)
+	}
+}
+
+// A ROUND THAT IS STILL OPEN STILL ARBITRATES. The close is what ends a round,
+// so without one an earlier claim for this role must still win — otherwise a
+// host would take a ticket another host is working right now.
+func TestTheFallbackStillYieldsToAnUnclosedClaimForThisRole(t *testing.T) {
+	f, store := newFakeStore(t)
+	f.versioned = false
+	st := devStage()
+	tk := f.add(ticket.Ticket{Status: st.Ready})
+
+	live, _ := record.Render(record.Claim{Host: "gpu-other", Role: st.Role})
+	f.appendComment(tk.ID, "gpu-other", live)
+
+	err := store.Claim(context.Background(), tk.ID, st, record.Claim{Host: "gpu-1", Role: st.Role})
+	if !transport.Conflict(err) {
+		t.Fatalf("err = %v, want a conflict: gpu-other holds an OPEN claim and two "+
+			"hosts would now work the same ticket", err)
+	}
+}
+
 // BOTH PATHS MUST WRITE THE SAME THING. They differ in whether the write is
 // conditional — arbitration, not what a held ticket looks like — and a ticket
 // claimed on one path and merely moved on the other reads as unheld on a board.

@@ -489,6 +489,7 @@ func (d *Dispatcher) start(ctx context.Context, t ticket.Ticket, done chan<- str
 func (d *Dispatcher) release(ctx context.Context, id string) {
 	releaseCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer stop()
+	d.closeClaim(releaseCtx, id)
 	if err := d.store.MoveTo(releaseCtx, id, d.stage.Ready); err != nil {
 		slog.WarnContext(ctx, "could not release ticket; the next reconcile will",
 			"ticket_id", id, "error", err)
@@ -555,6 +556,16 @@ func (d *Dispatcher) work(ctx context.Context, t ticket.Ticket) {
 	// work to the next column, which is both the hand-over and the thing a person
 	// sees on the board.
 	next := d.Destination(t, status)
+
+	// END THE ROUND BEFORE THE TICKET MOVES. The claim comment this attempt wrote
+	// outlives the attempt, and arbitration picks the oldest claim for the role —
+	// so without this the NEXT attempt reads back a winner that is its own dead
+	// claim, yields, and re-claims every poll forever. See record.ClaimClosedMarker.
+	//
+	// Done for a handler-placed ticket too: the handler has already moved it out
+	// of the working column, so its round is just as over.
+	d.closeClaim(moveCtx, t.ID)
+
 	if next == "" {
 		// The handler placed the ticket. Moving it again would undo that.
 		if span != nil {
@@ -595,6 +606,26 @@ func (d *Dispatcher) work(ctx context.Context, t ticket.Ticket) {
 	// The ticket is now in another stage's queue. Tell everyone rather than
 	// leaving it to be discovered a poll interval later.
 	d.wake.Signal()
+}
+
+// closeClaim ends this role's claim round on a ticket.
+//
+// A FAILURE HERE IS LOUD. The round staying open is not cosmetic: the next
+// attempt will lose arbitration to this dead claim and the ticket stalls in its
+// queue with nothing on the board to explain it — the most expensive shape of
+// failure this pipeline has. The stale-claim window eventually forgives it, 45
+// minutes later.
+func (d *Dispatcher) closeClaim(ctx context.Context, id string) {
+	body, err := record.CloseClaim(d.handler.Role())
+	if err != nil {
+		slog.ErrorContext(ctx, "could not encode the claim close", "error", err)
+		return
+	}
+	if _, err := d.store.AddComment(ctx, id, body); err != nil {
+		slog.ErrorContext(ctx, "could not close the claim; the next attempt on this "+
+			"ticket will lose arbitration to this one and stall until the claim ages out",
+			"ticket_id", id, "role", d.handler.Role(), "error", err)
+	}
 }
 
 // escalation is what a ticket says about itself once the department has given
