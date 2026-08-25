@@ -324,7 +324,7 @@ func (a *Agent) checkScript() string {
 
 // finish records the branch and hands the work on.
 func (a *Agent) finish(ctx context.Context, t ticket.Ticket, s *State, branch string) (workflow.Outcome, string, error) {
-	a.comment(ctx, t, record.PublishBranch(a.role, branch)+"\n\n"+
+	a.comment(ctx, t, record.PublishBranch(a.mode.BranchMarker(), branch)+"\n\n"+
 		fmt.Sprintf("%s\n\nChanged %d file(s) in %d turns.",
 			clip(s.Summary, MaxSummaryRunes), len(s.Staged), s.Iteration))
 	return workflow.OutcomeSuccess,

@@ -27,6 +27,8 @@ import (
 
 	"github.com/code-armory-app/blacksmith/internal/edit"
 	"github.com/code-armory-app/blacksmith/internal/model"
+
+	"github.com/code-armory-app/blacksmith/internal/record"
 )
 
 // Action is the one thing a model turn may request.
@@ -180,6 +182,30 @@ func (m Mode) EditRule() string {
 			"two identical helpers into one, and leave every assertion standing."
 	default:
 		return "Edit the implementation. You may NOT edit *_test.go files."
+	}
+}
+
+// BranchMarker is the marker this stage announces its push with.
+//
+// A MARKER, NOT THE ROLE NAME. The reviewer, the integrator and the resolver all
+// decide whether a ticket has anything to act on by looking for one of the three
+// markers, so a comment headed "dev-agent" publishes a branch that nothing can
+// find. Measured on a clean run: the developer finished in 23 turns, wrote its
+// branch, and the ticket sat in ready_for_review for half an hour because
+// HasBranch answered no. The pipeline dead-ends there — every stage before it
+// succeeds and nothing after it ever starts.
+//
+// Which marker matters as well as that there is one: they name what was pushed,
+// and a route through the pipeline that skipped the developer still has to be
+// readable by whoever reads it next.
+func (m Mode) BranchMarker() string {
+	switch m {
+	case ModeTest, ModeSpecMerge:
+		return record.TestsWrittenMarker
+	case ModeCoverage:
+		return record.CoverageMarker
+	default:
+		return record.BranchMarker
 	}
 }
 
