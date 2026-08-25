@@ -34,8 +34,12 @@ const (
 	ReasonTest       = "test"
 	ReasonBuild      = "build"
 	ReasonTestImport = "test-imports-in-production"
-	ReasonCritical   = "critical-security"
-	ReasonUnknown    = "checks"
+
+	// ReasonTestLiteral is an implementation that satisfies a test by naming the
+	// test's own inputs. See FixtureLiteralScript.
+	ReasonTestLiteral = "implementation-hardcodes-test-inputs"
+	ReasonCritical    = "critical-security"
+	ReasonUnknown     = "checks"
 )
 
 // Bounds for the source quoted beside a failure.
@@ -111,6 +115,7 @@ func Script(o Options) string {
 	// makes every later result meaningless — the thing under test is no longer the
 	// thing that ships.
 	b.WriteString(TestImportScript())
+	b.WriteString(FixtureLiteralScript())
 
 	if o.TestCommand != "" {
 		b.WriteString(TestScript(o.TestCommand))
@@ -223,6 +228,87 @@ if [ -n "$bad" ]; then
 fi
 echo 'no testing packages in production files'
 `, TestImportOffenders(), TestImportAdvice(), Marker, ReasonTestImport)
+}
+
+// FixtureLiteralScript refuses an implementation that passes a test by naming
+// the test's own inputs back to it.
+//
+// THE TEST-FIRST PREMISE HAS A HOLE AND THIS IS IT. "The tests are the
+// specification, so passing them means the work is done" holds only while the
+// implementation cannot enumerate the inputs the tests use. It can. Shipped to
+// v0.1.0 on a real run, having passed every gate:
+//
+//	mux.HandleFunc("/nonexistent", notFoundHandler)
+//	mux.HandleFunc("/api/unknown", notFoundHandler)
+//
+// Those are the two paths TestMainUnknownPathReturns404 probes, and nothing
+// else. Fifty-two tests green, go vet clean, the reviewer called the branch
+// clean and praised its thorough tests — and GET /anything-else still returned
+// the board with 200, which is the exact thing the test was written to prevent.
+//
+// MECHANICAL RATHER THAN A SECOND OPINION, for the reason the import check is:
+// the rule admits no false accusation worth arguing with, and a model asked the
+// same question can be talked out of it by the diff it is reading. A string that
+// appears in an implementation file and in a test file AND NOWHERE ELSE in the
+// implementation is the signature, and it is computable without a model.
+//
+// QUOTED PATHS AND URLS ONLY. Widening it to every shared literal would fire on
+// a status name, a JSON field, an error string — all of which an implementation
+// and its tests are supposed to share. What no honest implementation does is
+// name a route it only knows because a test asked for it.
+//
+// AND THE DOCUMENTATION IS WHAT SEPARATES THE TWO. "Appears once in the
+// implementation and also in a test" is not enough on its own — it fires on
+// "/tickets", which is a real route that happens to be registered once and
+// tested. Caught before this shipped, on the very branch it was written for.
+//
+// The architect writes README.md and ARCHITECTURE.md BEFORE the developer
+// starts, so a route the application genuinely serves is described there
+// already. Measured on that branch: "/tickets" appears four times in each
+// document, "/nonexistent" and "/api/unknown" zero times in either. A path the
+// docs never mention and a test does is a path that exists for the test.
+//
+// NO DOCUMENTS, NO OPINION. Without them there is nothing to discriminate with,
+// and a gate that cannot tell the two apart must not accuse either.
+func FixtureLiteralScript() string {
+	return fmt.Sprintf(`
+echo '--- implementation literals that exist only to satisfy a test ---'
+prod=$(ls *.go 2>/dev/null | grep -v '_test\.go$' || true)
+tests=$(ls *_test.go 2>/dev/null || true)
+docs=$(ls *.md 2>/dev/null || true)
+gamed=""
+if [ -n "$prod" ] && [ -n "$tests" ] && [ -n "$docs" ]; then
+  # Quoted paths from the implementation: "/foo", "/api/bar".
+  for lit in $(grep -ohE '"/[A-Za-z0-9_./-]+"' $prod 2>/dev/null | sort -u); do
+    bare=$(printf '%%s' "$lit" | tr -d '"')
+    # A route the implementation serves for its own sake appears in more than
+    # one production file, or is a prefix another route is built from. The
+    # signature is: exactly one production mention, and a test that names it.
+    inprod=$(grep -oF "$lit" $prod 2>/dev/null | wc -l)
+    intest=$(grep -oF "$lit" $tests 2>/dev/null | wc -l)
+    indocs=$(grep -oF "$bare" $docs 2>/dev/null | wc -l)
+    if [ "$inprod" -eq 1 ] && [ "$intest" -ge 1 ] && [ "$indocs" -eq 0 ] && [ "$bare" != "/" ]; then
+      gamed="$gamed$lit "
+    fi
+  done
+fi
+if [ -n "$gamed" ]; then
+      echo "These literals appear ONCE in the implementation and also in the tests:"
+      echo "  $gamed"
+      echo
+      echo "That is the shape of an implementation written to satisfy a test by naming"
+      echo "the test's own inputs rather than by doing the job. A route registered only"
+      echo "because a test asks for that exact path leaves every OTHER path behaving as"
+      echo "it did before — the test passes and the behaviour it was written to require"
+      echo "is still missing."
+      echo
+      echo "Handle the general case instead: match the pattern, not the example."
+      echo '%s%s'
+      exit 1
+fi
+echo 'no implementation literals exist only to satisfy a test'
+if [ -z "$docs" ]; then echo '(no documentation to check routes against)'; fi
+`, Marker, ReasonTestLiteral)
 }
 
 // StripToolChatter removes output that says nothing about the change.
