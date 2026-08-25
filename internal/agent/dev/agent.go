@@ -93,9 +93,20 @@ func New(gw Gateway, boxes Sandboxes, store Store, class model.Class, repo confi
 	if turns <= 0 {
 		turns = DefaultMaxIterations
 	}
+	// THE BRIEF COMES FROM THE MODE UNLESS ONE IS GIVEN.
+	//
+	// It used to come only from Options, and nothing in the department ever set
+	// it — so every stage this loop serves ran with an EMPTY system message. A
+	// field a caller must remember is a field some caller will forget; deriving
+	// it means the omission cannot be expressed.
+	prompt := o.SystemPrompt
+	if strings.TrimSpace(prompt) == "" {
+		prompt = SystemPromptFor(o.Mode, repo.CoverageTarget)
+	}
+
 	return &Agent{
 		gw: gw, boxes: boxes, store: store, class: class, repo: repo,
-		mode: o.Mode, role: o.Role, prompt: o.SystemPrompt, maxTurns: turns, tools: o.Tools,
+		mode: o.Mode, role: o.Role, prompt: prompt, maxTurns: turns, tools: o.Tools,
 		ref: o.Referee,
 	}
 }
