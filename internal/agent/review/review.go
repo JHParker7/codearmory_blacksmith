@@ -229,6 +229,30 @@ func (a *Agent) Handle(ctx context.Context, t ticket.Ticket) (workflow.Outcome, 
 		return workflow.OutcomeFailed, "", fmt.Errorf("reviewer: %w", err)
 	}
 
+	// A REPLY THAT NEVER ARRIVED IS NOT A MALFORMED ONE, and the two send a
+	// reader to opposite places. "The model did not return usable JSON" points at
+	// the model's formatting; the cause measured here was the serving context
+	// window, which truncated a 8,689-token prompt to 2,050 and left the model
+	// still thinking when it ran out of room. It answered perfectly at a larger
+	// window — the prompt never reached it.
+	//
+	// Named separately so the next occurrence costs a glance rather than an
+	// afternoon.
+	if strings.TrimSpace(res.Content) == "" {
+		why := "the model returned an empty reply"
+		if res.Truncated(MaxReplyTokens) {
+			why = "the model ran out of room before it answered — it stopped on " +
+				"`length`, which usually means the serving context window is too " +
+				"small for this prompt rather than that the reply was wrong"
+		}
+		a.comment(ctx, t, fmt.Sprintf("%s (automated)\n\nReview failed: %s. This branch "+
+			"has NOT been reviewed.\n\nThe prompt was %d characters and it produced %d "+
+			"characters of reasoning and none of answer.%s",
+			Marker, why, len(Request(branch, diff, findings)), len(res.Reasoning),
+			reasoningTail(res.Reasoning)))
+		return workflow.OutcomeFailed, why, fmt.Errorf("reviewer: %s", why)
+	}
+
 	rev, err := ParseReview(res.Content)
 	if err != nil {
 		a.comment(ctx, t, Marker+" (automated)\n\nReview failed: the model did not return usable JSON. "+
@@ -548,4 +572,27 @@ func clip(s string, max int) string {
 		return s
 	}
 	return string(r[:max]) + "…"
+}
+
+// MaxReplyTokens is the ceiling this stage asks for, restated so Truncated can
+// be told about it. See model.ChatResult.Truncated: a ceiling of zero means the
+// caller set none, and only the reported reason counts.
+const MaxReplyTokens = 1500 + model.ThinkingHeadroom
+
+// reasoningTail quotes the end of a thinking model's reasoning when it produced
+// no answer.
+//
+// THE END, NOT THE START. A reply cut off mid-thought is truncated at the end,
+// so that is where the evidence of it is — and reading the last few lines is how
+// a person tells "it was still working" from "it decided nothing".
+func reasoningTail(reasoning string) string {
+	r := strings.TrimSpace(reasoning)
+	if r == "" {
+		return ""
+	}
+	const keep = 600
+	if len(r) > keep {
+		r = "…" + r[len(r)-keep:]
+	}
+	return "\n\nIt was in the middle of:\n\n```\n" + r + "\n```"
 }

@@ -29,9 +29,14 @@ func (s *sandbox) Run(_ context.Context, _ forge.Recorder, spec forge.Spec) (for
 
 type gateway struct {
 	content string
-	err     error
-	req     model.ChatRequest
-	calls   int
+	// result is the WHOLE reply, for tests about its SHAPE rather than its text —
+	// a truncated one, or one that is all reasoning and no answer. Flagged rather
+	// than compared against the zero value, because a ChatResult holds a slice.
+	result    model.ChatResult
+	useResult bool
+	err       error
+	req       model.ChatRequest
+	calls     int
 }
 
 func (g *gateway) Chat(_ context.Context, _ model.Class, req model.ChatRequest) (model.ChatResult, error) {
@@ -39,6 +44,9 @@ func (g *gateway) Chat(_ context.Context, _ model.Class, req model.ChatRequest) 
 	g.req = req
 	if g.err != nil {
 		return model.ChatResult{}, g.err
+	}
+	if g.useResult {
+		return g.result, nil
 	}
 	return model.ChatResult{Content: g.content}, nil
 }
@@ -637,5 +645,96 @@ func TestTheEvidenceScriptQuotesTheBranch(t *testing.T) {
 	a := New(&gateway{}, &sandbox{}, &board{}, model.ClassLarge, repo())
 	if got := a.EvidenceScript("agent/t-42"); !strings.Contains(got, `"agent/t-42"`) {
 		t.Errorf("the branch is not quoted:\n%s", got)
+	}
+}
+
+// A REPLY THAT NEVER ARRIVED IS NOT A MALFORMED ONE.
+//
+// Measured on a live board: the serving context window truncated an 8,689-token
+// prompt to 2,050, so the model was still thinking when it ran out of room and
+// returned nothing. Reported as "the model did not return usable JSON", which
+// points at the model's formatting — the prompt had never reached it. It
+// answered perfectly at a larger window.
+func TestAnEmptyReplyIsNotReportedAsMalformedJSON(t *testing.T) {
+	g := &gateway{useResult: true, result: model.ChatResult{
+		Content: "",
+		// Longer than the tail the note keeps, with distinct ends: a reply cut off
+		// mid-thought is truncated at the END, so that is where the evidence is.
+		Reasoning: "OPENING-OF-THE-THOUGHT. " +
+			strings.Repeat("weighing the handlers and the store against each other. ", 20) +
+			"The extractID function parses digits by hand and does not check for overflow, so",
+		FinishReason: model.FinishLength,
+	}}
+	brd := &board{}
+	a := New(g, &sandbox{res: evidence("diff --git a/store.go b/store.go\n+func New() {}\n", "")}, brd,
+		model.ClassLarge, repo())
+
+	status, detail, err := a.Handle(context.Background(), pushed())
+	if status != workflow.OutcomeFailed {
+		t.Fatalf("status = %q, want failed", status)
+	}
+	if err == nil {
+		t.Fatal("the stage reported no error")
+	}
+	// THE CAUSE, NOT THE SYMPTOM.
+	if strings.Contains(detail, "unparseable") || strings.Contains(detail, "JSON") {
+		t.Errorf("detail = %q — a reply that never arrived was blamed on its "+
+			"formatting", detail)
+	}
+	if !strings.Contains(detail, "ran out of room") {
+		t.Errorf("detail = %q, want the truncation named", detail)
+	}
+
+	said := strings.Join(brd.comments, "\n")
+	if !strings.Contains(said, "context window") {
+		t.Errorf("the ticket does not name the likely cause:\n%s", said)
+	}
+	// THE END OF THE REASONING IS THE EVIDENCE: a reply cut off mid-thought is
+	// truncated at the end, and reading it tells "still working" from "decided
+	// nothing".
+	if !strings.Contains(said, "overflow") {
+		t.Errorf("the ticket does not quote what it was in the middle of:\n%s", said)
+	}
+	if strings.Contains(said, "OPENING-OF-THE-THOUGHT") {
+		t.Errorf("the note quotes the START of the reasoning; a reply cut off "+
+			"mid-thought is truncated at the END, which is where the evidence "+
+			"is:\n%s", said)
+	}
+}
+
+// AN EMPTY REPLY THAT WAS NOT TRUNCATED is a different fault and says so, rather
+// than blaming a context window that was never reached.
+func TestAnEmptyReplyThatStoppedNormallySaysSo(t *testing.T) {
+	g := &gateway{useResult: true, result: model.ChatResult{Content: "", FinishReason: model.FinishStop}}
+	brd := &board{}
+	a := New(g, &sandbox{res: evidence("diff --git a/store.go b/store.go\n+func New() {}\n", "")}, brd,
+		model.ClassLarge, repo())
+
+	_, detail, _ := a.Handle(context.Background(), pushed())
+	if strings.Contains(detail, "ran out of room") {
+		t.Errorf("detail = %q — it stopped normally, so truncation is the wrong "+
+			"explanation", detail)
+	}
+	if !strings.Contains(detail, "empty reply") {
+		t.Errorf("detail = %q, want the empty reply named", detail)
+	}
+}
+
+// AND A REAL REPLY IS STILL PARSED. The new branch must not swallow the ordinary
+// path.
+func TestAUsableReplyIsStillReviewed(t *testing.T) {
+	g := &gateway{useResult: true, result: model.ChatResult{
+		Content: `{"verdict":"clean","summary":"nothing found","findings":[]}`,
+	}}
+	brd := &board{}
+	a := New(g, &sandbox{res: evidence("diff --git a/store.go b/store.go\n+func New() {}\n", "")}, brd,
+		model.ClassLarge, repo())
+
+	status, _, err := a.Handle(context.Background(), pushed())
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if status != workflow.OutcomeSuccess {
+		t.Fatalf("status = %q, want success", status)
 	}
 }
