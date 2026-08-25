@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -437,4 +438,176 @@ func TestRunningWithoutALeaseIsRefused(t *testing.T) {
 	nilbox.AdoptBranch("x")
 	nilbox.AlsoMerge("y")
 	nilbox.Release(context.Background())
+}
+
+// A REAPED LEASE IS RECOVERED FROM, NOT DIED ON.
+//
+// Forge caps idle at 300 seconds and an agent thinks between commands. Measured
+// on this host: a specification author read and wrote for 24 minutes without
+// touching its sandbox, and the first command after that thinking failed the
+// whole ticket — three attempts running — for a container nobody needed to still
+// exist. Nothing in this package depends on sandbox state: a verification pushes
+// the whole staged set, and RunOnBranch resets the tree first.
+func TestACommandSurvivesTheLeaseBeingReaped(t *testing.T) {
+	f, c := newFakeForge(t)
+	sb := acquire(t, f, c)
+
+	f.mu.Lock()
+	first := sb.leaseID
+	f.failNextRun = "conflict: lease is stopped, not ready"
+	f.mu.Unlock()
+
+	res, err := sb.Run(context.Background(), nil, "go test ./...")
+	if err != nil {
+		t.Fatalf("Run: %v — a reaped lease must be replaced, not fatal", err)
+	}
+	if !res.OK() {
+		t.Fatalf("the retried command did not succeed: %+v", res)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if sb.leaseID == first {
+		t.Error("the sandbox kept the dead lease")
+	}
+	if len(f.created) != 2 {
+		t.Errorf("%d leases were created, want a replacement to have been booted", len(f.created))
+	}
+	// THE RETRY GOES TO THE NEW CONTAINER. Re-submitting against the dead lease
+	// id earns the same rejection, so the replacement would buy nothing.
+	last := f.submitted[len(f.submitted)-1]
+	if last.LeaseID != sb.leaseID {
+		t.Errorf("the retry was submitted against lease %q, want the replacement %q",
+			last.LeaseID, sb.leaseID)
+	}
+	if last.LeaseID == first {
+		t.Errorf("the retry reused the dead lease %q", first)
+	}
+	// THE REPLACEMENT IS THE SAME SANDBOX AGAIN, or the retry runs somewhere
+	// subtly different from where the work started.
+	if f.created[1].Image != f.created[0].Image {
+		t.Errorf("the replacement used image %q, want %q",
+			f.created[1].Image, f.created[0].Image)
+	}
+	if f.created[1].Checkout == nil || f.created[0].Checkout == nil ||
+		f.created[1].Checkout.Ref != f.created[0].Checkout.Ref {
+		t.Error("the replacement did not clone the same branch")
+	}
+}
+
+func TestRunOnBranchAlsoSurvivesAReapedLease(t *testing.T) {
+	f, c := newFakeForge(t)
+	sb := acquire(t, f, c)
+
+	f.mu.Lock()
+	f.failNextRun = "conflict: lease is stopped, not ready"
+	f.mu.Unlock()
+
+	if _, err := sb.RunOnBranch(context.Background(), nil, "bs/t1", "go test ./..."); err != nil {
+		t.Fatalf("RunOnBranch: %v — verification is exactly when the lease has been "+
+			"idle longest", err)
+	}
+}
+
+// ONCE, NOT IN A LOOP. If the replacement is reaped just as fast, the problem is
+// not a stale lease and retrying forever would hide it.
+func TestAReplacementThatDiesTooIsReported(t *testing.T) {
+	f, c := newFakeForge(t)
+	sb := acquire(t, f, c)
+
+	f.mu.Lock()
+	f.failEveryRun = "conflict: lease is stopped, not ready"
+	f.mu.Unlock()
+
+	_, err := sb.Run(context.Background(), nil, "go test ./...")
+	if err == nil {
+		t.Fatal("a sandbox that cannot hold a lease at all reported success")
+	}
+	if !strings.Contains(err.Error(), "lease is stopped") {
+		t.Errorf("the error lost the cause: %v", err)
+	}
+
+	// ONE REPLACEMENT, NOT A CASCADE. Each boot costs a container and a clone, so
+	// a sandbox that cannot hold a lease must report that rather than work
+	// through the node's capacity discovering it.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.created) != 2 {
+		t.Errorf("%d leases were created, want the original and exactly one "+
+			"replacement", len(f.created))
+	}
+}
+
+// A FAILURE TO BOOT A REPLACEMENT MUST NAME BOTH HALVES: what went wrong, and
+// why nothing could be done about it.
+func TestWhenNoReplacementCanBeAcquiredBothCausesAreNamed(t *testing.T) {
+	f, c := newFakeForge(t)
+	sb := acquire(t, f, c)
+
+	f.mu.Lock()
+	f.failNextRun = "conflict: lease is stopped, not ready"
+	f.failCreate = errors.New("no capacity on any node")
+	f.mu.Unlock()
+
+	_, err := sb.Run(context.Background(), nil, "go test ./...")
+	if err == nil {
+		t.Fatal("the command reported success with no sandbox to have run in")
+	}
+	if !strings.Contains(err.Error(), "lease is stopped") {
+		t.Errorf("the original failure is missing: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no capacity") {
+		t.Errorf("the reason no replacement was acquired is missing: %v", err)
+	}
+}
+
+// AN ORDINARY FAILURE IS NOT A REAPED LEASE. Rebooting the sandbox on a failing
+// test suite would hide the result and cost a container each time.
+func TestAnOrdinaryFailureDoesNotRebootTheSandbox(t *testing.T) {
+	f, c := newFakeForge(t)
+	sb := acquire(t, f, c)
+
+	f.mu.Lock()
+	f.failNextRun = "conflict: you already hold 6 leases (the limit)"
+	f.mu.Unlock()
+
+	if _, err := sb.Run(context.Background(), nil, "go test ./..."); err == nil {
+		t.Fatal("a conflict that is NOT a dead lease was treated as one")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.created) != 1 {
+		t.Errorf("%d leases created; an unrelated conflict booted a replacement", len(f.created))
+	}
+}
+
+func TestLeaseGoneRecognisesTheStatesForgeReports(t *testing.T) {
+	gone := []string{
+		"conflict: lease is stopped, not ready",
+		"POST /executions: conflict: Lease Is Stopped",
+		"lease is expired",
+		"lease not found",
+		"unknown lease abc123",
+	}
+	for _, m := range gone {
+		if !leaseGone(errors.New(m)) {
+			t.Errorf("leaseGone(%q) = false, want true", m)
+		}
+	}
+	// A 409 IS ALSO HOW FORGE REPORTS THINGS THAT ARE NOT THIS, so the state word
+	// is what has to match — not the status.
+	stays := []string{
+		"conflict: you already hold 6 leases (the limit); release one first",
+		"400 Bad Request: image is required",
+		"context deadline exceeded",
+		"",
+	}
+	for _, m := range stays {
+		if leaseGone(errors.New(m)) {
+			t.Errorf("leaseGone(%q) = true, want false", m)
+		}
+	}
+	if leaseGone(nil) {
+		t.Error("leaseGone(nil) = true")
+	}
 }
