@@ -1296,3 +1296,64 @@ func TestTheTerminalRefusalIsDistinctFromAReadFailure(t *testing.T) {
 			"is read, so an unreachable store cannot be the explanation", err)
 	}
 }
+
+// A CANCEL BEFORE THE FIRST FRAME IS NOT A QUIT.
+//
+// Reported as "it keeps happening": three lines of startup log, no board, and
+// the prompt back on a ZERO exit. The caller treats context.Canceled as "the
+// reader left", which is right once there is a board to leave and wrong when the
+// window never drew — there it exits silently having done nothing, and there is
+// no way to tell a broken window from one never given a chance.
+func TestACancelBeforeTheFirstFrameIsReported(t *testing.T) {
+	never := Model{loading: true} // the opening state: no load has landed
+
+	err := closingError(never, context.Canceled)
+	if err == nil {
+		t.Fatal("a window cancelled before drawing reported nothing at all")
+	}
+	if !errors.Is(err, ErrStartupInterrupted) {
+		t.Fatalf("err = %v, want ErrStartupInterrupted", err)
+	}
+	// AND IT MUST NOT STILL LOOK LIKE A CLEAN QUIT, or the caller goes on
+	// swallowing it.
+	if errors.Is(err, context.Canceled) {
+		t.Error("the error still reads as a cancellation, so it is still silent")
+	}
+	// THE REMEDY, because a loop the reader cannot break is worse than a crash.
+	if !strings.Contains(err.Error(), "reset") {
+		t.Errorf("err = %v, want it to say how to clear the terminal", err)
+	}
+}
+
+// ONCE THERE IS A BOARD, LEAVING IS ORDINARY. Pressing q or ^C on a drawn window
+// must stay silent — reporting it would make every normal exit an error.
+func TestQuittingADrawnWindowIsNotAnError(t *testing.T) {
+	drawn := Model{loading: false} // a load has landed
+
+	if err := closingError(drawn, context.Canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the plain cancellation so the caller stays quiet", err)
+	}
+	if errors.Is(closingError(drawn, context.Canceled), ErrStartupInterrupted) {
+		t.Error("an ordinary quit was reported as a startup interruption")
+	}
+}
+
+// A REAL FAILURE IS PASSED THROUGH UNCHANGED, whatever the model was doing.
+func TestOtherFailuresAreNotRelabelled(t *testing.T) {
+	boom := errors.New("the terminal could not be opened")
+	for _, m := range []Model{{loading: true}, {loading: false}} {
+		if got := closingError(m, boom); !errors.Is(got, boom) {
+			t.Fatalf("closingError = %v, want the original error", got)
+		}
+	}
+}
+
+// A CLEAN ENDING STAYS CLEAN.
+func TestANormalEndingReportsNothing(t *testing.T) {
+	if err := closingError(Model{loading: false}, nil); err != nil {
+		t.Fatalf("closingError = %v, want nil", err)
+	}
+	if err := closingError(Model{loading: true}, nil); err != nil {
+		t.Fatalf("closingError = %v on an unfinished load with no error, want nil", err)
+	}
+}

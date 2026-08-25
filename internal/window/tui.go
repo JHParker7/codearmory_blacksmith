@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
+	"golang.org/x/sys/unix"
 
 	"github.com/code-armory-app/blacksmith/internal/agent/review"
 	"github.com/code-armory-app/blacksmith/internal/record"
@@ -83,9 +84,65 @@ func Open(ctx context.Context, tickets Tickets, opts Options) error {
 			"stream", ErrNoTerminal)
 	}
 
-	p := tea.NewProgram(newModel(tickets, opts), tea.WithAltScreen(), tea.WithContext(ctx))
-	_, err := p.Run()
+	// DISCARD WHATEVER IS ALREADY IN THE INPUT QUEUE.
+	//
+	// This breaks a loop that feeds itself. A window that ended badly can leave
+	// bytes unread on the terminal — among them a ^C, which the line discipline
+	// turns into SIGINT the moment the NEXT window starts. That cancels the
+	// context before a single frame is drawn, the program quits cleanly, the
+	// alternate screen is torn down restoring the screen beneath it, and the
+	// reader sees three lines of startup log and their prompt back. Which leaves
+	// the terminal in the same state, so it happens again.
+	//
+	// Reported as "it keeps happening", and the keeping is the tell: one bad exit
+	// is a bug, a bug that reproduces itself on every subsequent launch is a
+	// feedback loop. Nothing typed before the window opens was meant for it
+	// anyway.
+	_ = flushInput(os.Stdin)
+
+	final, err := tea.NewProgram(newModel(tickets, opts),
+		tea.WithAltScreen(), tea.WithContext(ctx)).Run()
+
+	return closingError(final, err)
+}
+
+// ErrStartupInterrupted means the window was cancelled before its first frame.
+var ErrStartupInterrupted = errors.New("interrupted during startup")
+
+// closingError decides what the window's ending means.
+//
+// A CANCEL BEFORE THE FIRST FRAME IS NOT A QUIT, and must not be reported as
+// one. The caller treats context.Canceled as "the reader pressed q or ^C", which
+// is right once there is a board to leave — and wrong when the window never
+// drew, where it exits ZERO having silently done nothing. That silence is the
+// whole complaint: three lines of startup log and the prompt back, with no way
+// to tell a broken window from one that was never given a chance.
+//
+// Separate from Open so the rule can be tested without a terminal.
+func closingError(final tea.Model, err error) error {
+	m, ok := final.(Model)
+	if ok && m.loading && errors.Is(err, context.Canceled) {
+		return fmt.Errorf("the window was interrupted before it drew anything — a "+
+			"signal arrived during startup. If this repeats, the terminal is "+
+			"delivering input left over from an earlier run; `reset` clears it: %w",
+			ErrStartupInterrupted)
+	}
 	return err
+}
+
+// flushInput discards unread bytes on a terminal, and does nothing anywhere
+// else.
+//
+// IT REPORTS WHAT IT DID even though Open ignores it. A function whose only
+// effect is a syscall it swallows cannot be told from one that does nothing at
+// all — not by a test, and not by anybody reading it later. The caller is still
+// free to carry on: this is hygiene before the real work, and failing to tidy is
+// not a reason to refuse to start.
+func flushInput(f *os.File) error {
+	if !term.IsTerminal(f.Fd()) {
+		return nil // nothing queued anywhere but a terminal
+	}
+	return unix.IoctlSetInt(int(f.Fd()), unix.TCFLSH, unix.TCIFLUSH)
 }
 
 // newModel is the window's opening state.
