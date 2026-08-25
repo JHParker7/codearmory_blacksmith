@@ -244,3 +244,31 @@ def test_an_escalated_ticket_says_why_on_itself(department, plane):
         "the note does not quote what actually went wrong. A note that names the "
         f"symptom and not the cause sends a correct reader to the wrong place:\n{said}"
     )
+
+
+# --- what startup provisions --------------------------------------------------
+
+def test_the_department_provisions_the_columns_it_polls(department, plane):
+    """The columns ARE the routing table, so a missing one silently kills a stage.
+
+    A stage whose Ready column does not exist polls a status the store rejects
+    and quietly never works: running, logging nothing, doing nothing. The store
+    knew how to reconcile a board to the workflow and NOTHING CALLED IT, so on a
+    fresh board the department came up and did nothing at all.
+    """
+    plane.reply = Agent()
+    plane.add_ticket("Define the store", "ready_for_dev", description="Implement it.")
+
+    svc = department()
+    svc.wait_for("stage finished", timeout=60)
+
+    provisioned = plane.rec.column_values()
+    assert provisioned, (
+        "the department polled a board whose columns it never checked; on a fresh "
+        "board every stage would poll a status the store rejects"
+    )
+    for needed in ("ready_for_dev", "in_dev", "ready_for_review", "blocked", "done"):
+        assert needed in provisioned, (
+            f"{needed} was never provisioned, so the stage that polls it works "
+            f"nothing. Provisioned: {sorted(provisioned)}"
+        )

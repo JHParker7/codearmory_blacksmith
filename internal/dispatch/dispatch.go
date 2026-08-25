@@ -349,6 +349,16 @@ func (d *Dispatcher) fill(ctx context.Context, done chan<- string) error {
 		// Dependencies and authorship travel ON the listing, so a ticket that is
 		// not ready costs nothing to reject.
 		if !d.readyOnListing(t) {
+			// A TICKET BEHIND A BLOCKED ONE IS NOT WAITING, IT IS STRANDED, and
+			// rejecting it quietly on every poll is how it stays that way. Ready
+			// needs every blocker to reach done, and ColBlocked is terminal without
+			// being done — so nothing will ever move it, and nothing said so.
+			//
+			// Observed on a real batch: a chain of six lost its second and the
+			// remaining four sat in ready_for_dev indefinitely, looking queued and
+			// consuming nothing. A queue that is not moving reads exactly like a
+			// queue that is busy, which is the worst shape a stall can take.
+			d.sweepDeadlocked(ctx, t)
 			continue
 		}
 		if looked >= MaxHydratePerPoll {
@@ -383,6 +393,52 @@ func (d *Dispatcher) fill(ctx context.Context, done chan<- string) error {
 		inFlight++
 	}
 	return nil
+}
+
+// sweepDeadlocked escalates a ticket whose prerequisite can never finish.
+//
+// THE STAGE HOLDING THE COLUMN IS THE ONE THAT SWEEPS. A stranded ticket sits in
+// exactly one stage's Ready column, so exactly one dispatcher sees it here and
+// there is no second escalation to guard against.
+//
+// IT COSTS NO ATTEMPT. The ticket never ran and never will; charging it one
+// would put a number on the board suggesting the work was tried, and the note
+// below is the whole point — the reader needs the blocker's name, not a count.
+func (d *Dispatcher) sweepDeadlocked(ctx context.Context, t ticket.Ticket) {
+	if !d.stage.RequiresDependencies || t.Status != d.stage.Ready {
+		return
+	}
+	blocker, stranded := workflow.Deadlocked(t)
+	if !stranded {
+		return
+	}
+
+	// Detached, for the same reason every other move out of a queue is: a
+	// cancelled context must not leave the ticket looking merely queued.
+	sweepCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer stop()
+
+	// SAY WHY BEFORE MOVING IT. Written first so a failure to comment cannot
+	// leave the ticket escalated and silent — the reverse order loses the reason
+	// exactly when it is needed.
+	body := fmt.Sprintf("%s\n\n`%s` cannot start: it waits on **%s**, which is "+
+		"blocked and will not finish on its own. Nothing else will move this "+
+		"ticket — unblock %s, or drop the dependency.\n",
+		record.EscalatedMarker, d.handler.Role(),
+		workflow.BlockerName(blocker), workflow.BlockerName(blocker))
+	if _, err := d.store.AddComment(sweepCtx, t.ID, body); err != nil {
+		slog.WarnContext(ctx, "could not record why the ticket is stranded",
+			"ticket_id", t.ID, "blocker", blocker.ID, "error", err)
+		return
+	}
+	if err := d.store.MoveTo(sweepCtx, t.ID, d.stage.Exhausted); err != nil {
+		slog.WarnContext(ctx, "could not escalate a stranded ticket",
+			"ticket_id", t.ID, "blocker", blocker.ID, "error", err)
+		return
+	}
+	slog.InfoContext(ctx, "escalated a ticket stranded behind a blocked prerequisite",
+		"ticket_id", t.ID, "blocker", blocker.ID, "role", d.handler.Role())
+	d.wake.Signal()
 }
 
 // Eligible decides whether this stage may take a ticket sitting in its queue.

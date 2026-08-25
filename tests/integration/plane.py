@@ -30,6 +30,7 @@ class Recorded:
     chats: list[dict] = field(default_factory=list)
     executions: list[dict] = field(default_factory=list)
     leases: list[dict] = field(default_factory=list)
+    columns: list[dict] = field(default_factory=list)
     comments: list[tuple[str, str]] = field(default_factory=list)
     moves: list[tuple[str, str]] = field(default_factory=list)
     requests: list[str] = field(default_factory=list)
@@ -58,6 +59,10 @@ class Recorded:
     def comments_on(self, ticket_id: str) -> list[str]:
         return [body for tid, body in self.comments if tid == ticket_id]
 
+    def column_values(self) -> list[str]:
+        """The status columns the department asked the board to have."""
+        return [c.get("value", "") for c in self.columns]
+
 
 class Plane:
     """The three services blacksmith talks to, on one port each."""
@@ -67,6 +72,7 @@ class Plane:
         self.reply = reply
         self.rec = Recorded()
         self.tickets: dict[str, dict] = {}
+        self.columns: list[dict] = []
         self._lock = threading.Lock()
         self._seq = 0
         self._servers: list[ThreadingHTTPServer] = []
@@ -253,6 +259,14 @@ class Plane:
     # -- tickets -----------------------------------------------------------
 
     def _get_tickets(self, h):
+        if h.path.split("?")[0].endswith("/field-defs"):
+            # A BARE ARRAY of the columns the board already has. Empty to begin
+            # with: a board nobody has set up by hand is exactly the case the
+            # startup provisioning exists for.
+            with self._lock:
+                h._send(200, list(self.columns))
+            return
+
         m = re.match(r"^/tickets/([0-9a-f-]+)$", h.path.split("?")[0])
         if m:
             with self._lock:
@@ -282,6 +296,13 @@ class Plane:
 
     def _post_tickets(self, h):
         body = h._read()
+        if h.path.rstrip("/").endswith("/field-defs"):
+            with self._lock:
+                self.columns.append(body)
+                self.rec.columns.append(body)
+            h._send(201, body)
+            return
+
         m = re.match(r"^/tickets/([0-9a-f-]+)/comments$", h.path)
         if m:
             tid = m.group(1)

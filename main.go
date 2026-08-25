@@ -175,6 +175,22 @@ func runService(ctx context.Context) error {
 		return err
 	}
 
+	// THE COLUMNS ARE THE ROUTING TABLE, so the board is made to match the
+	// workflow before any stage polls it. A stage whose Ready column does not
+	// exist polls a status the store rejects and QUIETLY NEVER WORKS — running,
+	// logging nothing, doing nothing, which is the hardest shape of failure to
+	// notice on a board.
+	//
+	// A WARNING RATHER THAN A REFUSAL. The provisioning is additive and a board
+	// someone set up by hand needs nothing from it, so a store that will not
+	// answer this question is not thereby unable to serve tickets. Failing
+	// startup here would take a working department down over a correct board.
+	if err := store.EnsureColumns(ctx, cfg.BoardID); err != nil {
+		slog.Warn("could not reconcile the board's columns; a stage whose column is "+
+			"missing polls a status the store rejects and works nothing",
+			"board_id", cfg.BoardID, "error", err)
+	}
+
 	assembly, err := department.Assemble(department.Deps{
 		Gateway: gw, Runner: runner, Leases: runner,
 		Store: store, Config: cfg,
