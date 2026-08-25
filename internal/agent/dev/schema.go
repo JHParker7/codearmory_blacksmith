@@ -42,17 +42,26 @@ func Schema() *model.ReplySchema {
 					"required":             []string{"action", "paths"},
 					"additionalProperties": false,
 				},
+				// FLAT HERE TOO, for the reason it is flat in the tool form: an array
+				// of objects each carrying a file is a shape the model closes wrongly
+				// at depth, and the reply schema is the other place it could learn to
+				// build one. The array form is still ACCEPTED — see ActionWriteFiles —
+				// it is simply not what anything asks for.
 				map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"action":  only(ActionWriteFiles),
-						"edits":   EditsSchema(),
-						"summary": map[string]any{"type": "string", "maxLength": MaxSummaryRunes},
-						"type":    map[string]any{"type": "string", "enum": ConventionalTypes},
+						"action":     only(ActionWriteFile),
+						"path":       map[string]any{"type": "string", "maxLength": MaxPathChars},
+						"old_str":    map[string]any{"type": "string", "maxLength": MaxAnchorChars},
+						"decl":       map[string]any{"type": "string", "maxLength": MaxDeclChars},
+						"start_line": map[string]any{"type": "integer", "minimum": 0},
+						"end_line":   map[string]any{"type": "integer", "minimum": 0},
+						"replace":    map[string]any{"type": "string"},
+						"summary":    map[string]any{"type": "string", "maxLength": MaxSummaryRunes},
+						"type":       map[string]any{"type": "string", "enum": ConventionalTypes},
 					},
-					// The three the tool form required. AN EDIT-LESS WRITE IS NOT A
-					// SMALLER EDIT, IT IS A WASTED TURN.
-					"required":             []string{"action", "edits", "summary", "type"},
+					// AN EDIT-LESS WRITE IS NOT A SMALLER EDIT, IT IS A WASTED TURN.
+					"required":             []string{"action", "path", "replace", "summary", "type"},
 					"additionalProperties": false,
 				},
 				map[string]any{
@@ -180,20 +189,37 @@ func Tools(mode Mode) []model.Tool {
 			},
 		},
 		{
-			Name: ActionWriteFiles,
-			Description: "Edit files. " + mode.EditRule() +
-				` ADDRESS AN EDIT BY ITS TEXT: put the exact snippet you are replacing in "old_str" ` +
-				`(it must appear exactly once) and the new text in "replace". To rewrite a whole ` +
-				`function or type, name it in "decl" instead and give the whole declaration in ` +
-				`"replace". Line numbers are a last resort for picking one of several identical ` +
-				"lines. NEVER put the same text in old_str and replace — old_str is what is there " +
-				"now, replace is what it becomes. For a small file you may send the whole new file " +
-				`in "replace" with old_str, decl, start_line and end_line all empty or 0. ` +
-				"What you do not name, you do not change.",
+			Name: ActionWriteFile,
+			Description: "Edit ONE file. " + mode.EditRule() +
+				` Say WHERE in exactly one way: put the exact snippet you are replacing in ` +
+				`"old_str" (it must appear exactly once), OR name a whole function or type in ` +
+				`"decl", OR give "start_line"/"end_line" to pick one of several identical lines. ` +
+				`To write a whole file, give "path" and "replace" and leave the others out. ` +
+				`The new text always goes in "replace". NEVER put the same text in old_str and ` +
+				"replace — old_str is what is there now, replace is what it becomes. " +
+				"What you do not name, you do not change. Call this again for the next file.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"edits":   EditsSchema(),
+					"path": map[string]any{
+						"type": "string", "maxLength": MaxPathChars,
+						"description": "Repository-relative path to edit.",
+					},
+					"old_str": map[string]any{
+						"type": "string", "maxLength": MaxAnchorChars,
+						"description": "A SHORT unique snippet, at most a few lines, copied exactly " +
+							"from the numbered contents. It marks WHERE to change and must appear once.",
+					},
+					"decl": map[string]any{
+						"type": "string", "maxLength": MaxDeclChars,
+						"description": `The declaration to replace whole: "main", "apiTasksHandler", "Store.Add".`,
+					},
+					"start_line": map[string]any{"type": "integer", "minimum": 0},
+					"end_line":   map[string]any{"type": "integer", "minimum": 0},
+					"replace": map[string]any{
+						"type":        "string",
+						"description": "The new text. This is the only place new code goes.",
+					},
 					"summary": map[string]any{"type": "string", "description": "One line describing the change."},
 					"type": map[string]any{
 						"type":        "string",
@@ -201,7 +227,7 @@ func Tools(mode Mode) []model.Tool {
 						"description": "Conventional Commits type for the commit message.",
 					},
 				},
-				"required":             []string{"edits", "summary", "type"},
+				"required":             []string{"path", "replace", "summary", "type"},
 				"additionalProperties": false,
 			},
 		},

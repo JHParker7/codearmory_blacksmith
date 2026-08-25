@@ -66,10 +66,10 @@ func branchFor(t *testing.T, action string) map[string]any {
 // {"action":"write_files"} — 25 refusals of "write_files with no edits" in the
 // first window after the switch, every one schema-valid.
 func TestAnEditlessWriteIsNotExpressible(t *testing.T) {
-	write := branchFor(t, ActionWriteFiles)
-	for _, want := range []string{"action", "edits", "summary", "type"} {
+	write := branchFor(t, ActionWriteFile)
+	for _, want := range []string{"action", "path", "replace", "summary", "type"} {
 		if !slices.Contains(required(t, write), want) {
-			t.Errorf("write_files does not require %q; an empty write is schema-valid", want)
+			t.Errorf("write_file does not require %q; an empty write is schema-valid", want)
 		}
 	}
 	// An action's own branch may not carry another action's fields, or the
@@ -220,25 +220,80 @@ func TestNoEditShapeLetsAQuoteSitBesideItsOwnReplacement(t *testing.T) {
 // THE SAME SHAPE REACHES THE MODEL BOTH WAYS. Two channels describing different
 // shapes is how the last format ended up with a grammar and a tool definition
 // that disagreed.
+//
+// Compared field by field rather than as one object: the tool carries its own
+// descriptions and the grammar carries its own bounds, so the shapes are equal
+// in the thing that matters — which fields exist and what type each is — and
+// deliberately not identical in prose.
 func TestTheToolAndTheGrammarDescribeOneEditShape(t *testing.T) {
-	var write map[string]any
-	for _, tool := range Tools(ModeDevelop) {
-		if tool.Name == ActionWriteFiles {
-			write, _ = tool.Parameters["properties"].(map[string]any)["edits"].(map[string]any)
+	var tool map[string]any
+	for _, tl := range Tools(ModeDevelop) {
+		if tl.Name == ActionWriteFile {
+			tool, _ = tl.Parameters["properties"].(map[string]any)
 		}
 	}
-	if write == nil {
-		t.Fatal("the write tool defines no edits")
+	if tool == nil {
+		t.Fatal("the write tool defines no properties")
 	}
-	if fmt.Sprint(write) != fmt.Sprint(EditsSchema()) {
-		t.Error("the tool's edit shape and the grammar's have drifted apart")
+	grammar := props(t, branchFor(t, ActionWriteFile))
+
+	for _, field := range []string{"path", "old_str", "decl", "start_line", "end_line", "replace", "summary", "type"} {
+		a, inTool := tool[field].(map[string]any)
+		b, inGrammar := grammar[field].(map[string]any)
+		if !inTool || !inGrammar {
+			t.Errorf("%q is in the tool=%v and in the grammar=%v", field, inTool, inGrammar)
+			continue
+		}
+		if a["type"] != b["type"] {
+			t.Errorf("%q is %v in the tool and %v in the grammar", field, a["type"], b["type"])
+		}
+	}
+	// The grammar names the action; the tool is the action, so it must not.
+	if _, ok := tool["action"]; ok {
+		t.Error("the tool carries an \"action\" field, which the tool name already says")
+	}
+}
+
+// ALL THREE WAYS OF SAYING WHERE SURVIVED THE FLATTENING. The array form made
+// them a oneOf over three object shapes, which is what the model could not
+// close; flat, they are optional siblings and exactly one may be given —
+// enforced by edit.Address rather than by the schema. Losing one silently would
+// leave an edit that can only be expressed by rewriting a whole file.
+func TestTheFlatWriteKeepsEveryWayOfSayingWhere(t *testing.T) {
+	var tool map[string]any
+	for _, tl := range Tools(ModeDevelop) {
+		if tl.Name == ActionWriteFile {
+			tool, _ = tl.Parameters["properties"].(map[string]any)
+		}
+	}
+	if tool == nil {
+		t.Fatal("the write tool defines no properties")
+	}
+	for _, want := range []string{"old_str", "decl", "start_line", "end_line"} {
+		if _, ok := tool[want]; !ok {
+			t.Errorf("the flat write cannot say where by %q", want)
+		}
+	}
+	// AND NONE OF THEM IS REQUIRED, because a whole-file write gives none.
+	req := tool["required"]
+	_ = req
+	for _, tl := range Tools(ModeDevelop) {
+		if tl.Name != ActionWriteFile {
+			continue
+		}
+		required, _ := tl.Parameters["required"].([]string)
+		for _, must := range required {
+			if slices.Contains([]string{"old_str", "decl", "start_line", "end_line"}, must) {
+				t.Errorf("%q is required, so a whole-file write is not expressible", must)
+			}
+		}
 	}
 }
 
 // A COMMIT OUTSIDE THE ALLOWLIST IS NOT A STYLE PREFERENCE, it is a commit that
 // will not land: commitlint rejects it on the commit-msg hook.
 func TestTheCommitTypeIsAClosedSetEverywhereItAppears(t *testing.T) {
-	fromGrammar, _ := props(t, branchFor(t, ActionWriteFiles))["type"].(map[string]any)["enum"].([]string)
+	fromGrammar, _ := props(t, branchFor(t, ActionWriteFile))["type"].(map[string]any)["enum"].([]string)
 	if len(fromGrammar) == 0 {
 		t.Fatal("the grammar leaves the commit type open")
 	}

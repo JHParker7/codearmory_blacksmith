@@ -29,11 +29,20 @@ import (
 
 // Edit is one change to one file.
 //
-// THREE WAYS TO SAY WHERE, and the branching is the point. Under a single flat
-// shape the model sent the quoted text identical to its replacement in 39 of 47
-// turns — a copy the sampler could not resist, because the two fields sat side
-// by side and one was a plausible completion of the other. Naming the address by
-// its KIND makes that copy unrepresentable rather than merely discouraged.
+// THREE WAYS TO SAY WHERE. Under a single flat shape the model sent the quoted
+// text identical to its replacement in 39 of 47 turns — a copy the sampler could
+// not resist, because the two fields sat side by side and one was a plausible
+// completion of the other. Naming the address by its KIND cut that sharply.
+//
+// IT NEVER MADE THE COPY UNREPRESENTABLE, and this comment used to claim it did.
+// Even branched, the old_str shape requires old_str AND replace together, so
+// they still sit side by side — 11 of 26 refusals in one later window were the
+// same copy. What actually catches it is the refusal in dev.Apply, which names
+// the cause. Worth being exact about, because the write tool is FLAT again now:
+// the batched form asked for an array of objects each carrying a whole file, and
+// the model closed its brackets wrongly at the end of eight thousand characters
+// of nested quoting. The branching bought less than it appeared to; the nesting
+// cost more.
 type Edit struct {
 	Path string `json:"path"`
 
@@ -106,6 +115,12 @@ func IsTestFile(p string) bool { return strings.HasSuffix(path.Clean(p), "_test.
 
 // Address reports which addressing mode an edit uses, for a caller that has to
 // refuse one that uses none or several.
+//
+// IT WAS NEARLY REDUNDANT AND IS NOT ANY MORE. The write tool used to take an
+// array whose items were a oneOf over three object shapes, so "exactly one way
+// of saying where" was a property of the schema and nothing had to check it.
+// Flattening that tool — see dev.Tools — removed the guarantee along with the
+// nesting the model could not close, so the check lives here now.
 func (e Edit) Address() (mode string, ok bool) {
 	switch {
 	case e.OldStr != "" && e.Decl == "":

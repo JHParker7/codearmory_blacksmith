@@ -55,6 +55,64 @@ type Action struct {
 	Type string `json:"type,omitempty"`
 
 	Reason string `json:"reason,omitempty"`
+
+	// The flat write's edit, carried at the top level rather than inside an
+	// array. Only ActionWriteFile populates these; flatEdit folds them into
+	// Edits so nothing downstream has to know which wire shape arrived.
+	Path      string `json:"path,omitempty"`
+	OldStr    string `json:"old_str,omitempty"`
+	Decl      string `json:"decl,omitempty"`
+	StartLine int    `json:"start_line,omitempty"`
+	EndLine   int    `json:"end_line,omitempty"`
+	Replace   string `json:"replace,omitempty"`
+}
+
+// flatEdit turns a flat write call into the one edit it describes.
+//
+// THE SCHEMA NO LONGER SAYS "EXACTLY ONE ADDRESS", so this does. The array form
+// expressed the three addressing modes as a oneOf, which made an edit naming two
+// of them unrepresentable — and unrepresentable is the whole reason the nesting
+// was there. Flattening bought a shape the model can actually close, at the cost
+// of having to refuse the ambiguity in words. The refusal names the modes it
+// found, because "invalid edit" sends a correct agent to the wrong place.
+func flatEdit(act Action) (edit.Edit, error) {
+	e := edit.Edit{
+		Path:      strings.TrimSpace(act.Path),
+		OldStr:    act.OldStr,
+		Decl:      strings.TrimSpace(act.Decl),
+		StartLine: act.StartLine,
+		EndLine:   act.EndLine,
+		Replace:   act.Replace,
+	}
+	if e.Path == "" {
+		return edit.Edit{}, errors.New(`tool write_file: "path" is required — name the file to edit`)
+	}
+	if _, ok := e.Address(); !ok {
+		return edit.Edit{}, fmt.Errorf(`tool write_file: an edit says WHERE in exactly one `+
+			`way, and this gave %s. Use "old_str" to quote what you are replacing, OR `+
+			`"decl" to name a whole declaration, OR "start_line"/"end_line", OR none of `+
+			`them to write the whole file`, gaveWhich(e))
+	}
+	return e, nil
+}
+
+// gaveWhich names the addressing fields that were actually set, so the refusal
+// can say what to remove rather than only what the rule is.
+func gaveWhich(e edit.Edit) string {
+	var got []string
+	if e.OldStr != "" {
+		got = append(got, `"old_str"`)
+	}
+	if e.Decl != "" {
+		got = append(got, `"decl"`)
+	}
+	if e.StartLine > 0 || e.EndLine > 0 {
+		got = append(got, `"start_line"/"end_line"`)
+	}
+	if len(got) == 0 {
+		return "none of them with a line range that is not whole-file"
+	}
+	return strings.Join(got, " and ")
 }
 
 // EditList is the edits, and it accepts the array EITHER AS AN ARRAY OR AS A
@@ -138,7 +196,16 @@ var ConventionalTypes = []string{
 // The action names. Anything else is refused and fed back as an error, which is
 // more useful to the model than a silent no-op.
 const (
-	ActionReadFiles  = "read_files"
+	ActionReadFiles = "read_files"
+
+	// ActionWriteFile is ONE edit per call, with its address and its text as
+	// TOP-LEVEL arguments. See Tools for why the nesting had to go.
+	ActionWriteFile = "write_file"
+
+	// ActionWriteFiles is the array form. STILL ACCEPTED, NEVER OFFERED: a
+	// backend whose tool calls really are schema-constrained emits it correctly,
+	// and refusing a reply that did what was asked is the failure this package
+	// exists to avoid. It is simply not what the model is asked for.
 	ActionWriteFiles = "write_files"
 
 	// ActionUndoEdit restores a file to what it was before the last edit.
@@ -191,7 +258,7 @@ const (
 // The truncation is answered by the BRIEF instead: an author given ONE unit of
 // work is finished when its first file compiles, so the gate and the job end at
 // the same moment.
-var Actions = []string{ActionReadFiles, ActionWriteFiles, ActionUndoEdit}
+var Actions = []string{ActionReadFiles, ActionWriteFile, ActionWriteFiles, ActionUndoEdit}
 
 // Bounds on what one iteration may move.
 //
@@ -333,6 +400,17 @@ func ActionFromCall(call model.ToolCall, mode Mode) (Action, error) {
 	if err := model.DecodeJSON(args, &act); err != nil {
 		return Action{}, fmt.Errorf("tool %s: arguments are not valid JSON: %w", name, err)
 	}
+
+	// THE FLAT CALL CARRIES ITS EDIT AT THE TOP LEVEL, so it is lifted into the
+	// same one-element list every other path produces. Everything downstream sees
+	// one shape; only the wire differs.
+	if name == ActionWriteFile {
+		one, err := flatEdit(act)
+		if err != nil {
+			return Action{}, err
+		}
+		act.Edits = EditList{one}
+	}
 	// ARGUMENTS MUST NEVER REDEFINE WHICH TOOL WAS CALLED. The name is the one
 	// field the caller already knows, and a model that repeats it wrongly would
 	// otherwise run a different action than the one it selected.
@@ -362,6 +440,16 @@ func ParseAction(raw string) (Action, error) {
 	if !slices.Contains(Actions, act.Action) && act.Action != ActionFinish {
 		return Action{}, fmt.Errorf("unknown action %q; must be one of %s",
 			act.Action, strings.Join(Actions, ", "))
+	}
+
+	// The flat form arrives here too, when the model answers in content rather
+	// than through a tool. Lifted the same way, so both wires produce one shape.
+	if act.Action == ActionWriteFile {
+		one, err := flatEdit(act)
+		if err != nil {
+			return Action{}, err
+		}
+		act.Edits = EditList{one}
 	}
 	return act, nil
 }
