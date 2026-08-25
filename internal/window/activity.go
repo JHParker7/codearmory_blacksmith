@@ -258,6 +258,10 @@ func DescribeAction(r transcript.Record) string {
 		return "pushing a branch"
 	case strings.Contains(d, "--- lint ---"), strings.Contains(d, "HARNESS_GATE"):
 		return "running the checks"
+	case strings.Contains(d, "git ls-files"):
+		return "surveying the repository"
+	case strings.Contains(d, "===FILE "):
+		return "reading files"
 	case strings.Contains(d, "git clone"), strings.Contains(d, "git diff"):
 		return "reading the repository"
 	case r.Tool == "verify":
@@ -266,10 +270,43 @@ func DescribeAction(r transcript.Record) string {
 		return "pipeline: " + clip(d, 48)
 	case r.Tool == "ticket-comment":
 		return "commenting on the ticket"
-	case r.Tool != "":
+	}
+
+	// EVERY LEASED COMMAND CARRIES THE SAME PREFIX — the prelude, then the branch
+	// adoption — so without stripping it the first forty characters of every
+	// action are identical and the row says nothing at all. Measured on a live
+	// run: six consecutive actions all rendered as "sandbox: sh -c set -e mkdir
+	// -p /tmp/.ca…".
+	if rest := commandOf(d); rest != "" {
+		if r.Tool != "" {
+			return r.Tool + ": " + clip(rest, 40)
+		}
+		return clip(rest, 56)
+	}
+	if r.Tool != "" {
 		return r.Tool + ": " + clip(d, 40)
 	}
 	return clip(d, 56)
+}
+
+// commandOf drops the boilerplate every leased command begins with, leaving what
+// the stage actually asked for. Empty when nothing is left, so the caller can
+// fall back rather than render a blank.
+func commandOf(script string) string {
+	var kept []string
+	for _, line := range strings.Split(script, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case t == "", t == "set -e", t == "sh -c set -e":
+		case strings.HasPrefix(t, "mkdir -p"), strings.HasPrefix(t, "cd "),
+			strings.HasPrefix(t, "export "):
+		case strings.HasPrefix(t, "git fetch"), strings.HasPrefix(t, "git checkout"),
+			strings.HasPrefix(t, "git reset"), strings.HasPrefix(t, "git clean"):
+		default:
+			kept = append(kept, t)
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "; "))
 }
 
 // RollUp gives a ticket the activity of its descendants when it has none of its
