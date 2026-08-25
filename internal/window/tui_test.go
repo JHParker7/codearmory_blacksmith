@@ -1130,3 +1130,131 @@ func TestTheLoadCarriesTheReasoning(t *testing.T) {
 		t.Fatal("the load did not carry the reasoning for a ticket on the board")
 	}
 }
+
+// ONE READ AT A TIME.
+//
+// The tick fires every two seconds whatever the store is doing, and a read is
+// given twenty. Against a slow or unreachable store that stacked ten reads
+// deep — each holding a listing and a request per row — and kept doing it for
+// as long as the window was open. The goroutine dump from a wedged window was
+// full of HTTP read loops for exactly this reason.
+//
+// Asserted on whether a read was STARTED rather than on the returned command:
+// running a bare tick command actually waits the refresh interval, so counting
+// commands here would sleep rather than test.
+func TestATickDoesNotStackReadsOnASlowStore(t *testing.T) {
+	b := &board{tickets: []ticket.Ticket{tk("a", "", workflow.ColInDev, 5)}}
+	m := model(b)
+
+	m, cmd := apply(m, tickMsg(time.Now()))
+	if cmd == nil {
+		t.Fatal("the first tick started nothing")
+	}
+	if !m.inFlight {
+		t.Fatal("the first tick did not mark a read in flight")
+	}
+
+	// Every tick while it is outstanding still has to schedule the next one, or
+	// the board never recovers once the store comes back.
+	before := b.calls
+	for i := 0; i < 10; i++ {
+		var c tea.Cmd
+		m, c = apply(m, tickMsg(time.Now()))
+		if c == nil {
+			t.Fatalf("tick %d stopped the refresh loop; the board would freeze", i)
+		}
+	}
+	if b.calls != before {
+		t.Fatalf("%d further reads were started while one was outstanding",
+			b.calls-before)
+	}
+}
+
+// AND THE NEXT TICK READS AGAIN once the outstanding one reports, or the board
+// stops refreshing after a single slow read.
+func TestReadsResumeOnceTheOutstandingOneReports(t *testing.T) {
+	b := &board{tickets: []ticket.Ticket{tk("a", "", workflow.ColInDev, 5)}}
+	m := model(b)
+
+	m, _ = apply(m, tickMsg(time.Now()))
+	m = loadInto(t, m) // the read reports
+	if m.inFlight {
+		t.Fatal("a completed read left the window believing one was outstanding")
+	}
+
+	m, cmd := apply(m, tickMsg(time.Now()))
+	if !m.inFlight {
+		t.Fatal("the tick after a completed read started no new one")
+	}
+	// A batch of two: the read and the next tick. Cheap to count, because
+	// running a batch yields its children rather than executing them.
+	if n := commandsIn(cmd); n != 2 {
+		t.Fatalf("the tick ran %d commands, want the read and the next tick", n)
+	}
+}
+
+// A FAILED READ ALSO CLEARS IT. Otherwise one unreachable moment stops the
+// window refreshing for as long as it stays open — the exact failure the
+// stale-board banner exists to ride out.
+func TestAFailedReadDoesNotWedgeTheRefresh(t *testing.T) {
+	b := &board{err: errors.New("the store could not be reached")}
+	m := model(b)
+
+	m, _ = apply(m, tickMsg(time.Now()))
+	m = loadInto(t, m)
+	if m.inFlight {
+		t.Fatal("a failed read left the window believing one was outstanding")
+	}
+
+	m, _ = apply(m, tickMsg(time.Now()))
+	if !m.inFlight {
+		t.Fatal("the window stopped reading after one failure")
+	}
+}
+
+// r IS NOT A WAY ROUND THE GUARD either: leaning on it during a slow read would
+// stack exactly what the tick no longer does.
+func TestRefreshOnDemandRespectsAnOutstandingRead(t *testing.T) {
+	b := &board{tickets: []ticket.Ticket{tk("a", "", workflow.ColInDev, 5)}}
+	m := model(b)
+
+	m, _ = apply(m, tickMsg(time.Now()))
+	before := b.calls
+	for i := 0; i < 5; i++ {
+		var cmd tea.Cmd
+		m, cmd = apply(m, key("r"))
+		// RUN what r returned. apply only collects commands, so asserting on the
+		// store without this passes whether or not r started a read.
+		if cmd != nil {
+			cmd()
+		}
+	}
+	if b.calls != before {
+		t.Fatalf("r started %d reads while one was outstanding", b.calls-before)
+	}
+}
+
+// THE FIRST FRAME COUNTS AS A READ. Init cannot mark it — it has a value
+// receiver — so Open builds the model with it already set, or the first tick
+// doubles up on the opening read.
+func TestOpeningTheWindowMarksItsFirstReadInFlight(t *testing.T) {
+	b := &board{}
+	// Built the way Open builds it, so the two cannot drift.
+	m := newModel(b, Options{Table: table(), TranscriptDir: "off"})
+
+	if !m.inFlight {
+		t.Fatal("the opening read is not marked in flight, so the first tick " +
+			"doubles up on it")
+	}
+	before := b.calls
+	m, cmd := apply(m, tickMsg(time.Now()))
+	if cmd != nil {
+		cmd()
+	}
+	if b.calls != before {
+		t.Fatal("the first tick read again while the opening read was outstanding")
+	}
+	if !m.loading {
+		t.Fatal("the opening frame does not know it is still reading")
+	}
+}

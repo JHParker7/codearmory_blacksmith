@@ -53,10 +53,19 @@ type Options struct {
 
 // Open runs the window until the reader quits or the context ends.
 func Open(ctx context.Context, tickets Tickets, opts Options) error {
-	m := Model{tickets: tickets, opts: opts, loading: true}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
+	p := tea.NewProgram(newModel(tickets, opts), tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err := p.Run()
 	return err
+}
+
+// newModel is the window's opening state.
+//
+// SEPARATE FROM Open SO IT CAN BE TESTED. The opening read counts as a read in
+// flight and Init cannot say so — it has a value receiver and returns only
+// commands — so it has to be set here, and a window built without it doubles up
+// on its own first read.
+func newModel(tickets Tickets, opts Options) Model {
+	return Model{tickets: tickets, opts: opts, loading: true, inFlight: true}
 }
 
 // mode is which screen the window is showing.
@@ -109,12 +118,14 @@ type Model struct {
 	body  string
 
 	showFinished bool
-	err          error
-	note         string
-	loading      bool
-	lastLoad     time.Time
-	width        int
-	height       int
+	// inFlight is whether a read is already running. See Update's tick.
+	inFlight bool
+	err      error
+	note     string
+	loading  bool
+	lastLoad time.Time
+	width    int
+	height   int
 }
 
 type loadedMsg struct {
@@ -198,7 +209,11 @@ func (m Model) file(title, body string) tea.Cmd {
 	}
 }
 
-func (m Model) Init() tea.Cmd { return tea.Batch(m.load(), tick()) }
+func (m Model) Init() tea.Cmd {
+	// Init cannot mark the read in flight — it has a value receiver and returns
+	// only commands — so the model is constructed with it already set. See Open.
+	return tea.Batch(m.load(), tick())
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -210,6 +225,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onKey(msg)
 
 	case tickMsg:
+		// ONE READ AT A TIME. The tick fires every two seconds whatever the store
+		// is doing, and a read is given twenty — so against a slow or unreachable
+		// store the old behaviour stacked ten reads deep, each holding a listing
+		// and a request per row, and kept doing it for as long as the window was
+		// open. Skipping a tick costs two seconds of staleness; not skipping it
+		// costs connections that are never coming back.
+		if m.inFlight {
+			return m, tick()
+		}
+		m.inFlight = true
 		return m, tea.Batch(m.load(), tick())
 
 	case noteMsg:
@@ -217,7 +242,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.load()
 
 	case loadedMsg:
-		m.loading = false
+		m.loading, m.inFlight = false, false
 		// A FAILED RELOAD KEEPS THE LAST BOARD ON SCREEN. Blanking it would take
 		// away the only information the reader has at the moment the store became
 		// unreachable — which is exactly when they are looking.
@@ -299,6 +324,10 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.board = Rows(m.full, m.opts.Table, m.showFinished)
 		m.clampSelection()
 	case "r":
+		if m.inFlight {
+			return m, nil
+		}
+		m.inFlight = true
 		return m, m.load()
 	case "/":
 		m.asking, m.ask, m.note = true, "", ""
