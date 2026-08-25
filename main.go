@@ -29,6 +29,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/forge"
 	"github.com/code-armory-app/blacksmith/internal/model"
 	"github.com/code-armory-app/blacksmith/internal/platform"
+	"github.com/code-armory-app/blacksmith/internal/telemetry"
 	"github.com/code-armory-app/blacksmith/internal/transcript"
 	"github.com/code-armory-app/blacksmith/internal/transport"
 	"github.com/code-armory-app/blacksmith/internal/wake"
@@ -151,6 +152,51 @@ func runService(ctx context.Context) error {
 		slog.Warn("transcript capture DISABLED; runs will produce no training data")
 	}
 
+	// COUNTERS COME OFF THE TRANSCRIPT, not from call sites sprinkled through the
+	// agents. Everything worth counting — a turn's latency, an action, a refusal,
+	// an outcome — already passes through the recorder, so one attachment covers
+	// all four and no stage has to remember to instrument itself.
+	//
+	// GATED ON A COLLECTOR ACTUALLY BEING CONFIGURED. The OTLP exporter defaults
+	// to localhost and retries, so building one unconditionally on a host with no
+	// collector buys a stream of connection errors and nothing else.
+	//
+	// NEVER FATAL. A host that cannot reach a collector should still do the work;
+	// refusing to start would make telemetry a dependency of the thing it only
+	// observes.
+	var metrics *telemetry.Metrics
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" ||
+		os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") != "" {
+		m, err := telemetry.New(ctx, "blacksmith")
+		if err != nil {
+			slog.Warn("metrics unavailable; the department runs uninstrumented", "error", err)
+		} else {
+			metrics = m
+			recorder = recorder.WithMetrics(m)
+			defer func() {
+				shutCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer stop()
+				if err := m.Shutdown(shutCtx); err != nil {
+					slog.Warn("metrics did not flush on the way out", "error", err)
+				}
+			}()
+			slog.Info("metrics exporting over OTLP", "service", "blacksmith")
+		}
+	} else {
+		slog.Info("metrics DISABLED; set OTEL_EXPORTER_OTLP_ENDPOINT to export them")
+	}
+
+	// A CORPUS WITH HOLES IN IT IS THE ONE FAILURE THIS PROCESS CANNOT UNDO.
+	// Transcripts are the product, a sink failure is deliberately not fatal to the
+	// task, and the count is the only thing that distinguishes a complete run from
+	// one that quietly lost records.
+	defer func() {
+		if n := recorder.Dropped(); n > 0 {
+			slog.Error("the transcript corpus has holes in it: records were lost and "+
+				"cannot be recovered after the fact", "dropped", n, "dir", cfg.TranscriptDir)
+		}
+	}()
+
 	gw := model.NewGateway(cfg.Host, cfg.Classes)
 	gw.SetRecorder(recorder)
 	for _, class := range cfg.Configured() {
@@ -191,10 +237,46 @@ func runService(ctx context.Context) error {
 			"board_id", cfg.BoardID, "error", err)
 	}
 
-	assembly, err := department.Assemble(department.Deps{
+	// THE DEPARTMENT DECLARES ITS SANDBOX SIZING rather than trusting whatever
+	// the forge happens to have. Forge's seeded classes are sized for containers
+	// and this plane runs microVMs, and the failure when they disagree is the bad
+	// kind: a compile is OOM-killed partway through, which surfaces as a TEST
+	// FAILURE the agent then tries to fix in the code — burning its whole
+	// iteration budget on a problem that is not in the repository at all.
+	//
+	// INSURANCE RATHER THAN A REPAIR: the class was correct on the live forge
+	// when this was written. It earns its place because the event it insures
+	// against has happened — applying deploy/k8s/forge-local.yaml resets the live
+	// deployment to whatever the manifest says, and has wiped runtime
+	// configuration before.
+	if err := runner.EnsureRunnerClass(ctx, forge.RunnerClass{
+		Name:          cfg.Repo.RunnerClass,
+		MemoryMB:      int64(cfg.DevMemoryMB),
+		CPUMillicores: int64(cfg.DevCPUMillicores),
+		PidsLimit:     config.DefaultDevPidsLimit,
+		DiskGB:        config.DefaultDevDiskGB,
+		Enabled:       true,
+	}); err != nil {
+		slog.Warn("could not declare the developer's runner class; the forge's own "+
+			"sizing applies, and a container-sized guest OOMs mid-compile in a way "+
+			"that reads as a test failure",
+			"class", cfg.Repo.RunnerClass, "error", err)
+	}
+
+	// THE TYPED NIL IS THE TRAP HERE. A nil *telemetry.Metrics assigned to an
+	// interface field is not a nil interface, so every guard downstream reading
+	// "counters == nil" would be wrong. Both sides happen to defend against it —
+	// the methods return early on a nil receiver — but relying on that makes a
+	// correct-by-accident wiring, so nothing is attached unless it exists.
+	deps := department.Deps{
 		Gateway: gw, Runner: runner, Leases: runner,
 		Store: store, Config: cfg,
-	})
+	}
+	if metrics != nil {
+		deps.Counters = metrics
+	}
+
+	assembly, err := department.Assemble(deps)
 	if err != nil {
 		return err
 	}

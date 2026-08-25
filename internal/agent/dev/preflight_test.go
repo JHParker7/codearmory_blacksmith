@@ -21,6 +21,12 @@ type judge struct {
 	verdict *referee.Verdict
 	asked   int
 	tests   map[string]string
+
+	// The later half: what Judge was asked, and what it answered.
+	judgement *referee.Verdict
+	judged    int
+	read      map[string]string
+	out       string
 }
 
 func (j *judge) Preflight(_ context.Context, _ *transcript.Recorder, _ ticket.Ticket,
@@ -30,7 +36,17 @@ func (j *judge) Preflight(_ context.Context, _ *transcript.Recorder, _ ticket.Ti
 	return j.verdict
 }
 
-func devWithJudge(g *gw, b *box, brd *board, j Preflighter) *Agent {
+// Judge is the later half of the second opinion. Recorded the same way, so a
+// test can assert on which of the two was asked and with what.
+func (j *judge) Judge(_ context.Context, _ *transcript.Recorder, _ ticket.Ticket,
+	read map[string]string, out string) *referee.Verdict {
+	j.judged++
+	j.read = read
+	j.out = out
+	return j.judgement
+}
+
+func devWithJudge(g *gw, b *box, brd *board, j Referee) *Agent {
 	a := devAgent(g, b, brd, Options{})
 	a.ref = j
 	return a

@@ -133,6 +133,10 @@ type State struct {
 	// built for.
 	FailedVerifications int
 
+	// RefereeAsked records that the second opinion has been sought this attempt,
+	// so it is sought once. See consultReferee.
+	RefereeAsked bool
+
 	// ParseFails counts consecutive replies that were not valid actions, and
 	// Refunded counts turns given back for reads.
 	ParseFails int

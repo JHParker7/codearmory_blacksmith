@@ -62,16 +62,31 @@ type Agent struct {
 	// ref judges whether a specification can be satisfied at all. NIL IS A VALID
 	// CONFIGURATION — a host with no second opinion still develops, it just does
 	// not get the preflight — so every use is guarded rather than assumed.
-	ref Preflighter
+	ref Referee
 }
 
-// Preflighter reads the tests and says whether they can be satisfied.
+// Referee is the second opinion, in both the places it is worth having one.
+//
+// TWO QUESTIONS, ASKED AT DIFFERENT TIMES. Preflight reads the tests alone and
+// asks whether any implementation could satisfy them — before a turn is spent.
+// It can only catch what is visible in the tests by themselves.
+//
+// Judge is asked LATER, with the failing output and both sides in front of it,
+// and it catches what preflight cannot: the case this package exists for is a
+// test that builds its own local value and calls code reading a package-level
+// one. That compiles, nothing panics, and the assertions simply fail against
+// state the code cannot reach — there is no pattern to match, only a judgement
+// about two files read together. Measured: 25 verification runs spent on one
+// such specification.
 //
 // An interface rather than the concrete referee so this package does not depend
 // on it, and so a test can supply a verdict without a model.
-type Preflighter interface {
+type Referee interface {
 	Preflight(ctx context.Context, rec *transcript.Recorder, t ticket.Ticket,
 		tests map[string]string) *referee.Verdict
+
+	Judge(ctx context.Context, rec *transcript.Recorder, t ticket.Ticket,
+		read map[string]string, out string) *referee.Verdict
 }
 
 // Options configure one stage built on this loop.
@@ -83,8 +98,9 @@ type Options struct {
 	Tools        bool
 
 	// Referee judges an unsatisfiable specification before the developer spends
-	// its budget proving it. Optional.
-	Referee Preflighter
+	// its budget proving it, and again once it has failed enough times to be
+	// worth a second opinion. Optional.
+	Referee Referee
 }
 
 // New builds a stage.
@@ -207,6 +223,7 @@ func (a *Agent) loop(
 		// that ran out — it is one that could never have succeeded, and saying so
 		// sends the ticket to the agent that can fix it rather than to a person
 		// with "ran to 200 turns".
+		a.consultReferee(ctx, t, s)
 		if outcome, detail, done := a.endOnBrokenSpec(ctx, t, s); done {
 			return outcome, detail, nil
 		}
@@ -428,6 +445,56 @@ func (a *Agent) preflight(
 		return a.endOnBrokenSpec(ctx, t, s)
 	}
 	return "", "", false
+}
+
+// RefereeAfterFailures is how many red verifications an attempt takes before the
+// referee is asked whose fault they are.
+//
+// THREE, because the question needs evidence and the first failure is not
+// evidence of anything: test-first work is RED BY DESIGN at the start, so asking
+// after one would put the referee on every ticket at its most misleading moment.
+// By three the developer has tried and failed to move it, which is the shape the
+// referee can actually read.
+//
+// It is also the number the deterministic matcher has had its chances at. The
+// certain cases — tests that will not parse, an undefined symbol on its own —
+// are decided without an opinion, and what is left by three is the ambiguous
+// middle this exists for.
+const RefereeAfterFailures = 3
+
+// consultReferee asks whose fault the failures are, once there have been enough
+// of them to be worth asking about.
+//
+// ONCE PER ATTEMPT. The verdict is a judgement about the specification, and the
+// specification does not change while the developer works — so asking again buys
+// the same answer at the price of another large-model call, and a sampler's bad
+// day gets a second chance to send a healthy specification back.
+//
+// IT DEFERS TO THE DETERMINISTIC ROUTE. If the matcher has already decided the
+// specification is broken there is nothing to arbitrate, and this does not run.
+//
+// The verdict is written into the SAME field the matcher sets, so everything
+// downstream — the bounded hand-backs, the note that quotes the evidence, the
+// stop for a person — is the one path rather than a second one that has to be
+// kept in step with it.
+func (a *Agent) consultReferee(ctx context.Context, t ticket.Ticket, s *State) {
+	if a.ref == nil || a.mode != ModeDevelop {
+		return
+	}
+	if s.SpecBroken != "" || s.RefereeAsked {
+		return
+	}
+	if s.FailedVerifications < RefereeAfterFailures {
+		return
+	}
+	// Marked before the call, not after: a call that fails is still a call spent,
+	// and retrying it every iteration is how one unavailable referee becomes a
+	// hundred requests.
+	s.RefereeAsked = true
+
+	if v := a.ref.Judge(ctx, recorderFrom(ctx), t, s.Read, s.LastTest); v.Blames(referee.OwnerSpec) {
+		s.SpecBroken = v.Reason
+	}
 }
 
 // Brief is the system prompt this stage runs under.
