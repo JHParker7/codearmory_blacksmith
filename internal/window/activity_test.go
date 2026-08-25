@@ -282,6 +282,55 @@ func TestDescribeActionPrefersTheShapeOverTheToolName(t *testing.T) {
 	}
 }
 
+// EVERY LEASED COMMAND CARRIES THE SAME PREFIX, so without stripping it the
+// first forty characters of every action are identical and the row says nothing.
+//
+// Taken verbatim from a live run, where six consecutive actions all rendered as
+// "sandbox: sh -c set -e mkdir -p /tmp/.ca…".
+func TestDescribeActionLooksPastTheLeasedBoilerplate(t *testing.T) {
+	real := "sh -c set -e\nmkdir -p /tmp/.cache\n" +
+		"git fetch -q origin 'agent/53b12774' 2>/dev/null && " +
+		"git checkout -q -B 'agent/53b12774' FETCH_HEAD 2>/dev/null || true\n" +
+		"go build ./...\n"
+
+	got := DescribeAction(transcript.Record{Tool: "sandbox", Detail: real})
+	if strings.Contains(got, "mkdir") || strings.Contains(got, "set -e") {
+		t.Fatalf("DescribeAction = %q — the boilerplate is all the reader sees", got)
+	}
+	if !strings.Contains(got, "go build") {
+		t.Fatalf("DescribeAction = %q, want the command the stage actually ran", got)
+	}
+}
+
+// THE RECOGNISED SHAPES STILL WIN over the stripped remainder, because "pushing
+// a branch" is worth more than the script that does it.
+func TestDescribeActionNamesTheStagesOwnWork(t *testing.T) {
+	cases := []struct{ name, detail, want string }{
+		{"survey", "sh -c set -e\nmkdir -p /tmp/.cache\ngit ls-files | head -n 400\n",
+			"surveying the repository"},
+		{"read", "sh -c set -e\nmkdir -p /tmp/.cache\nprintf '%s' '===FILE store.go'\n",
+			"reading files"},
+		{"push", "sh -c set -e\nmkdir -p /tmp/.cache\ngit push origin HEAD\n",
+			"pushing a branch"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := DescribeAction(transcript.Record{Tool: "sandbox", Detail: c.detail}); got != c.want {
+				t.Fatalf("DescribeAction = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// A COMMAND THAT IS NOTHING BUT BOILERPLATE still has to render as something —
+// the branch adoption on its own is a real command a stage runs.
+func TestDescribeActionWithNothingButBoilerplate(t *testing.T) {
+	only := "sh -c set -e\nmkdir -p /tmp/.cache\ngit fetch -q origin 'agent/t1'\n"
+	if got := DescribeAction(transcript.Record{Tool: "sandbox", Detail: only}); got == "" {
+		t.Fatal("DescribeAction returned nothing; the row would show a blank state")
+	}
+}
+
 func TestDescribeActionClipsLongDetail(t *testing.T) {
 	r := transcript.Record{Tool: "edit", Detail: strings.Repeat("a", 200)}
 	got := DescribeAction(r)
