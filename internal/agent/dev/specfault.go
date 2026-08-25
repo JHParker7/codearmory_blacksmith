@@ -231,18 +231,37 @@ func RedIsExpected(out string) bool { return len(NonUndefinedCompileErrors(out))
 // reported per directory rather than per line — hence no position.
 var goPackageConflict = regexp.MustCompile(`found packages (\w+) \(([\w.-]+\.go)\) and (\w+) \(([\w.-]+\.go)\)`)
 
-// PackageConflictFiles names the two files that disagree about the package name.
+// PackageConflictFiles names the two files that disagree about the package name,
+// AND ONLY WHEN THE DEVELOPER CANNOT FIX IT.
 //
-// TWO PACKAGES IN ONE DIRECTORY is the specification's to fix and nobody else's:
-// the name is set by a test file this stage may not edit, so every
-// implementation file beside it must match a declaration the developer cannot
-// change. There is no edit that compiles.
+// Two packages in one directory is the specification's to fix when the files
+// that disagree are both tests: the name is set by a file this stage may not
+// edit, so there is no edit that compiles.
+//
+// IT IS THE DEVELOPER'S WHENEVER ITS OWN FILE IS THE ODD ONE OUT, and this
+// blamed the author for exactly that. Read off a live hand-back:
+//
+//	found packages main (board_test.go) and store (store.go)
+//
+// The tests said "main" and the developer's own store.go said "store" — a file
+// it had written one turn earlier and could have corrected in one edit. The
+// specification was sound, and a repair attempt was spent telling its author to
+// fix a file it does not own.
+//
+// The rule is the one CompileErrorFiles already applies: a fault is the
+// specification's only when EVERY file implicated in it is a test.
 func PackageConflictFiles(out string) []string {
 	m := goPackageConflict.FindStringSubmatch(out)
 	if m == nil {
 		return nil
 	}
-	return []string{m[2], m[4]}
+	files := []string{m[2], m[4]}
+	for _, f := range files {
+		if !edit.IsTestFile(f) {
+			return nil
+		}
+	}
+	return files
 }
 
 // goStackFrame matches a repo file position in a panic trace.

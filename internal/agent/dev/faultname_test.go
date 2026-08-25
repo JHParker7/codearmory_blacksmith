@@ -22,7 +22,7 @@ panic: pattern "/tickets" (registered at /workspace/handlers_test.go:21) conflic
 	compileOut := "./store_test.go:12:9: declared and not used: got\n" +
 		"./store_test.go:20:2: missing return"
 
-	clashOut := "found packages main (store.go) and demo (store_test.go) in /workspace"
+	clashOut := "found packages main (board_test.go) and demo (store_test.go) in /workspace"
 
 	for name, tc := range map[string]struct {
 		out  string
