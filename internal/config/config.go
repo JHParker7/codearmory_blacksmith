@@ -58,6 +58,15 @@ const (
 	DefaultDevPidsLimit = 512
 	DefaultDevDiskGB    = 40
 
+	// DefaultDevTmpfsMB sizes /tmp, and /tmp is where EVERYTHING the toolchain
+	// writes lives: SandboxEnv puts HOME, GOPATH, the Go build cache and the
+	// module cache all under it. A class that declares no tmpfs at all is
+	// rejected by forge — "tmpfs_mb must be at least 16" — which is the only
+	// reason an earlier version of this declaration did not SHRINK the working
+	// class to nothing on startup. Set to what the live class was measured
+	// carrying, rather than to a guess.
+	DefaultDevTmpfsMB = 2048
+
 	// DefaultIntegrationBranch is where reviewed work lands. NOT the base branch:
 	// the base is what agents cut from and what stays known-good, and merging into
 	// it directly would mean a broken integration takes the branch every
