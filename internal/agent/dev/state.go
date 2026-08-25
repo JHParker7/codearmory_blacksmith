@@ -165,6 +165,19 @@ type State struct {
 	// SpecBroken names the test files judged unsatisfiable, or "" while they are
 	// not. See JudgeSpec.
 	SpecBroken string
+
+	// SpecFault is WHY those files were judged unsatisfiable, in the author's
+	// terms: a compile error, a panic in the fixture, two packages in one
+	// directory.
+	//
+	// THE HAND-BACK USED TO SAY "does not compile" WHATEVER THE ROUTE WAS. On a
+	// live run the fault was a duplicate route registration — the tests compiled
+	// perfectly and panicked — and the author was twice told to fix a compile
+	// error that did not exist. It spent both repairs and the ticket blocked with
+	// the real fault never named. A message that names the symptom and not the
+	// cause sends a correct agent to the wrong place, which is the most expensive
+	// failure this repository has.
+	SpecFault string
 	// SpecBrokenTries counts verifications that came back with test-file-only
 	// compile faults AFTER the developer changed something. SpecBrokenWrites is
 	// the write count at the last advance, so repeat verifications with no edit

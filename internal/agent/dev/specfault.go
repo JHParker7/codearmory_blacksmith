@@ -322,6 +322,8 @@ func (s *State) JudgeSpec(out string, mode Mode) {
 				(s.SpecBrokenTries >= MinSpecBrokenTries ||
 					s.TestEditRefusals >= MaxTestEditRefusals)) {
 			s.SpecBroken = strings.Join(files, ", ")
+			s.SpecFault = "they do not compile, and the errors are inside the test " +
+				"files themselves"
 		}
 		return
 
@@ -346,6 +348,8 @@ func (s *State) JudgeSpec(out string, mode Mode) {
 	// test's own fixture.
 	if panics := PanicOnlyInTests(out); len(panics) > 0 {
 		s.SpecBroken = strings.Join(panics, ", ")
+		s.SpecFault = "they COMPILE and then PANIC, entirely inside the test's own " +
+			"setup — read the panic in the output below and fix what raises it"
 		s.RedIsExpected = false
 		return
 	}
@@ -355,6 +359,8 @@ func (s *State) JudgeSpec(out string, mode Mode) {
 	// file beside it must match a declaration the developer cannot change.
 	if clash := PackageConflictFiles(out); len(clash) > 0 {
 		s.SpecBroken = strings.Join(clash, ", ")
+		s.SpecFault = "they declare a different package from the files beside them, " +
+			"so the directory holds two packages"
 		s.RedIsExpected = false
 		return
 	}
@@ -370,6 +376,20 @@ func (s *State) JudgeSpec(out string, mode Mode) {
 // compile result from a failure already resolved.
 func (s *State) clearSpecVerdict() {
 	s.SpecBroken, s.SpecBrokenTries, s.RedIsExpected = "", 0, false
+	s.SpecFault = ""
+}
+
+// FaultOrDefault is why the specification was judged unsatisfiable, and never an
+// empty string.
+//
+// A ROUTE THAT FORGOT TO SAY WHY MUST NOT PRODUCE A BLANK. The author reads this
+// sentence and acts on it; a gap where the cause belongs is how it came to be
+// told "does not compile" about tests that compiled perfectly and panicked.
+func (s *State) FaultOrDefault() string {
+	if f := strings.TrimSpace(s.SpecFault); f != "" {
+		return f
+	}
+	return "no implementation could satisfy them; the verification below is the evidence"
 }
 
 // NoteTestEditRefusal records the developer being told it may not edit a test,

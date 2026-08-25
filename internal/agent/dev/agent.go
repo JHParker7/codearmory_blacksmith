@@ -547,24 +547,24 @@ func (a *Agent) endOnBrokenSpec(
 	repairs := SpecRepairsSoFar(t)
 	if repairs < MaxSpecRepairs {
 		a.comment(ctx, t, fmt.Sprintf(
-			"%s\n\nThe tests in `%s` cannot be satisfied, and this stage may not edit "+
-				"test files — so no change to the implementation could make them pass. "+
-				"The fault is in the specification, not in the code.\n\nGoing back to the "+
-				"agent that CAN correct it. Repair attempt %d of %d.\n\nWhat it tried: %s"+
+			"%s\n\n**What is wrong with `%s`: %s.**\n\nThis stage may not edit test "+
+				"files, so no change to the implementation could make them pass. The fault "+
+				"is in the specification, not in the code.\n\nGoing back to the agent that "+
+				"CAN correct it. Repair attempt %d of %d.\n\nWhat it tried: %s"+
 				"\n\nLast verification:\n\n```\n%s\n```",
-			record.SpecRepairMarker, s.SpecBroken, repairs+1, MaxSpecRepairs,
-			TrailSummary(s.Trail), clip(s.LastTest, 2000)))
+			record.SpecRepairMarker, s.SpecBroken, s.FaultOrDefault(), repairs+1,
+			MaxSpecRepairs, TrailSummary(s.Trail), clip(s.LastTest, 2000)))
 		return workflow.OutcomeReturned,
 			"specification is unsatisfiable; returned to its author", true
 	}
 
 	a.comment(ctx, t, fmt.Sprintf(
-		"%s\n\nThe tests in `%s` cannot be satisfied, and this stage may not edit test "+
-			"files — so no change to the implementation can make them pass.\n\nIt has been "+
-			"sent back to its author %d times and still cannot be, so a person needs to "+
-			"correct the tests or the ticket needs re-scoping.\n\nWhat it tried: %s"+
+		"%s\n\n**What is wrong with `%s`: %s.**\n\nThis stage may not edit test files, "+
+			"so no change to the implementation can make them pass.\n\nIt has been sent "+
+			"back to its author %d times and still cannot be, so a person needs to correct "+
+			"the tests or the ticket needs re-scoping.\n\nWhat it tried: %s"+
 			"\n\nLast verification:\n\n```\n%s\n```",
-		record.BrokenSpecMarker, s.SpecBroken, MaxSpecRepairs,
+		record.BrokenSpecMarker, s.SpecBroken, s.FaultOrDefault(), MaxSpecRepairs,
 		TrailSummary(s.Trail), clip(s.LastTest, 2000)))
 	return workflow.OutcomeBlocked, "specification is unsatisfiable", true
 }
