@@ -79,14 +79,20 @@ func runWindow(ctx context.Context) error {
 	if err != nil && !errors.Is(err, config.ErrNoModelClasses) {
 		return fmt.Errorf("configuration invalid: %w", err)
 	}
-	if cfg.PlatformURL == "" {
-		return errors.New("no board to read: set CODEARMORY_URL and CODEARMORY_TOKEN " +
-			"in ~/.config/codearmory-agents/env")
+	if !cfg.DispatchReady() {
+		return errors.New("no board to read: set AGENTS_TICKETS_URL to read this host's own " +
+			"store, or CODEARMORY_URL and CODEARMORY_TOKEN to read the platform's, in " +
+			"~/.config/codearmory-agents/env")
 	}
 
-	store, err := platform.Routed(cfg.PlatformURL, transport.Static(cfg.PlatformToken))
+	// THE SAME STORE THE DEPARTMENT WORKS. Building a client here separately is
+	// how the window came to read the platform while the service worked this
+	// host's own plane — so it drew an empty board beside a department that was
+	// busy, which is the one thing it must never do. One place decides which
+	// store is authoritative and both halves follow it.
+	store, _, err := clients(cfg)
 	if err != nil {
-		return fmt.Errorf("platform client: %w", err)
+		return err
 	}
 	return window.Open(ctx, store, department.Table(cfg), cfg.BoardID)
 }
