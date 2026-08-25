@@ -164,7 +164,13 @@ func (s *State) Advance(act Action, mode Mode) (verify bool, err error) {
 			"your last write; read it if you are unsure what it now contains."
 		return false, nil
 
-	case ActionWriteFiles:
+	// BOTH WRITE FORMS LAND HERE. The flat call and the array call differ only on
+	// the wire — ActionFromCall folds each into the same Edits — so a switch that
+	// named one of them offered a tool the loop then refused as unknown. That is
+	// exactly the trap the offered-versus-accepted rule exists to prevent, and it
+	// cost a whole spec-agent attempt: twenty turns of "write_file is not an
+	// action this stage can take" against a tool the stage was advertising.
+	case ActionWriteFile, ActionWriteFiles:
 		s.ConsecutiveReads = 0
 		before := TreeHash(s.Staged)
 
