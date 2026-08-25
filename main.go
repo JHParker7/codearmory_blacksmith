@@ -173,6 +173,7 @@ func runService(ctx context.Context) error {
 		} else {
 			metrics = m
 			recorder = recorder.WithMetrics(m)
+			telemetry.QuietenExportErrors()
 			defer func() {
 				shutCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				defer stop()
@@ -249,14 +250,7 @@ func runService(ctx context.Context) error {
 	// against has happened — applying deploy/k8s/forge-local.yaml resets the live
 	// deployment to whatever the manifest says, and has wiped runtime
 	// configuration before.
-	if err := runner.EnsureRunnerClass(ctx, forge.RunnerClass{
-		Name:          cfg.Repo.RunnerClass,
-		MemoryMB:      int64(cfg.DevMemoryMB),
-		CPUMillicores: int64(cfg.DevCPUMillicores),
-		PidsLimit:     config.DefaultDevPidsLimit,
-		DiskGB:        config.DefaultDevDiskGB,
-		Enabled:       true,
-	}); err != nil {
+	if err := runner.EnsureRunnerClass(ctx, devRunnerClass(cfg)); err != nil {
 		slog.Warn("could not declare the developer's runner class; the forge's own "+
 			"sizing applies, and a container-sized guest OOMs mid-compile in a way "+
 			"that reads as a test failure",
@@ -288,6 +282,24 @@ func runService(ctx context.Context) error {
 	}
 
 	return run(ctx, cfg, assembly, store, recorder)
+}
+
+// devRunnerClass is the sizing this department declares for its sandboxes.
+//
+// SEPARATE FROM THE CALL SO IT CAN BE TESTED. EnsureRunnerClass writes the WHOLE
+// record, so a field left at its zero value is not "leave this one alone" — it
+// declares the class should have none of it. Omitting TmpfsMB did exactly that
+// and was caught only because forge refused the request outright.
+func devRunnerClass(cfg config.Config) forge.RunnerClass {
+	return forge.RunnerClass{
+		Name:          cfg.Repo.RunnerClass,
+		MemoryMB:      int64(cfg.DevMemoryMB),
+		CPUMillicores: int64(cfg.DevCPUMillicores),
+		PidsLimit:     config.DefaultDevPidsLimit,
+		TmpfsMB:       config.DefaultDevTmpfsMB,
+		DiskGB:        config.DefaultDevDiskGB,
+		Enabled:       true,
+	}
 }
 
 // clients builds the ticket store and the sandbox runner this host talks to.

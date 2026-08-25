@@ -3,9 +3,13 @@ package telemetry
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/code-armory-app/blacksmith/internal/model"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/metric"
@@ -116,12 +120,46 @@ func Instruments(m metric.Meter) (*Metrics, error) {
 	return out, nil
 }
 
+// QuietenExportErrors reports an export failure ONCE and counts the rest.
+//
+// A COLLECTOR THAT IS NOT THERE MUST NOT DROWN THE RUN. The SDK reports every
+// failed upload, and the exporter defaults to localhost — so a host whose
+// configured endpoint has nothing behind it prints a failure every export
+// interval for the length of the run. Observed immediately: an endpoint left at
+// http://localhost:4318 with no collector anywhere put a connection-refused line
+// into the service log every ten seconds.
+//
+// The FIRST one stays loud, because a misconfigured endpoint is worth fixing.
+// The rest say nothing new, and the total is reported at shutdown so the silence
+// cannot be mistaken for success.
+func QuietenExportErrors() {
+	var once sync.Once
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		exportErrors.Add(1)
+		once.Do(func() {
+			slog.Warn("metrics are not reaching a collector; counters are being "+
+				"dropped. Reported once — the total follows at shutdown",
+				"error", err)
+		})
+	}))
+}
+
+// exportErrors counts what QuietenExportErrors swallowed. Package level because
+// the handler is process-wide, which is the SDK's own shape.
+var exportErrors atomic.Int64
+
 // Shutdown flushes what has been counted.
 func (m *Metrics) Shutdown(ctx context.Context) error {
 	if m == nil || m.shutdown == nil {
 		return nil
 	}
-	return m.shutdown(ctx)
+	err := m.shutdown(ctx)
+	// SAID AT THE END, so a run that exported nothing does not look like a run
+	// that had nothing to export.
+	if n := exportErrors.Load(); n > 0 {
+		slog.Warn("metrics never reached a collector", "failed_exports", n)
+	}
+	return err
 }
 
 // Outcome counts an attempt that ended.
