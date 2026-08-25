@@ -15,12 +15,19 @@ func job() ticket.Ticket {
 }
 
 func state() *State {
-	return &State{
+	// THROUGH RecordRead, because that is what fills AsRead and ReadOrder — the
+	// pair the cacheable half renders from. A fixture that assigns Read directly
+	// builds a state the loop never produces, and would test a prompt nobody
+	// sends.
+	s := &State{
 		Tree:      []string{"store.go", "store_test.go"},
-		Read:      map[string]string{"store.go": "package main\n\nfunc List() {}\n"},
+		Read:      map[string]string{},
 		Iteration: 3,
 		Budget:    10,
 	}
+	s.RecordRead([]string{"store.go"},
+		map[string]string{"store.go": "package main\n\nfunc List() {}\n"})
+	return s
 }
 
 // THE SPLIT IS ABOUT PREFILL, NOT TIDINESS. 93% of every token this pipeline
@@ -193,15 +200,24 @@ func TestARoundTripCarriesItsReasonAndSaysNotToStartOver(t *testing.T) {
 // few turns to learn nothing.
 func TestTheAgentIsToldItsStagedFilesAreAlreadyShown(t *testing.T) {
 	s := state()
+	// An EDIT, not just a staging entry: what the agent has changed is decided by
+	// Read differing from AsRead, which is what the late message renders.
 	s.Staged = map[string]string{"store.go": "package main\n"}
+	s.Read["store.go"] = "package main\n"
 
-	got := RenderWorld(job(), Reasons{}, s)
-	if !strings.Contains(got, "reading them again returns your own writes") {
+	got := RenderChanges(s)
+	if !strings.Contains(got, "eading any of these again returns your own writes") {
 		t.Errorf("the agent is not told a re-read teaches it nothing:\n%s", got)
 	}
-	// Nothing about staging appears when nothing is staged.
-	if strings.Contains(RenderWorld(job(), Reasons{}, state()), "ALREADY CHANGED") {
-		t.Error("an unstaged attempt was told about staged files")
+	// Nothing about changes appears when nothing has changed.
+	if RenderChanges(state()) != "" {
+		t.Error("an unedited attempt was told about its own changes")
+	}
+	// AND NOT IN THE CACHED HALF. This is the whole point of the split: the
+	// changed contents move when an edit lands, so they must sit after
+	// everything a backend can cache.
+	if strings.Contains(RenderWorld(job(), Reasons{}, s), "CHANGED THEM") {
+		t.Error("the changed files are rendered in the cacheable half")
 	}
 }
 

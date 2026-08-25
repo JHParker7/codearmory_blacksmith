@@ -106,6 +106,9 @@ func (s *State) RecordRead(asked []string, got map[string]string) {
 	if s.Baseline == nil {
 		s.Baseline = map[string]string{}
 	}
+	if s.AsRead == nil {
+		s.AsRead = map[string]string{}
+	}
 
 	for _, p := range asked {
 		content, found := got[p]
@@ -123,6 +126,14 @@ func (s *State) RecordRead(asked []string, got map[string]string) {
 		// a comparison to anything.
 		if _, seen := s.Baseline[p]; !seen {
 			s.Baseline[p] = content
+		}
+
+		// AND SO IS THE COPY THE PROMPT RENDERS, for a different reason: the
+		// cached prefix must not move when the agent edits. Appended in arrival
+		// order so a new read costs the tail and nothing before it. See AsRead.
+		if _, seen := s.AsRead[p]; !seen {
+			s.AsRead[p] = content
+			s.ReadOrder = append(s.ReadOrder, p)
 		}
 	}
 }

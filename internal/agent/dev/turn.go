@@ -50,6 +50,13 @@ func BuildRequest(t ticket.Ticket, why Reasons, s *State, mode Mode, sys string,
 		{Role: "user", Content: RenderWorld(t, why, s)},
 	}
 	msgs = append(msgs, s.RecentHistory()...)
+
+	// THE EDITS GO AFTER THE HISTORY AND BEFORE THE PROGRESS, which is to say in
+	// the volatile tail. They change whenever a write lands; everything above
+	// them does not. See RenderChanges.
+	if changes := RenderChanges(s); changes != "" {
+		msgs = append(msgs, model.Message{Role: "user", Content: changes})
+	}
 	msgs = append(msgs, model.Message{Role: "user", Content: RenderProgress(s)})
 
 	req := model.ChatRequest{
