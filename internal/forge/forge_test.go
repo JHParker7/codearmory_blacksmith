@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,17 @@ type fakeForge struct {
 	submitted []Spec
 	created   []LeaseSpec
 	paths     []string
+
+	// failNextRun and failEveryRun make POST /executions answer 409 with that
+	// body, which is how forge reports a lease it no longer has. failCreate makes
+	// booting a replacement fail.
+	failNextRun  string
+	failEveryRun string
+	failCreate   error
+
+	// leaseSeq gives each lease a DISTINCT id, so a test can tell a replacement
+	// from the container it replaced. The first is still l-1.
+	leaseSeq int
 }
 
 func newFakeForge(t *testing.T) (*fakeForge, *Client) {
@@ -58,7 +70,16 @@ func (f *fakeForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&spec)
 		f.mu.Lock()
 		f.submitted = append(f.submitted, spec)
+		fail := f.failEveryRun
+		if fail == "" {
+			fail, f.failNextRun = f.failNextRun, ""
+		}
 		f.mu.Unlock()
+		if fail != "" {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(fail))
+			return
+		}
 		json.NewEncoder(w).Encode(Execution{ExecutionID: "x-1", Status: StatusPending})
 
 	case strings.HasPrefix(r.URL.Path, "/executions/") && r.Method == http.MethodGet:
@@ -89,8 +110,16 @@ func (f *fakeForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&spec)
 		f.mu.Lock()
 		f.created = append(f.created, spec)
+		boom := f.failCreate
+		f.leaseSeq++
+		id := fmt.Sprintf("l-%d", f.leaseSeq)
 		f.mu.Unlock()
-		json.NewEncoder(w).Encode(Lease{LeaseID: "l-1", Status: LeaseStarting})
+		if boom != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(boom.Error()))
+			return
+		}
+		json.NewEncoder(w).Encode(Lease{LeaseID: id, Status: LeaseStarting})
 
 	case strings.HasPrefix(r.URL.Path, "/leases/") && r.Method == http.MethodGet:
 		f.mu.Lock()
@@ -101,7 +130,8 @@ func (f *fakeForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status, detail := f.leaseSteps[i], f.leaseDetail
 		f.leasePolls++
 		f.mu.Unlock()
-		json.NewEncoder(w).Encode(Lease{LeaseID: "l-1", Status: status, Detail: detail})
+		id := strings.TrimPrefix(r.URL.Path, "/leases/")
+		json.NewEncoder(w).Encode(Lease{LeaseID: id, Status: status, Detail: detail})
 
 	case strings.HasPrefix(r.URL.Path, "/leases/") && r.Method == http.MethodDelete:
 		w.WriteHeader(http.StatusNoContent)

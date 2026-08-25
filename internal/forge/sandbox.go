@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -62,6 +63,10 @@ type Sandbox struct {
 
 	// adopt runs before every Run. See AdoptBranch.
 	adopt string
+
+	// boot is what this sandbox was acquired with, so an equivalent one can be
+	// booted if forge takes this one away. See Run.
+	boot SandboxSpec
 }
 
 // Acquire boots a sandbox and waits for it to accept commands.
@@ -119,6 +124,8 @@ func (c *Client) Acquire(ctx context.Context, spec SandboxSpec) (*Sandbox, error
 	return &Sandbox{
 		client:  c,
 		leaseID: ready.LeaseID,
+		// KEPT SO A REAPED LEASE CAN BE REPLACED. See Run.
+		boot: spec,
 		// IMAGE, RUNNER CLASS AND SECRETS ARE DELIBERATELY ABSENT. They are fixed
 		// by the lease, and forge REJECTS a leased execution that sets them —
 		// because they would describe a sandbox other than the one it runs in.
@@ -176,7 +183,76 @@ func (s *Sandbox) Run(ctx context.Context, rec Recorder, script string) (Result,
 	}
 	spec := s.spec
 	spec.Command = []string{"sh", "-c", Preamble + s.adopt + script}
+	return s.run(ctx, rec, spec)
+}
+
+// ErrLeaseGone means forge no longer has the container this sandbox was holding.
+var ErrLeaseGone = errors.New("the lease is no longer running")
+
+// leaseGone reports whether an error means the container has been taken away.
+//
+// MATCHED ON THE MESSAGE because forge answers with a 409 whose body names the
+// state — "lease is stopped, not ready" — and a 409 alone is also how it reports
+// several conditions that are NOT this one. The state word is the only thing
+// that distinguishes them.
+func leaseGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "lease is stopped") ||
+		strings.Contains(m, "lease is expired") ||
+		strings.Contains(m, "lease not found") ||
+		strings.Contains(m, "unknown lease")
+}
+
+// run submits a command, replacing the container once if forge has reaped it.
+//
+// A SANDBOX IS DISPOSABLE AND NOTHING HERE DEPENDS ON ITS STATE. Every command
+// this package runs writes what it needs first: a verification pushes the whole
+// staged set and RunOnBranch resets the tree before doing anything. So a
+// replacement container is not a degraded one, it is the same one again.
+//
+// This is not a rare edge. FORGE CAPS IDLE AT 300 SECONDS, and an agent thinks
+// between commands — measured on this host: a specification author read and
+// wrote for 24 minutes without touching the sandbox, by which time its lease had
+// been gone for nineteen of them. The first command after that thinking failed
+// the whole ticket, three attempts running, for a container nobody needed to
+// still exist.
+//
+// ONCE, not in a loop: if the replacement is reaped just as quickly the problem
+// is not a stale lease and retrying forever would hide it.
+func (s *Sandbox) run(ctx context.Context, rec Recorder, spec Spec) (Result, error) {
+	res, err := s.client.Run(ctx, rec, spec)
+	if !leaseGone(err) {
+		return res, err
+	}
+	if rerr := s.reacquire(ctx); rerr != nil {
+		// The ORIGINAL failure is what the caller needs to see; the failure to
+		// replace it is why nothing could be done about it.
+		return Result{}, fmt.Errorf("%w, and a replacement could not be acquired: %w", err, rerr)
+	}
+	spec.LeaseID = s.leaseID
 	return s.client.Run(ctx, rec, spec)
+}
+
+// reacquire boots a replacement container and points this sandbox at it.
+func (s *Sandbox) reacquire(ctx context.Context) error {
+	slog.WarnContext(ctx, "the sandbox lease was reaped; booting a replacement",
+		"lease_id", s.leaseID)
+
+	// Give the old one back in case forge still has a record of it. It is already
+	// stopped, so this is bookkeeping rather than a release that frees anything.
+	s.client.releaseQuietly(ctx, s.leaseID)
+	s.leaseID = ""
+
+	fresh, err := s.client.Acquire(ctx, s.boot)
+	if err != nil {
+		return err
+	}
+	s.leaseID = fresh.leaseID
+	s.spec.LeaseID = fresh.leaseID
+	return nil
 }
 
 // RunOnBranch executes a script standing in a checkout of a PUSHED branch.
@@ -192,7 +268,7 @@ func (s *Sandbox) RunOnBranch(ctx context.Context, rec Recorder, branch, script 
 	}
 	spec := s.spec
 	spec.Command = []string{"sh", "-c", Preamble + CheckoutBranchScript(branch) + script}
-	return s.client.Run(ctx, rec, spec)
+	return s.run(ctx, rec, spec)
 }
 
 // CheckoutBranchScript puts the working tree at the tip of a pushed branch.
