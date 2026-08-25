@@ -9,6 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/code-armory-app/blacksmith/internal/agent/review"
+	"github.com/code-armory-app/blacksmith/internal/record"
 	"github.com/code-armory-app/blacksmith/internal/ticket"
 	"github.com/code-armory-app/blacksmith/internal/workflow"
 )
@@ -20,31 +22,95 @@ import (
 // per tick against a store that is already serving the department.
 const Refresh = 2 * time.Second
 
-// Tickets is the board this window reads. READ-ONLY BY CONSTRUCTION: the window
-// cannot claim, move or comment on anything, so it can be left open safely
-// beside a running department.
+// MaxTickets bounds the per-row reads. A board larger than this is worth
+// filtering rather than rendering.
+const MaxTickets = 40
+
+// Tickets is the board this window reads and files work on.
+//
+// LISTING IS NOT ENOUGH. A listing carries no comments, and every stage marker
+// — the claim, the branch, the merge, the return ceiling — is a comment, so a
+// view built from the listing alone shows every ticket as untriaged forever.
+// Get is called per row for that reason.
 type Tickets interface {
 	List(ctx context.Context, opts ticket.ListOpts) ([]ticket.Ticket, error)
+	Get(ctx context.Context, id string) (ticket.Ticket, error)
+	Create(ctx context.Context, t ticket.Ticket) (ticket.Ticket, error)
+}
+
+// Options are what the window needs beyond the store.
+type Options struct {
+	Table         workflow.Table
+	BoardID       string
+	TranscriptDir string
+	// RepoURL is used only to print a fetch command for a ticket that has become
+	// a person's problem. Empty is fine; the branch is still named.
+	RepoURL string
+	// Where and Mode describe the store, for the header. A person running two
+	// hosts needs to know which plane they are looking at before they read a row.
+	Where, Mode string
 }
 
 // Open runs the window until the reader quits or the context ends.
-func Open(ctx context.Context, tickets Tickets, tb workflow.Table, boardID string) error {
-	m := Model{tickets: tickets, table: tb, board: boardID, showFinished: false}
+func Open(ctx context.Context, tickets Tickets, opts Options) error {
+	m := Model{tickets: tickets, opts: opts, loading: true}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err := p.Run()
 	return err
 }
 
+// mode is which screen the window is showing.
+//
+// A MODE RATHER THAN A SET OF BOOLEANS. "detail && !composing" is a state you
+// have to reason about; a mode is one you can read.
+type mode int
+
+const (
+	modeList mode = iota
+	modeDetail
+	modeCompose
+)
+
 // Model is the window's state.
 type Model struct {
 	tickets Tickets
-	table   workflow.Table
-	board   string
+	opts    Options
 
-	rows         Board
-	err          error
+	board Board
+	// full is every ticket the last read returned. Kept beside the rows because
+	// the board-wide alerts are asked of all of them, including the ones the
+	// finished filter is hiding.
+	full []ticket.Ticket
+	acts map[string]Activity
+
+	mode     mode
+	selected int
+	// scroll is the first visible row in the list, and detailScroll the first
+	// visible line of a ticket. The reasoning panel made a ticket taller than a
+	// terminal for the first time, so both have to be windowed rather than
+	// assumed to fit.
+	scroll       int
+	detailScroll int
+
+	// asking is the one-line request field on the board itself, for the sentence
+	// you already have in your head. The compose screen is for a request you have
+	// thought about and want two fields for.
+	asking bool
+	ask    string
+	filing bool
+
+	// The compose screen's two fields.
+	field int
+	title string
+	body  string
+
 	showFinished bool
+	err          error
+	note         string
+	loading      bool
 	lastLoad     time.Time
+	width        int
+	height       int
 }
 
 type loadedMsg struct {
@@ -53,6 +119,7 @@ type loadedMsg struct {
 }
 
 type tickMsg time.Time
+type noteMsg string
 
 func tick() tea.Cmd {
 	return tea.Tick(Refresh, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -60,11 +127,52 @@ func tick() tea.Cmd {
 
 func (m Model) load() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
-		ts, err := m.tickets.List(ctx, ticket.ListOpts{BoardID: m.board})
-		return loadedMsg{tickets: ts, err: err}
+		listed, err := m.tickets.List(ctx, ticket.ListOpts{BoardID: m.opts.BoardID})
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+		if len(listed) > MaxTickets {
+			listed = listed[:MaxTickets]
+		}
+		full := make([]ticket.Ticket, 0, len(listed))
+		for _, t := range listed {
+			ft, getErr := m.tickets.Get(ctx, t.ID)
+			if getErr != nil {
+				// BETTER A STALE ROW THAN A MISSING ONE. The listing already said this
+				// ticket exists; dropping it because its detail read failed would hide
+				// work from the one view that exists to show it.
+				full = append(full, t)
+				continue
+			}
+			full = append(full, ft)
+		}
+		return loadedMsg{tickets: full}
+	}
+}
+
+// file creates a ticket from the ask line or the compose screen.
+func (m Model) file(title, body string) tea.Cmd {
+	board := m.opts.BoardID
+	store := m.tickets
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		t := ticket.Ticket{
+			BoardID:     &board,
+			Title:       title,
+			Description: body,
+			Status:      workflow.ColInbox,
+			Priority:    "medium",
+		}
+		created, err := store.Create(ctx, t)
+		if err != nil {
+			return noteMsg("could not file it: " + err.Error())
+		}
+		return noteMsg("filed " + ShortID(created.ID) + " — the product manager picks it up next")
 	}
 }
 
@@ -72,22 +180,22 @@ func (m Model) Init() tea.Cmd { return tea.Batch(m.load(), tick()) }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc", "ctrl+c":
-			return m, tea.Quit
-		case "f":
-			m.showFinished = !m.showFinished
-			return m, nil
-		case "r":
-			return m, m.load()
-		}
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
 		return m, nil
+
+	case tea.KeyMsg:
+		return m.onKey(msg)
 
 	case tickMsg:
 		return m, tea.Batch(m.load(), tick())
 
+	case noteMsg:
+		m.note, m.filing = string(msg), false
+		return m, m.load()
+
 	case loadedMsg:
+		m.loading = false
 		// A FAILED RELOAD KEEPS THE LAST BOARD ON SCREEN. Blanking it would take
 		// away the only information the reader has at the moment the store became
 		// unreachable — which is exactly when they are looking.
@@ -95,104 +203,697 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
+		now := time.Now()
 		m.err = nil
-		m.lastLoad = time.Now()
-		m.rows = Rows(msg.tickets, m.table, m.showFinished)
+		m.lastLoad = now
+		m.full = msg.tickets
+		m.board = Rows(msg.tickets, m.opts.Table, m.showFinished)
+		m.acts = RollUp(msg.tickets, ReadActivity(m.opts.TranscriptDir, now), now)
+		m.clampSelection()
+		return m, nil
+	}
+	return m, nil
+}
+
+// clampSelection keeps the cursor on a row that exists.
+//
+// THE BOARD RELOADS UNDER THE CURSOR every two seconds, and rows appear and
+// vanish as work moves and as finished runs are hidden. Without this the
+// selection indexes past the end and the detail view panics on the next frame.
+func (m *Model) clampSelection() {
+	if m.selected >= len(m.board.Rows) {
+		m.selected = len(m.board.Rows) - 1
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if len(m.board.Rows) == 0 && m.mode == modeDetail {
+		m.mode = modeList
+	}
+}
+
+func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The text fields take the keyboard first: while one is open every printable
+	// key is content, not a command. Otherwise typing "quit" in the ask line
+	// quits on the q.
+	if m.asking {
+		return m.onAskKey(msg)
+	}
+	if m.mode == modeCompose {
+		return m.onComposeKey(msg)
+	}
+	if m.mode == modeDetail {
+		return m.onDetailKey(msg)
+	}
+
+	switch msg.String() {
+	// esc quits from the list because there is nothing here to back out of. In
+	// every other mode it means cancel, and those are handled above.
+	case "q", "esc", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		if m.selected > 0 {
+			m.selected--
+		}
+		m.followCursor()
+	case "down", "j":
+		if m.selected < len(m.board.Rows)-1 {
+			m.selected++
+		}
+		m.followCursor()
+	case "g":
+		m.selected, m.scroll = 0, 0
+	case "G":
+		m.selected = len(m.board.Rows) - 1
+		m.clampSelection()
+		m.followCursor()
+	case "enter":
+		if len(m.board.Rows) > 0 {
+			m.mode, m.detailScroll = modeDetail, 0
+		}
+	case "h":
+		m.showFinished = !m.showFinished
+		m.board = Rows(m.full, m.opts.Table, m.showFinished)
+		m.clampSelection()
+	case "r":
+		return m, m.load()
+	case "/":
+		m.asking, m.ask, m.note = true, "", ""
+	case "n":
+		m.mode, m.field, m.title, m.body, m.note = modeCompose, 0, "", "", ""
+	}
+	return m, nil
+}
+
+// followCursor scrolls the list so the selected row stays on screen.
+func (m *Model) followCursor() {
+	rows := m.listRows()
+	if m.selected < m.scroll {
+		m.scroll = m.selected
+	}
+	if m.selected >= m.scroll+rows {
+		m.scroll = m.selected - rows + 1
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+}
+
+func (m Model) onDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "backspace", "left":
+		m.mode = modeList
+	case "up", "k":
+		if m.detailScroll > 0 {
+			m.detailScroll--
+		}
+	case "down", "j":
+		m.detailScroll++
+	case "pgup":
+		m.detailScroll -= m.detailRows()
+		if m.detailScroll < 0 {
+			m.detailScroll = 0
+		}
+	case "pgdown", " ":
+		m.detailScroll += m.detailRows()
+	case "g":
+		m.detailScroll = 0
+	case "G":
+		// Clamped when rendered, so a large number is the simplest way to say
+		// "the end" without knowing how tall the ticket is from here.
+		m.detailScroll = 1 << 20
+	case "r":
+		return m, m.load()
+	}
+	return m, nil
+}
+
+func (m Model) onAskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.asking, m.ask = false, ""
+		return m, nil
+	case tea.KeyEnter:
+		text := strings.TrimSpace(m.ask)
+		if text == "" {
+			m.asking = false
+			return m, nil
+		}
+		m.asking, m.filing, m.ask = false, true, ""
+		// THE WHOLE SENTENCE IS BOTH THE TITLE AND THE BODY. The product manager
+		// triages it either way, and splitting one line into a title with an empty
+		// description throws away the only context there was.
+		return m, m.file(clip(text, 120), text)
+	case tea.KeyBackspace:
+		if r := []rune(m.ask); len(r) > 0 {
+			m.ask = string(r[:len(r)-1])
+		}
+		return m, nil
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeySpace:
+		m.ask += " "
+		return m, nil
+	case tea.KeyRunes:
+		m.ask += string(msg.Runes)
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) onComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.mode, m.note = modeList, ""
+		return m, nil
+	case tea.KeyTab:
+		m.field = 1 - m.field
+		return m, nil
+	case tea.KeyCtrlS:
+		if strings.TrimSpace(m.title) == "" {
+			// NAMED, NOT SILENTLY REFUSED. A ctrl+s that appears to do nothing is
+			// indistinguishable from a key that is not bound.
+			m.note = "a title is needed — it is what appears on the board"
+			return m, nil
+		}
+		title, body := strings.TrimSpace(m.title), strings.TrimSpace(m.body)
+		m.mode, m.filing, m.title, m.body, m.note = modeList, true, "", "", ""
+		return m, m.file(title, body)
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEnter:
+		if m.field == 1 {
+			m.body += "\n"
+		} else {
+			m.field = 1 // enter on the title moves on, which is what a form does
+		}
+		return m, nil
+	case tea.KeyBackspace:
+		if m.field == 0 {
+			if r := []rune(m.title); len(r) > 0 {
+				m.title = string(r[:len(r)-1])
+			}
+		} else if r := []rune(m.body); len(r) > 0 {
+			m.body = string(r[:len(r)-1])
+		}
+		return m, nil
+	case tea.KeySpace:
+		if m.field == 0 {
+			m.title += " "
+		} else {
+			m.body += " "
+		}
+		return m, nil
+	case tea.KeyRunes:
+		if m.field == 0 {
+			m.title += string(msg.Runes)
+		} else {
+			m.body += string(msg.Runes)
+		}
 		return m, nil
 	}
 	return m, nil
 }
 
 var (
-	headerStyle = lipgloss.NewStyle().Bold(true)
-	dimStyle    = lipgloss.NewStyle().Faint(true)
-	alertStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
-	liveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	doneStyle   = lipgloss.NewStyle().Faint(true)
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	cHead   = lipgloss.NewStyle().Bold(true)
+	cDim    = lipgloss.NewStyle().Faint(true)
+	cRule   = lipgloss.NewStyle().Faint(true)
+	cKey    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	cErr    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
+	cLive   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	cWait   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	cDone   = lipgloss.NewStyle().Faint(true)
+	cSel    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
+	cNote   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	cPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 )
 
+func styleFor(t Tone) lipgloss.Style {
+	switch t {
+	case ToneLive:
+		return cLive
+	case ToneDone:
+		return cDone
+	case ToneAlert:
+		return cErr
+	case ToneQuiet:
+		return cDim
+	default:
+		return cWait
+	}
+}
+
 func (m Model) View() string {
+	switch m.mode {
+	case modeDetail:
+		return m.detailView()
+	case modeCompose:
+		return m.composeView()
+	default:
+		return m.listView()
+	}
+}
+
+func (m Model) header() string {
+	mode := m.opts.Mode
+	if mode == "" {
+		mode = "board"
+	}
+	line := mode
+	if m.opts.Where != "" {
+		line += " · " + m.opts.Where
+	}
+	width := m.rule() - 13
+	if width < 20 {
+		width = 20
+	}
+	return cHead.Render("blacksmith") + cDim.Render("  "+clip(line, width))
+}
+
+func (m Model) rule() int       { return Rule(m.width) }
+func (m Model) titleWidth() int { return TitleWidth(m.width) }
+func (m Model) hr() string      { return cRule.Render(strings.Repeat("─", m.rule())) }
+
+// listRows is how many ticket rows fit, once the fixed furniture is taken out:
+// the header, two rules, the summary, the headings, the ask line and the keys.
+func (m Model) listRows() int {
+	n := m.height - 9
+	if n < 3 {
+		n = 3
+	}
+	return n
+}
+
+func (m Model) progressLine() string {
+	c := Tally(m.board.Rows, m.acts, time.Now())
+	if c.Total() == 0 {
+		return ""
+	}
+	parts := []string{cDone.Render(fmt.Sprintf("%d done", c.Done))}
+	if c.Moving > 0 {
+		parts = append(parts, cLive.Render(fmt.Sprintf("%d working", c.Moving)))
+	}
+	if c.Waiting > 0 {
+		parts = append(parts, cWait.Render(fmt.Sprintf("%d waiting", c.Waiting)))
+	}
+	if c.Stuck > 0 {
+		parts = append(parts, cErr.Render(fmt.Sprintf("%d need you", c.Stuck)))
+	}
+	return strings.Join(parts, cDim.Render(" · ")) +
+		cDim.Render(fmt.Sprintf("  (%d total)", c.Total()))
+}
+
+func (m Model) ceilingAlert() string {
+	hit := ReturnCeiling(m.full)
+	if len(hit) == 0 {
+		return ""
+	}
+	noun := "ticket"
+	if len(hit) > 1 {
+		noun = "tickets"
+	}
+	return cErr.Render(fmt.Sprintf("! %d %s hit the %d-return review ceiling and need a person: %s",
+		len(hit), noun, review.MaxReturns, strings.Join(hit, " ")))
+}
+
+func (m Model) listView() string {
 	var b strings.Builder
+	b.WriteString(m.header() + "\n")
+	b.WriteString(m.hr() + "\n")
 
-	b.WriteString(headerStyle.Render("blacksmith") + dimStyle.Render("  ·  q quit   f finished   r refresh"))
-	b.WriteString("\n")
+	if p := m.progressLine(); p != "" {
+		b.WriteString("  " + p + "\n")
+	}
+	if a := m.ceilingAlert(); a != "" {
+		b.WriteString(a + "\n")
+	}
 
-	// THE ERROR SITS ABOVE THE BOARD RATHER THAN REPLACING IT. The rows below are
-	// still the last thing that was true, and saying when they were read is what
-	// stops them being mistaken for now.
+	// THE COLUMN HEADINGS, on the same widths the rows use. Without them the
+	// runtime column is a bare number beside a status and nothing says which is
+	// which — and once the widths are shared, a heading that stops lining up is
+	// the first sign a cell has started padding itself wrong again.
+	if len(m.board.Rows) > 0 {
+		b.WriteString(cDim.Render(
+			"    "+PadTo("id", ShortIDLen)+"  "+PadTo("ticket", m.titleWidth())+
+				"  "+PadTo("priority", PriorityWidth)+
+				" "+PadLeft("took", RuntimeWidth)+
+				" state") + "\n")
+	}
+
 	if m.err != nil {
-		b.WriteString(errStyle.Render("could not read the board: "+clip(m.err.Error(), 100)) + "\n")
+		// THE ERROR SITS ABOVE THE BOARD RATHER THAN REPLACING IT. The rows below
+		// are still the last thing that was true, and saying when they were read is
+		// what stops them being mistaken for now.
+		b.WriteString(cErr.Render("cannot read the ticket store: "+clip(m.err.Error(), 100)) + "\n")
+		b.WriteString(cDim.Render("the department may still be working; this window just cannot see it") + "\n")
 		if !m.lastLoad.IsZero() {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("showing what it looked like %s ago",
-				RuntimeText(time.Since(m.lastLoad)))) + "\n")
+			b.WriteString(cDim.Render("showing what it looked like "+
+				RuntimeText(time.Since(m.lastLoad))+" ago") + "\n")
 		}
 	}
-	b.WriteString("\n")
+	if len(m.board.Rows) == 0 && m.err == nil {
+		b.WriteString(cDim.Render("\n  "+EmptyBoardReason(m.loading, m.board.Hidden)) + "\n")
+	}
 
-	if len(m.rows.Rows) == 0 {
-		if m.err == nil {
-			b.WriteString(dimStyle.Render("nothing on this board.") + "\n")
-		}
+	rows := m.listRows()
+	top := m.scroll
+	if maxTop := len(m.board.Rows) - rows; top > maxTop {
+		top = maxTop
 	}
+	if top < 0 {
+		top = 0
+	}
+	end := min(top+rows, len(m.board.Rows))
 
 	now := time.Now()
-	for _, r := range m.rows.Rows {
-		b.WriteString(m.line(r, now) + "\n")
+	for i := top; i < end; i++ {
+		// ONE BLANK LINE BETWEEN RUNS. A request and its tasks read as one block
+		// only if there is something between it and the next request; without it a
+		// board carrying several runs is an undifferentiated list. Not before the
+		// first visible row, where it would be a stray blank line at the top.
+		if m.board.Rows[i].Depth == 0 && i > top {
+			b.WriteString("\n")
+		}
+		b.WriteString(m.line(m.board.Rows[i], i == m.selected, now) + "\n")
+	}
+	if len(m.board.Rows) > rows {
+		b.WriteString(cDim.Render(fmt.Sprintf("  %d-%d of %d rows",
+			top+1, end, len(m.board.Rows))) + "\n")
 	}
 
-	// A BOARD THAT SILENTLY OMITS ROWS IS WORSE THAN A BUSY ONE.
-	if m.rows.Hidden > 0 {
-		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf(
-			"%s hidden — press f to show them", pluralRuns(m.rows.Hidden))) + "\n")
+	b.WriteString(m.hr() + "\n")
+	b.WriteString(m.askView() + "\n")
+	if m.note != "" {
+		b.WriteString(cNote.Render("  "+m.note) + "\n")
 	}
+
+	keys := []string{"↑↓ move", "enter detail", "/ ask", "n new ticket", "r refresh"}
+	if m.showFinished {
+		keys = append(keys, "h hide finished")
+	} else if m.board.Hidden > 0 {
+		keys = append(keys, fmt.Sprintf("h show %d finished", m.board.Hidden))
+	}
+	b.WriteString(m.keys(append(keys, "q quit")...))
 	return b.String()
 }
 
 // line renders one row.
-func (m Model) line(r Row, now time.Time) string {
+func (m Model) line(r Row, selected bool, now time.Time) string {
 	t := r.Ticket
-	indent := strings.Repeat("  ", r.Depth)
+	act := m.acts[t.ID]
 
-	// THE STATE COMES FIRST, because it is what the reader is scanning for.
-	state := Label(t.Status)
-	style := lipgloss.NewStyle()
-	switch {
-	case NeedsAPerson(t.Status):
-		style = alertStyle
-	case Done(t.Status):
-		style = doneStyle
-	case HeldByAStage(m.table, t.Status):
-		style = liveStyle
-	}
-
-	var parts []string
-	parts = append(parts, indent+style.Render(clip(t.Title, 52)))
-	parts = append(parts, style.Render(state))
-
-	// A RUNTIME ONLY WHERE THERE IS ONE TO SHOW. A waiting ticket shows nothing
-	// rather than a frozen figure, because a number that has stopped moving looks
-	// exactly like a number nobody is updating.
-	if d, _, show := Runtime(m.table, t, now); show {
-		parts = append(parts, dimStyle.Render(RuntimeText(d)))
-	}
+	// A BAR AND AN ESTIMATE, not just a count. "4/19 done" says where a request
+	// is; it does not say whether to wait for it.
+	//
+	// THE COUNT IS RESERVED FOR, NOT APPENDED. Appending it and clipping the
+	// result meant the count was the first thing cut, and these titles are already
+	// past the cap — so it never appeared on the rows that most needed it.
+	suffix := ""
 	if r.Progress.Total > 0 {
-		parts = append(parts, dimStyle.Render(fmt.Sprintf("%d/%d done",
-			r.Progress.Done, r.Progress.Total)))
+		suffix = "  " + ProgressBar(r.Progress.Done, r.Progress.Total,
+			now.Sub(t.CreatedAt), ProgressBarWidth)
 	}
-	// WHAT IT IS WAITING FOR, because a queued ticket and an unclaimed one look
-	// identical otherwise and need opposite responses.
-	if unmet := UnmetDependencies(t); len(unmet) > 0 && !Stopped(t.Status) {
-		parts = append(parts, dimStyle.Render(fmt.Sprintf("waiting on %d", len(unmet))))
-	}
-	if MergedAway(t) {
-		into := MergedInto(t)
-		if into == "" {
-			into = "another ticket"
+
+	// INDENTED UNDER WHAT IT CAME FROM, one level per generation. Rows already sit
+	// directly beneath their parent; the indent is what makes the nesting visible
+	// rather than merely true, so five tickets about task stores read as one
+	// request broken down instead of five unrelated jobs.
+	indent, width := "", m.titleWidth()
+	if r.Depth > 0 {
+		indent = strings.Repeat("  ", r.Depth-1) + "└ "
+		width = m.titleWidth() - 2*r.Depth
+		if width < 12 {
+			width = 12
 		}
-		parts = append(parts, dimStyle.Render("merged into "+into))
 	}
-	return strings.Join(parts, "  ")
+	// clip ADDS its ellipsis to the length it was given, so a title clipped to n
+	// comes back n+1 columns wide; without allowing for it the row overruns its
+	// budget by one.
+	room := width - len([]rune(suffix))
+	if suffix != "" {
+		room--
+	}
+	if room < 0 {
+		room = 0
+	}
+	title := clip(t.Title, room) + suffix
+
+	// A finished ticket shows its final time; one still running shows a "+" so the
+	// two are not mistaken for each other at a glance.
+	took := ""
+	if d, final, show := Runtime(m.opts.Table, t, now); show {
+		took = RuntimeText(d)
+		if !final {
+			took += "+"
+		}
+	}
+
+	var state strings.Builder
+	for _, c := range StateCells(t, act, now) {
+		state.WriteString(styleFor(c.Tone).Render(c.Text))
+	}
+
+	marker := "  "
+	switch {
+	case act.Live(now) && act.Role != "":
+		marker = cLive.Render("▸ ")
+	case act.Working > 0:
+		marker = cDim.Render("· ")
+	}
+
+	// ONE COLUMN PER CELL, each padded to its own display width. Built by
+	// concatenation rather than one format string because every cell may be
+	// styled and fmt cannot pad around escapes — see PadTo.
+	left := PadTo(cDim.Render(indent)+title, width+lipgloss.Width(indent)) +
+		"  " + PadTo(t.Priority, PriorityWidth) +
+		" " + PadLeft(took, RuntimeWidth)
+
+	if selected {
+		return cSel.Render("▸ "+ShortID(t.ID)+"  "+left) + " " + state.String()
+	}
+	return marker + cDim.Render(ShortID(t.ID)) + "  " + left + " " + state.String()
+}
+
+func (m Model) askView() string {
+	if m.filing {
+		return cDim.Render("  filing it…")
+	}
+	if !m.asking {
+		return cDim.Render("  press / to hand the department a job")
+	}
+	return cPrompt.Render("  ask  ") + m.ask + cPrompt.Render("█") +
+		cDim.Render("   enter to file · esc to cancel")
+}
+
+// detailRows is how many lines of a ticket fit on screen, once the header, the
+// two rules and the key line are taken out.
+func (m Model) detailRows() int {
+	n := m.height - 6
+	if n < 5 {
+		n = 5
+	}
+	return n
+}
+
+func (m Model) detailView() string {
+	if len(m.board.Rows) == 0 {
+		return m.listView()
+	}
+	t := m.board.Rows[m.selected].Ticket
+	now := time.Now()
+
+	var b strings.Builder
+	b.WriteString(cHead.Render(t.Title) + "\n")
+	meta := []string{ShortID(t.ID), t.Status}
+	if t.Priority != "" {
+		meta = append(meta, t.Priority)
+	}
+	meta = append(meta, Label(t.Status))
+	b.WriteString(cDim.Render(strings.Join(meta, " · ")) + "\n")
+
+	// BOTH CLOCKS, because they answer different questions: one is how long this
+	// work has existed, the other how long it has been where it is now. A ticket
+	// four hours old and two minutes into review is healthy; four hours old and
+	// four hours into review is not.
+	d, final, show := Runtime(m.opts.Table, t, now)
+	switch {
+	case !show && !Stopped(t.Status) && !t.CreatedAt.IsZero():
+		// Said plainly rather than left as a blank where a duration was: the
+		// question this answers is "why is nothing happening to this one".
+		b.WriteString(cDim.Render(fmt.Sprintf(
+			"waiting — queued %s ago, no stage has taken it yet",
+			RuntimeText(now.Sub(t.CreatedAt)))) + "\n")
+	case show && final:
+		// "took" and "stopped after" are different claims and the difference is the
+		// point: one is how long the work needed, the other how far it got before
+		// it gave up.
+		word := "took"
+		if t.Status == workflow.ColBlocked {
+			word = "stopped after"
+		}
+		b.WriteString(cDim.Render(word+" "+RuntimeText(d)) + "\n")
+	case show:
+		b.WriteString(cDim.Render(fmt.Sprintf("in progress %s · at this stage %s",
+			RuntimeText(d), ShortDuration(now.Sub(StageSince(t))))) + "\n")
+	}
+	b.WriteString("\n")
+
+	if desc := strings.TrimSpace(t.Description); desc != "" {
+		for _, line := range WrapTo(desc, m.rule()-4) {
+			b.WriteString("  " + line + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// THE DEPENDENCY GRAPH IN FULL, not as a count. The useful question is not
+	// "how many" but "which one, and has it landed" — the answer decides whether
+	// you wait or go and look at the prerequisite.
+	if len(t.DependsOn) > 0 {
+		b.WriteString(cKey.Render("  waits on") + "\n")
+		for _, dep := range t.DependsOn {
+			mark, style := "•", cWait
+			switch {
+			case dep.Status == workflow.ColDone:
+				mark, style = "✓", cDone
+			case NeedsAPerson(dep.Status):
+				// A prerequisite that is blocked will never complete on its own, and
+				// everything behind it is stranded rather than queued.
+				mark, style = "!", cErr
+			}
+			title := dep.Title
+			if title == "" {
+				title = "(untitled)"
+			}
+			b.WriteString("    " + style.Render(mark) + " " +
+				cDim.Render(ShortID(dep.ID)) + "  " +
+				style.Render(clip(title, 60)) + cDim.Render(" · "+dep.Status) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	for _, c := range t.Comments {
+		body := strings.TrimSpace(c.Body)
+		if record.IsClaim(body) {
+			// The claim is bookkeeping, not something a person reads — but WHO holds
+			// it is, because a stale claim on a dead host is why nothing is moving.
+			if cl, err := record.Parse(body); err == nil {
+				b.WriteString(cDim.Render("  ── claimed by "+cl.Role+" on "+cl.Host) + "\n")
+			}
+			continue
+		}
+		b.WriteString(cKey.Render("  ┌ ") + "\n")
+		for _, line := range WrapTo(body, m.rule()-4) {
+			b.WriteString("  " + line + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// WHAT THE MODEL IS ACTUALLY THINKING, below the record of what happened.
+	//
+	// The comments above say what the pipeline DID; this says why. Watching a
+	// stuck ticket through counters gives "41 refusals" and leaves the cause to
+	// guesswork — the reasoning beside it names the fault outright. Placed last
+	// because it is the longest section and reads as a tail.
+	if th := ReadThoughts(m.opts.TranscriptDir, t.ID); len(th) > 0 {
+		b.WriteString(cKey.Render("  reasoning") +
+			cDim.Render(fmt.Sprintf("  (last %d turns)", len(th))) + "\n")
+		for _, x := range th {
+			head := x.At.Local().Format("15:04:05")
+			if x.Role != "" {
+				head += " " + x.Role
+			}
+			if x.Tool != "" {
+				head += " → " + x.Tool
+			}
+			style := cDim
+			if x.Failed {
+				style = cErr
+			}
+			b.WriteString("    " + style.Render(head) + "\n")
+			for _, line := range WrapTo(x.Prose, m.rule()-6) {
+				b.WriteString("      " + line + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	if why, branch, fetch := NextStep(t, m.opts.RepoURL); why != "" {
+		b.WriteString("\n" + cErr.Render("  YOURS NOW") + cDim.Render(" — "+why) + "\n")
+		b.WriteString(cDim.Render("  branch  ") + branch + "\n")
+		if fetch != "" {
+			b.WriteString(cDim.Render("  fetch   ") + fetch + "\n")
+		}
+	}
+
+	// WINDOWED, because the reasoning panel made this view taller than a terminal
+	// for the first time and everything past the fold was simply unreachable. The
+	// header and the key line stay pinned so the position and the way out are
+	// always visible.
+	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	rows := m.detailRows()
+	top := m.detailScroll
+	if maxTop := len(lines) - rows; top > maxTop {
+		top = maxTop
+	}
+	if top < 0 {
+		top = 0
+	}
+	end := min(top+rows, len(lines))
+
+	var out strings.Builder
+	out.WriteString(m.header() + "\n")
+	out.WriteString(m.hr() + "\n")
+	out.WriteString(strings.Join(lines[top:end], "\n") + "\n")
+	out.WriteString(m.hr() + "\n")
+
+	keys := []string{"esc back", "r refresh", "q quit"}
+	if len(lines) > rows {
+		keys = append([]string{"↑↓ scroll", "pgup/pgdn page", "g/G ends"}, keys...)
+		out.WriteString(cDim.Render(fmt.Sprintf("  %d-%d of %d lines",
+			top+1, end, len(lines))) + "\n")
+	}
+	out.WriteString(m.keys(keys...))
+	return out.String()
+}
+
+func (m Model) composeView() string {
+	var b strings.Builder
+	b.WriteString(m.header() + "\n")
+	b.WriteString(m.hr() + "\n")
+	b.WriteString(cHead.Render("Hand the department some work") + "\n\n")
+
+	tCur, bCur := " ", " "
+	if m.field == 0 {
+		tCur = cPrompt.Render("█")
+	} else {
+		bCur = cPrompt.Render("█")
+	}
+	b.WriteString(cPrompt.Render("  title  ") + m.title + tCur + "\n\n")
+	b.WriteString(cPrompt.Render("  detail ") + "\n")
+	for _, line := range strings.Split(m.body, "\n") {
+		b.WriteString("    " + line + "\n")
+	}
+	b.WriteString("    " + bCur + "\n\n")
+	if m.note != "" {
+		b.WriteString(cErr.Render("  "+m.note) + "\n")
+	}
+	b.WriteString(cDim.Render("  The product manager triages it first, so a sentence of "+
+		"context is worth more than a precise spec.") + "\n")
+	b.WriteString(m.hr() + "\n")
+	b.WriteString(m.keys("tab switch field", "enter newline in detail", "ctrl+s file it", "esc cancel"))
+	return b.String()
+}
+
+func (m Model) keys(pairs ...string) string {
+	out := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		word, rest, _ := strings.Cut(p, " ")
+		out = append(out, cKey.Render(word)+cDim.Render(" "+rest))
+	}
+	return "  " + strings.Join(out, cDim.Render("  ·  "))
 }
 
 func pluralRuns(n int) string {
@@ -202,6 +903,8 @@ func pluralRuns(n int) string {
 	return fmt.Sprintf("%d finished runs", n)
 }
 
+// clip bounds a string BY RUNE and trims it. Used for titles and single-line
+// cells; see clipRunes for content whose leading whitespace matters.
 func clip(s string, max int) string {
 	r := []rune(strings.TrimSpace(s))
 	if len(r) <= max {
