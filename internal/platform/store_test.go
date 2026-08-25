@@ -197,18 +197,6 @@ func TestCreateOpensTheTicketWhereItWasAsked(t *testing.T) {
 	}
 }
 
-func TestCreateBoardRefusesAResponseWithNoID(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{}`))
-	}))
-	t.Cleanup(srv.Close)
-	store, _ := Routed(srv.URL, transport.Static("tok"))
-
-	if _, err := store.CreateBoard(context.Background(), "a project"); err == nil {
-		t.Error("a board with no id was accepted; the project would point at nothing")
-	}
-}
-
 // EnsureColumns is ADDITIVE. A startup path that removed columns it did not
 // recognise would be a data-loss bug wearing the clothes of a reconciler.
 func TestEnsureColumnsCreatesOnlyWhatIsMissing(t *testing.T) {

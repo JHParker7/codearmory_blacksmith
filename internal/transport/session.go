@@ -150,10 +150,3 @@ func (s *Session) login(ctx context.Context) (string, error) {
 	}
 	return out.Token, nil
 }
-
-// Invalidate drops the cached session so the next use logs in again.
-func (s *Session) Invalidate() {
-	s.mu.Lock()
-	s.token = ""
-	s.mu.Unlock()
-}

@@ -20,7 +20,7 @@ func TestReadThoughtsNewestLast(t *testing.T) {
 			Completion: "now I will edit it", At: now.Add(-time.Minute)},
 	)
 
-	got := ReadThoughts(dir, "t1")
+	got := readThoughts(dir, "t1")
 	if len(got) != 2 {
 		t.Fatalf("got %d thoughts, want 2", len(got))
 	}
@@ -40,7 +40,7 @@ func TestReadThoughtsOnlyTheAskedTicket(t *testing.T) {
 		transcript.Record{Kind: transcript.KindTurn, TaskID: "t2", Completion: "theirs", At: now},
 	)
 
-	got := ReadThoughts(dir, "t1")
+	got := readThoughts(dir, "t1")
 	if len(got) != 1 || got[0].Prose != "mine" {
 		t.Fatalf("got %+v, want only t1's turn — the panel is per ticket", got)
 	}
@@ -58,7 +58,7 @@ func TestReadThoughtsIncludesRefusals(t *testing.T) {
 			Detail: "store_test.go is written by the spec author", At: now},
 	)
 
-	got := ReadThoughts(dir, "t1")
+	got := readThoughts(dir, "t1")
 	if len(got) != 2 {
 		t.Fatalf("got %d, want the turn and the refusal", len(got))
 	}
@@ -83,7 +83,7 @@ func TestReadThoughtsIgnoresOtherKinds(t *testing.T) {
 		transcript.Record{Kind: transcript.KindOutcome, TaskID: "t1", Status: "merged", At: now},
 	)
 
-	if got := ReadThoughts(dir, "t1"); len(got) != 0 {
+	if got := readThoughts(dir, "t1"); len(got) != 0 {
 		t.Fatalf("got %d, want none — this panel is what the model SAID, and an "+
 			"action is already on the row", len(got))
 	}
@@ -99,7 +99,7 @@ func TestReadThoughtsCaps(t *testing.T) {
 	}
 	writeTranscript(t, dir, "2026-08-25", recs...)
 
-	got := ReadThoughts(dir, "t1")
+	got := readThoughts(dir, "t1")
 	if len(got) != MaxThoughtsShown {
 		t.Fatalf("got %d thoughts, want the cap of %d", len(got), MaxThoughtsShown)
 	}
@@ -122,11 +122,11 @@ func TestMaxThoughtsShownHoldsARepeat(t *testing.T) {
 
 func TestReadThoughtsWithoutACorpus(t *testing.T) {
 	for _, dir := range []string{"", config.TranscriptOff} {
-		if got := ReadThoughts(dir, "t1"); got != nil {
+		if got := readThoughts(dir, "t1"); got != nil {
 			t.Fatalf("dir %q: want nil, got %d", dir, len(got))
 		}
 	}
-	if got := ReadThoughts(t.TempDir(), ""); got != nil {
+	if got := readThoughts(t.TempDir(), ""); got != nil {
 		t.Fatal("no ticket selected means nothing to read")
 	}
 }

@@ -85,18 +85,6 @@ func Label(status string) string {
 	return status + " (not a department column)"
 }
 
-// NextRole names the agent that will pick a ticket up, READ OFF THE ROUTING
-// TABLE rather than restated here. A stage added to that table shows up in the
-// window the day it is written, and cannot disagree with it.
-func NextRole(tb workflow.Table, status string) string {
-	for _, st := range tb.Stages() {
-		if st.Ready == status {
-			return st.Role
-		}
-	}
-	return ""
-}
-
 // Urgency orders rows by what a person opening the window needs to see.
 //
 // The question this window is opened to answer is "is anything wrong", so the

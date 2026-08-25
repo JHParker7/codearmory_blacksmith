@@ -200,18 +200,6 @@ func (a *Agent) Class() model.Class { return a.class }
 // prove it by the absence of a triage comment.
 func (a *Agent) Wants(ticket.Ticket) bool { return true }
 
-// Scoped reports whether a request has already been triaged. The comment is the
-// marker, so the pipeline's state lives on the ticket rather than in a side
-// table that could drift from it.
-func Scoped(t ticket.Ticket) bool {
-	for _, c := range t.Comments {
-		if strings.Contains(c.Body, Marker) {
-			return true
-		}
-	}
-	return false
-}
-
 // EntryColumn is where a freshly planned task waits.
 func (a *Agent) EntryColumn() string {
 	if a.opts.MergeTasksFirst {

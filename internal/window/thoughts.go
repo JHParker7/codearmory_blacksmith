@@ -26,33 +26,6 @@ type Thought struct {
 // this is not a fitting constraint; it is a reading one.
 const MaxThoughtsShown = 20
 
-// ReadThoughts returns what the model said on one ticket, NEWEST LAST.
-//
-// THE PROSE IS THE USEFUL SIGNAL AND IT IS ONLY IN THE FILE. Watching a stuck
-// ticket through counters says "41 refusals" and leaves the cause to guesswork;
-// the reasoning beside it says "the routing uses HasPrefix on a path missing its
-// leading slash", which is the actual fault. Every diagnosis worth having came
-// from reading these, and reading them meant leaving the tool and grepping a
-// JSONL file by hand.
-func ReadThoughts(dir, ticketID string) []Thought {
-	if ticketID == "" {
-		return nil
-	}
-	var out []Thought
-	scanRecords(dir, func(r transcript.Record) {
-		if r.TaskID != ticketID {
-			return
-		}
-		if th, ok := thoughtOf(r); ok {
-			out = append(out, th)
-			if len(out) > MaxThoughtsShown {
-				out = out[len(out)-MaxThoughtsShown:]
-			}
-		}
-	})
-	return out
-}
-
 // thoughtOf is the one rule for turning a record into something the reasoning
 // panel shows, shared so the digest and the direct read cannot drift.
 func thoughtOf(r transcript.Record) (Thought, bool) {
