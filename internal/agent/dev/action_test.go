@@ -2,6 +2,7 @@ package dev
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -225,8 +226,18 @@ func TestTheLoopOffersNoWayToAskForVerificationOrToQuit(t *testing.T) {
 func TestEveryOfferedToolIsAnAcceptedAction(t *testing.T) {
 	for _, mode := range []Mode{ModeDevelop, ModeTest, ModeCoverage} {
 		offered := Tools(mode)
-		if len(offered) != len(ActionsFor(mode)) {
-			t.Errorf("mode %d offers %d tools for %d actions", mode, len(offered), len(ActionsFor(mode)))
+		// THE DIRECTION IS THE INVARIANT, not the count. Every offered tool must be
+		// accepted; the reverse is allowed and deliberate — write_files is accepted
+		// so a schema-constrained backend that emits the array form is not refused
+		// for doing what was once asked, and is never offered so nothing learns to
+		// build the nesting that the model closes wrongly at depth.
+		for _, tool := range offered {
+			if !slices.Contains(ActionsFor(mode), tool.Name) {
+				t.Errorf("mode %d offers %q, which it does not accept", mode, tool.Name)
+			}
+		}
+		if slices.Contains(toolNames(offered), ActionWriteFiles) {
+			t.Errorf("mode %d offers the array write form; it is accepted, not offered", mode)
 		}
 		for _, tool := range offered {
 			if _, err := ActionFromCall(model.ToolCall{Name: tool.Name}, mode); err != nil {
@@ -249,7 +260,7 @@ func TestEachStageIsToldWhichFilesItMayWrite(t *testing.T) {
 	for mode, wants := range rules {
 		var write model.Tool
 		for _, tool := range Tools(mode) {
-			if tool.Name == ActionWriteFiles {
+			if tool.Name == ActionWriteFile {
 				write = tool
 			}
 		}
@@ -279,7 +290,7 @@ func TestEachStageIsToldWhichFilesItMayWrite(t *testing.T) {
 func TestTheWriteToolNamesTheCopyItMustNotMake(t *testing.T) {
 	var write model.Tool
 	for _, tool := range Tools(ModeDevelop) {
-		if tool.Name == ActionWriteFiles {
+		if tool.Name == ActionWriteFile {
 			write = tool
 		}
 	}
@@ -292,4 +303,13 @@ func TestTheWriteToolNamesTheCopyItMustNotMake(t *testing.T) {
 			t.Errorf("the write tool does not say %q", want)
 		}
 	}
+}
+
+// toolNames is the offered tools by name.
+func toolNames(tools []model.Tool) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, t.Name)
+	}
+	return out
 }

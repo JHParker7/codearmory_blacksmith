@@ -119,8 +119,13 @@ three ways, and gives the text to put there in "replace".
   address at all. Only for a file that does not exist yet: a blind whole-file
   write to an existing file would delete work you cannot see.
 
-  An empty "replace" DELETES what you addressed. Several edits to one file in one
-  call are fine.`
+  An empty "replace" DELETES what you addressed.
+
+  ONE EDIT PER CALL. The tool takes a single edit, at the top level — there is no
+  list to build. Call it again for the next change. This is deliberate: the
+  batched form asked for an array of objects each carrying a whole file, and a
+  reply that got eight thousand characters of nested quoting right except for the
+  last two brackets is a reply that cannot be used at all.`
 
 // commonRules are the constraints every mode shares, with the one that differs
 // filled in from the mode itself so the two cannot drift.
