@@ -41,7 +41,11 @@ func StepDetail(act Action) string {
 	switch act.Action {
 	case ActionReadFiles:
 		return clip(strings.Join(act.Paths, ", "), 160)
-	case ActionWriteFiles:
+	// BOTH WRITE FORMS. They differ only on the wire and the decoder folds each
+	// into the same Edits, so a switch naming one of them silently produced an
+	// EMPTY detail for the other — see outcomeOf for the other half of the same
+	// mistake, and the history it left behind.
+	case ActionWriteFile, ActionWriteFiles:
 		parts := make([]string, 0, len(act.Edits))
 		for _, e := range act.Edits {
 			sum := sha256.Sum256([]byte(e.Replace))
