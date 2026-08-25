@@ -19,6 +19,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/agent/architect"
 	"github.com/code-armory-app/blacksmith/internal/agent/dev"
 	"github.com/code-armory-app/blacksmith/internal/agent/integrate"
+	"github.com/code-armory-app/blacksmith/internal/agent/referee"
 	"github.com/code-armory-app/blacksmith/internal/agent/resolve"
 	"github.com/code-armory-app/blacksmith/internal/agent/review"
 	"github.com/code-armory-app/blacksmith/internal/agent/scope"
@@ -225,10 +226,15 @@ func Assemble(d Deps) (Assembly, error) {
 	// though it were its own fault.
 	writesTests(workflow.RoleSpecMerge, dev.ModeSpecMerge)
 
+	// THE REFEREE IS THE DEVELOPER'S ONLY WAY TO SPOT A SPECIFICATION THAT
+	// COMPILES AND STILL CANNOT BE SATISFIED. The mechanical routes read the
+	// compiler; this reads the tests. It runs once, before the first turn, and
+	// only for the developer — every other stage may edit the tests it is given.
 	add(workflow.RoleDev, model.ClassLarge, dev.New(d.Gateway, heldSandboxes{d.Leases}, d.Store, model.ClassLarge, cfg.Repo,
 		dev.Options{
 			Mode: dev.ModeDevelop, Role: workflow.RoleDev,
 			MaxTurns: cfg.DevMaxIterations, Tools: cfg.Classes[model.ClassLarge].ToolsSupported,
+			Referee: referee.New(d.Gateway, model.ClassLarge),
 		}))
 
 	// COVERAGE IS OFF BY DEFAULT: it works, and it is in the wrong place.

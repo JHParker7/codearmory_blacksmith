@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/code-armory-app/blacksmith/internal/agent/referee"
 	"github.com/code-armory-app/blacksmith/internal/config"
 	"github.com/code-armory-app/blacksmith/internal/edit"
 	"github.com/code-armory-app/blacksmith/internal/forge"
@@ -57,6 +58,20 @@ type Agent struct {
 	// tools says whether this class's backend parses tool calls. See
 	// BuildRequest: the grammar is the fallback, not the preference.
 	tools bool
+
+	// ref judges whether a specification can be satisfied at all. NIL IS A VALID
+	// CONFIGURATION — a host with no second opinion still develops, it just does
+	// not get the preflight — so every use is guarded rather than assumed.
+	ref Preflighter
+}
+
+// Preflighter reads the tests and says whether they can be satisfied.
+//
+// An interface rather than the concrete referee so this package does not depend
+// on it, and so a test can supply a verdict without a model.
+type Preflighter interface {
+	Preflight(ctx context.Context, rec *transcript.Recorder, t ticket.Ticket,
+		tests map[string]string) *referee.Verdict
 }
 
 // Options configure one stage built on this loop.
@@ -66,6 +81,10 @@ type Options struct {
 	SystemPrompt string
 	MaxTurns     int
 	Tools        bool
+
+	// Referee judges an unsatisfiable specification before the developer spends
+	// its budget proving it. Optional.
+	Referee Preflighter
 }
 
 // New builds a stage.
@@ -77,6 +96,7 @@ func New(gw Gateway, boxes Sandboxes, store Store, class model.Class, repo confi
 	return &Agent{
 		gw: gw, boxes: boxes, store: store, class: class, repo: repo,
 		mode: o.Mode, role: o.Role, prompt: o.SystemPrompt, maxTurns: turns, tools: o.Tools,
+		ref: o.Referee,
 	}
 }
 
@@ -147,6 +167,14 @@ func (a *Agent) Handle(ctx context.Context, t ticket.Ticket) (workflow.Outcome, 
 		return workflow.OutcomeFailed, "", fmt.Errorf("%s: survey %s: %w", a.role, branch, err)
 	}
 	state.Tree = tree
+
+	// BEFORE THE FIRST TURN, because the ordinary route needs several failed
+	// verifications first and by then the attempts are spent. A specification the
+	// developer cannot satisfy costs one model call to notice here, against a
+	// whole budget to prove by flailing.
+	if outcome, detail, done := a.preflight(ctx, sb, t, state); done {
+		return outcome, detail, nil
+	}
 
 	why := Reasons{
 		Returned:   record.LatestMarked(t, record.ReturnedMarker),
@@ -344,6 +372,51 @@ func (a *Agent) finish(ctx context.Context, t ticket.Ticket, s *State, branch st
 			clip(s.Summary, MaxSummaryRunes), len(s.Staged), s.Iteration))
 	return workflow.OutcomeSuccess,
 		fmt.Sprintf("%d file(s) in %d turns", len(s.Staged), s.Iteration), nil
+}
+
+// preflight asks whether the tests can be satisfied at all, before any turn is
+// spent on them.
+//
+// SKIPPED UNLESS THERE IS SOMETHING TO JUDGE: only the developer is bound by the
+// tests it is given, only a tree with a test file has any, and a host with no
+// referee simply does not make the check.
+//
+// THE READ IS NOT WASTED. The developer opens on the tests every time — it
+// cannot satisfy them without reading them — so the contents are recorded as its
+// first read rather than fetched again, and the sandbox is touched once.
+func (a *Agent) preflight(
+	ctx context.Context, sb Box, t ticket.Ticket, s *State,
+) (workflow.Outcome, string, bool) {
+	if a.ref == nil || a.mode != ModeDevelop {
+		return "", "", false
+	}
+	var paths []string
+	for _, p := range s.Tree {
+		if edit.IsTestFile(p) {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) == 0 {
+		return "", "", false
+	}
+	if len(paths) > MaxReadPaths {
+		paths = paths[:MaxReadPaths]
+	}
+
+	tests, err := a.read(ctx, sb, paths)
+	if err != nil {
+		// A FAILED READ IS NOT A VERDICT. The developer will read them itself and
+		// the ordinary routes still apply; refusing to start over a second opinion
+		// that could not be gathered would be worse than not having one.
+		return "", "", false
+	}
+	s.RecordRead(paths, tests)
+
+	if v := a.ref.Preflight(ctx, recorderFrom(ctx), t, tests); v.Blames(referee.OwnerSpec) {
+		s.SpecBroken = v.Reason
+		return a.endOnBrokenSpec(ctx, t, s)
+	}
+	return "", "", false
 }
 
 // SpecRepairsSoFar counts how many times this ticket has already been handed
