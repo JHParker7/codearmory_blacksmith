@@ -306,7 +306,7 @@ func (a *Agent) outcomeOf(
 		s.RecordRead(plan.Fresh, got)
 		return ReadOutcome(plan.Fresh, got)
 
-	case act.Action == ActionWriteFiles:
+	case act.Action == ActionWriteFile, act.Action == ActionWriteFiles:
 		if s.NoopEdits > 0 {
 			return "changed nothing; the file already held that text"
 		}
