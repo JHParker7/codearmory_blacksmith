@@ -412,7 +412,7 @@ func Render(d Design, files []File, rejected []string) string {
 	if len(rejected) > 0 {
 		// SAID RATHER THAN SWALLOWED: a document silently dropped is a gap nobody
 		// knows about until an agent needs it.
-		fmt.Fprintf(&b, "\nNot written (documentation only, at the repository root): %s\n",
+		fmt.Fprintf(&b, "\nNot written (documentation at the repository root, declarations in types/): %s\n",
 			strings.Join(rejected, ", "))
 	}
 	return b.String()

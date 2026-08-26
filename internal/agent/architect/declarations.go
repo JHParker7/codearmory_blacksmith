@@ -80,7 +80,7 @@ func OnlyDeclarations(src string) error {
 		if fn.Body == nil {
 			continue // a declaration with no body at all
 		}
-		if stubBody(fn.Body) {
+		if stubBody(fn.Body) || conventionalStringer(fn) {
 			continue
 		}
 		return fmt.Errorf("%w: %s has a body. Declare the signature and leave the body "+
@@ -88,6 +88,36 @@ func OnlyDeclarations(src string) error {
 			"against tests you have not seen", ErrNotDeclarations, fn.Name.Name)
 	}
 	return nil
+}
+
+// conventionalStringer reports whether a method is one that MUST have a body.
+//
+// A PANICKING Error() IS A RUNTIME HAZARD, not a placeholder. Any %v that
+// formats such an error panics, and error values get formatted from log lines
+// and refusal messages all over this pipeline — so demanding a stub here is
+// worse than allowing the body. Measured on run 91: the architect declared a
+// validation error type with the idiomatic
+//
+//	func (e *InvalidTitle) Error() string { return e.msg }
+//
+// and the whole declarations file was refused over it, so the run proceeded with
+// no shared types at all.
+//
+// NARROW ON PURPOSE: a no-argument method named Error or String returning one
+// value. That is the entire Go convention, it cannot hide behaviour a test would
+// exercise beyond a string, and anything else still needs a stub.
+func conventionalStringer(fn *ast.FuncDecl) bool {
+	if fn.Recv == nil || fn.Name == nil {
+		return false
+	}
+	if fn.Name.Name != "Error" && fn.Name.Name != "String" {
+		return false
+	}
+	t := fn.Type
+	if t.Params != nil && len(t.Params.List) > 0 {
+		return false
+	}
+	return t.Results != nil && len(t.Results.List) == 1
 }
 
 // stubBody reports whether a body does nothing a test could observe.
