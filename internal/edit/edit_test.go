@@ -404,15 +404,38 @@ func TestContentGainsATrailingNewlineExceptWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestTestFilesAreIdentifiedByTheCompilersOwnRule(t *testing.T) {
-	for _, p := range []string{"store_test.go", "a/b/store_test.go", "./x_test.go"} {
+// TEST FILES ARE THE AUTHOR'S, AND THE COMPILER'S RULE IS TOO NARROW FOR THAT.
+//
+// Read off run 83: the developer wrote helpers its tests call into
+// server_test_helpers.go — which does not end in _test.go, so nothing stopped it
+// — and imported testing. The harness then refused the file as shipped code
+// importing a testing package, and it spent 26 writes across three attempts
+// trying to remove an import the file existed to use. Neither direction works;
+// only a rename does, and nothing suggested one.
+func TestAFileNamedLikeATestBelongsToTheAuthor(t *testing.T) {
+	for _, p := range []string{
+		"store_test.go", "a/b/store_test.go", "./x_test.go",
+		"server_test_helpers.go", // run 83's trap
+		"test_helpers.go",
+		"testdata.go",
+		"test.go",
+	} {
 		if !IsTestFile(p) {
-			t.Errorf("IsTestFile(%q) = false", p)
+			t.Errorf("IsTestFile(%q) = false; the developer could create it and then "+
+				"be unable to satisfy the test-imports gate", p)
 		}
 	}
-	for _, p := range []string{"store.go", "test.go", "a/testdata/x.go", "store_test.gox"} {
+
+	// MATCHED BY SEGMENT, NOT SUBSTRING. These are ordinary production names and
+	// blocking them would trade one trap for another.
+	for _, p := range []string{
+		"store.go", "latest.go", "contest.go", "attestation.go", "protest.go",
+		"a/testdata/x.go", // the directory is not the file
+		"store_test.gox",
+	} {
 		if IsTestFile(p) {
-			t.Errorf("IsTestFile(%q) = true", p)
+			t.Errorf("IsTestFile(%q) = true; that is a production file the developer "+
+				"must be able to write", p)
 		}
 	}
 }

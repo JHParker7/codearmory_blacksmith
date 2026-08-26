@@ -239,6 +239,15 @@ func Apply(s *State, edits []edit.Edit, mode Mode) error {
 				"rather than adding a second copy, or remove the old one in the same edit",
 				p, strings.Join(dups, " and "))
 		}
+		// AND WHAT THE TOOLCHAIN WOULD REJECT ON SIGHT, for the part of it that
+		// needs no types. See edit.VetLike: run 81's t.Error("%q") was invisible to
+		// the author's own gate — with no implementation the package does not
+		// type-check, so vet never ran — and the developer met it later inside a
+		// file it was forbidden to edit. The write is the last moment at which the
+		// agent that made the mistake still owns the file.
+		if err := edit.VetLike(p, staged[p]); err != nil {
+			return err
+		}
 	}
 
 	// SNAPSHOT BEFORE COMMITTING, so the previous state survives the write that
