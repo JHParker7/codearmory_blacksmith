@@ -98,19 +98,32 @@ func TestTheRefereeIsNotAskedBeforeThereIsEvidence(t *testing.T) {
 	}
 }
 
-// ONCE PER ATTEMPT. The specification does not change while the developer works,
-// so asking again buys the same answer at the price of another large-model call
-// — and gives a sampler's bad day a second chance to send a healthy
-// specification back.
-func TestTheRefereeIsAskedOnlyOncePerAttempt(t *testing.T) {
+// BOUNDED PER ATTEMPT, AND IT USED TO BE ONCE.
+//
+// The old rule was defended on the grounds that the specification does not
+// change while the developer works. True, and not the point: WHICH PART of it
+// the developer is stuck against changes completely, and a verdict taken at the
+// earliest legal moment was then frozen over everything that followed. Run 21
+// spent seventy turns oscillating against an assertion no implementation could
+// satisfy, holding a verdict reached ninety seconds in.
+//
+// What keeps the cost down now is not asking once but asking rarely: a compile
+// error never reaches the referee at all, and an assertion failure reaches it
+// only after coming back RefereeOnRecurrence times. The ceiling is the backstop,
+// not the mechanism.
+func TestTheRefereeIsAskedABoundedNumberOfTimesPerAttempt(t *testing.T) {
 	j := &judge{judgement: &referee.Verdict{
 		Owner: referee.OwnerDev, Reason: "the handler is missing", Confidence: "high",
 	}}
 
 	redRun(t, j, RefereeAfterFailures+5)
 
-	if j.judged > 1 {
-		t.Errorf("the referee was asked %d times in one attempt", j.judged)
+	if j.judged == 0 {
+		t.Error("the referee was never asked at all")
+	}
+	if j.judged > MaxRefereeAsks {
+		t.Errorf("the referee was asked %d times in one attempt, past the %d ceiling",
+			j.judged, MaxRefereeAsks)
 	}
 }
 

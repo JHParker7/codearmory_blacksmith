@@ -462,19 +462,19 @@ func (a *Agent) preflight(
 // middle this exists for.
 const RefereeAfterFailures = 3
 
-// RefereeOnStall is how many IDENTICAL red verifications in a row re-open the
-// question of whose fault the failure is.
+// RefereeOnRecurrence is how many times one failure must be SEEN before the
+// question of whose fault it is becomes worth buying an opinion on.
 //
-// The first consult happens early, on evidence that is necessarily thin. This is
-// the other end: a developer repeating one edit against one unchanged block of
-// output has stopped converging, and that is the moment the question is worth
-// asking again — with completely different evidence from the first time.
+// SIGHTINGS, NOT CONSECUTIVE REPEATS. The expensive shape is a cycle: run 21's
+// developer alternated between two routing schemes every thirty seconds, run
+// 50's between a heading-order failure and a missing-form failure, each fix
+// re-breaking the other. Neither ever repeated a failure twice in a row, so a
+// consecutive counter read both as steady progress.
 //
-// EIGHT, because a handful of repeats is ordinary. A developer re-running the
-// same verification while it works through a multi-part failure repeats itself a
-// few times legitimately. Eight consecutive byte-identical outputs is not that;
-// on run 21 the count reached the dozens.
-const RefereeOnStall = 8
+// THREE, because two is ordinary. A test that fails, is addressed, and fails
+// once more is a normal edit-and-recheck. A third sighting means two attempts
+// at it have not moved it.
+const RefereeOnRecurrence = 3
 
 // MaxRefereeAsks bounds the second opinion for the whole attempt, because the
 // referee is a large-model call and a stalled developer would otherwise buy one
@@ -512,29 +512,30 @@ func (a *Agent) consultReferee(ctx context.Context, t ticket.Ticket, s *State) {
 	if s.SpecBroken != "" || s.RefereeAsks >= MaxRefereeAsks {
 		return
 	}
-	if s.FailedVerifications < RefereeAfterFailures {
+	// A COMPILE ERROR IS NOT AN OPEN QUESTION. The matcher attributes it without
+	// an opinion: a non-test file is the developer's, an undefined symbol is the
+	// expected red of test-first, a fault local to a test file is the author's.
+	// Asking here buys a verdict for something already decided — on run 50 that
+	// was eight of ten consults, every one of them "dev".
+	if HasCompileErrors(s.LastTest) {
 		return
 	}
-	first := s.RefereeAsks == 0
-	// A DIFFERENT FAILURE IS A DIFFERENT QUESTION. This is what makes the second
-	// opinion automatic: the developer does not decide when it is asked, the
-	// evidence does. A verdict ruled on one failure says nothing about the next.
-	changed := s.RefereeAsks > 0 && s.LastTest != s.LastJudgedFailure
-	stalled := s.RefereeAsks > 0 && s.SameFailure >= RefereeOnStall
-	if !first && !changed && !stalled {
+	// WHAT IS LEFT IS A SUITE THAT BUILDS AND FAILS AN ASSERTION, which no
+	// mechanical route can attribute — and it is only worth asking about once the
+	// developer has stopped moving it. A failing test that KEEPS CHANGING is
+	// progress; one that keeps coming back is not.
+	if s.FailureSightings[FailureFingerprint(s.LastTest)] < RefereeOnRecurrence {
 		return
 	}
 	// Counted before the call, not after: a call that fails is still a call
 	// spent, and retrying it every iteration is how one unavailable referee
 	// becomes a hundred requests.
 	s.RefereeAsks++
-	// THE STALL COUNTER RESTARTS WITH THE QUESTION. Without this the condition
-	// stays true and every remaining turn buys another verdict on the same
-	// evidence, which is the runaway the ask ceiling would then have to absorb.
-	s.SameFailure = 0
-	// RECORDED BEFORE THE CALL for the same reason the count is: what matters is
-	// which failure was PUT to the referee, whether or not an answer came back.
-	s.LastJudgedFailure = s.LastTest
+	// THE SIGHTINGS RESTART WITH THE QUESTION. Without this the condition stays
+	// true and every remaining turn buys another verdict on the same evidence,
+	// which is the runaway the ask ceiling would then have to absorb. The failure
+	// must come back RefereeOnRecurrence times again to be worth asking twice.
+	s.FailureSightings[FailureFingerprint(s.LastTest)] = 0
 
 	// IT CONVICTS BUT DOES NOT ACQUIT, and that asymmetry is deliberate. The guard
 	// above means this never runs while a verdict stands, because a compile fault
@@ -546,8 +547,20 @@ func (a *Agent) consultReferee(ctx context.Context, t ticket.Ticket, s *State) {
 	// and that is fixed where it was caused — JudgeSpec now clears when the
 	// failure leaves the test files. An acquittal here would have been a second
 	// mechanism aimed at the same defect.
-	if v := a.ref.Judge(ctx, recorderFrom(ctx), t, s.Read, s.LastTest); v.Blames(referee.OwnerSpec) {
+	v := a.ref.Judge(ctx, recorderFrom(ctx), t, s.Read, s.LastTest)
+	if v.Blames(referee.OwnerSpec) {
 		s.SpecBroken = v.Reason
+		return
+	}
+	// AND A VERDICT THAT DOES NOT HAND THE TICKET BACK IS STILL WORTH READING.
+	//
+	// It used to be discarded. Run 50 bought ten diagnoses of this kind — "pass
+	// non-pointer values to errors.As, which requires a pointer to a type that
+	// implements error", naming the file and the lines — and threw every one
+	// away, while the developer went on failing the same way. The agent that has
+	// to act on the failure is the one agent that never saw the analysis of it.
+	if v != nil && strings.TrimSpace(v.Reason) != "" {
+		s.Hint = v.Reason
 	}
 }
 

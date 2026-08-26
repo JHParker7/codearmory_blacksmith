@@ -431,6 +431,48 @@ func (s *State) FaultOrDefault() string {
 	return "no implementation could satisfy them; the verification below is the evidence"
 }
 
+// FailureFingerprint identifies a failure independently of WHERE it is reported.
+//
+// POSITIONS DRIFT WHILE THE FAULT STAYS PUT. Read off run 50: the referee was
+// asked about "undefined bytesReader" at handlers.go:67, the developer edited
+// the lines above it, and the identical fault re-reported at handlers.go:68 was
+// counted as a new question and bought a second verdict 62 seconds later. Two of
+// its three consults went to one typo.
+//
+// Line and column are therefore stripped and the file kept: a fault that moves
+// down a file is the same fault, and the same message in a different file is not.
+func FailureFingerprint(out string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(out, "\n") {
+		l := strings.TrimSpace(stripToolPrefix(line))
+		if l == "" {
+			continue
+		}
+		b.WriteString(failurePosition.ReplaceAllString(l, "$1:"))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// failurePosition matches the "file.go:12:34:" a compiler prints and the
+// "file.go:12:" a test failure prints, keeping only the file.
+var failurePosition = regexp.MustCompile(`([\w./-]+\.go):\d+(:\d+)?:`)
+
+// HasCompileErrors reports whether the toolchain refused to build.
+//
+// THIS IS THE LINE BETWEEN THE TWO ROUTES. A compile error is attributable
+// mechanically — a non-test file is the developer's, an undefined symbol is the
+// expected red of test-first, a fault local to a test file is the author's — so
+// there is nothing for a second opinion to arbitrate. What no mechanical route
+// can decide is a suite that BUILDS and then fails an assertion.
+//
+// Measured on run 50: ten consults, ten verdicts of "dev", and every one of the
+// compile-error cases was already decided by the matcher before it was asked.
+func HasCompileErrors(out string) bool {
+	files, _ := CompileErrorFiles(out)
+	return len(files) > 0
+}
+
 // NoteTestEditRefusal records the developer being told it may not edit a test,
 // and concludes from it when the evidence is already there.
 //

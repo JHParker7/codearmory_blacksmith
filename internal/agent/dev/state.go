@@ -167,27 +167,32 @@ type State struct {
 	// nothing asked again. The attempt died on the wall clock at 45 minutes.
 	RefereeAsks int
 
-	// LastJudgedFailure is the verification output the referee last ruled on.
+	// FailureSightings counts how many times each distinct failure has been seen
+	// this attempt, keyed by FailureFingerprint.
 	//
-	// A DIFFERENT FAILURE IS A DIFFERENT QUESTION, and this is what lets the
-	// second opinion be asked automatically rather than on a schedule. The
-	// deterministic matcher reads the compiler and is right about compile faults;
-	// what it cannot see is that the failure it ruled on has been replaced. Run
-	// 42 blocked a ticket over test-file errors that had already been fixed,
-	// while three errors sat in the developer's own handlers.go.
-	LastJudgedFailure string
+	// RECURRENCE, NOT REPETITION, because the expensive shape is a CYCLE and a
+	// consecutive counter cannot see one. Run 21's developer alternated between
+	// Go 1.22 pattern routing and a /tickets/ prefix every thirty seconds; run 50
+	// alternated between a heading-order failure and a missing-form failure,
+	// fixing each by breaking the other. In both, no failure ever repeated twice
+	// in a row, so a consecutive counter reset every single time and read a
+	// developer going in circles as a developer making progress.
+	//
+	// A count of sightings is blind to what is interleaved between them, which is
+	// exactly the property those runs needed.
+	FailureSightings map[string]int
 
-	// SameFailure counts consecutive red verifications whose output was byte for
-	// byte the one before it.
+	// Hint is a second opinion on the CURRENT failure, written for the agent that
+	// has to act on it.
 	//
-	// THIS IS WHAT BEING STUCK LOOKS LIKE, and it is the signal the loop was
-	// missing. A developer that is converging produces changing output: a new
-	// failing test, a different error, one more line passing. A developer that
-	// has stopped converging produces the identical block of text over and over.
-	// On run 21 the same four lines repeated for dozens of turns while every
-	// ceiling in the loop counted up toward a timeout, and nothing asked whether
-	// the target was reachable at all.
-	SameFailure int
+	// THE REFEREE'S REASONING USED TO BE THROWN AWAY unless it blamed the
+	// specification. Measured on run 50: ten verdicts, all of them "dev", each
+	// carrying a precise diagnosis — "handlers.go:139 and 143 pass non-pointer
+	// values to errors.As, which requires a pointer to a type that implements
+	// error" — and not one word of it reached the developer. Ten large-model
+	// diagnoses were bought and discarded, and the developer went on failing the
+	// same way.
+	Hint string
 
 	// ParseFails counts consecutive replies that were not valid actions, and
 	// Refunded counts turns given back for reads.
