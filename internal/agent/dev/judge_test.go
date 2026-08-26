@@ -9,6 +9,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/edit"
 	"github.com/code-armory-app/blacksmith/internal/forge"
 	"github.com/code-armory-app/blacksmith/internal/model"
+	"github.com/code-armory-app/blacksmith/internal/ticket"
 	"github.com/code-armory-app/blacksmith/internal/workflow"
 )
 
@@ -84,12 +85,18 @@ func TestTheRefereeIsAskedOnceThereIsEnoughToJudge(t *testing.T) {
 // NOT BEFORE THERE IS EVIDENCE. Test-first work is RED BY DESIGN at the start,
 // so asking on the first failure would put the referee on every ticket at its
 // most misleading moment — and a wrong "spec" spends one of only two repairs.
+// ASSERTED ON THE GUARD ITSELF, not through a driven attempt. Written through
+// redRun it depended on how many verifications the loop happened to produce,
+// which is not what it is about and changed when the consult policy did.
 func TestTheRefereeIsNotAskedBeforeThereIsEvidence(t *testing.T) {
-	j := &judge{judgement: &referee.Verdict{
-		Owner: referee.OwnerSpec, Reason: "no", Confidence: "high",
-	}}
+	j := &sequenceJudge{}
+	a := &Agent{ref: j, mode: ModeDevelop}
+	s := &State{FailureSightings: map[string]int{},
+		LastTest: "--- FAIL: TestX\n    a_test.go:10: got 1 want 2"}
 
-	redRun(t, j, RefereeAfterFailures-1)
+	for s.FailedVerifications = 0; s.FailedVerifications < RefereeAfterFailures; s.FailedVerifications++ {
+		a.consultReferee(context.Background(), ticket.Ticket{}, s)
+	}
 
 	if j.judged != 0 {
 		t.Errorf("the referee was asked after fewer than %d failed verifications; the "+
