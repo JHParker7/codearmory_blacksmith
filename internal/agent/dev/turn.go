@@ -248,12 +248,14 @@ func (s *State) RecordVerification(output string, pass bool, mode Mode) {
 		pass = false
 	}
 
-	// COUNTED BEFORE LastTest IS OVERWRITTEN, because the comparison is against
-	// the previous verification and there is nowhere else that still holds it.
-	if !pass && output == s.LastTest {
-		s.SameFailure++
-	} else {
-		s.SameFailure = 0
+	// EVERY RED IS COUNTED AGAINST ITS FINGERPRINT, whatever came between it and
+	// the last time it was seen. A cycle is the shape that matters and a
+	// consecutive counter cannot see one.
+	if !pass {
+		if s.FailureSightings == nil {
+			s.FailureSightings = map[string]int{}
+		}
+		s.FailureSightings[FailureFingerprint(output)]++
 	}
 
 	s.LastTest = output

@@ -226,6 +226,15 @@ func RenderProgress(s *State) string {
 		fmt.Fprintf(&b, "\n%s\n", s.Restart)
 	}
 
+	// THE SECOND OPINION IS NOT A REJECTION and must not be framed as one. It is
+	// an analysis of the failure the agent is looking at, from a model that read
+	// the same evidence with fresh eyes, so it goes beside the verification
+	// rather than under the heading for a refused action.
+	if s.Hint != "" {
+		fmt.Fprintf(&b, "\nA SECOND OPINION ON THIS FAILURE (advice, not a refusal):\n%s\n",
+			s.Hint)
+	}
+
 	if s.Notice != "" {
 		fmt.Fprintf(&b, "\nYOUR LAST ACTION WAS NOT ACCEPTED:\n%s\n", s.Notice)
 	}

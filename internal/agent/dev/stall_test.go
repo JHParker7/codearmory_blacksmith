@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/code-armory-app/blacksmith/internal/agent/referee"
@@ -31,14 +32,8 @@ func (s *sequenceJudge) Judge(_ context.Context, _ *transcript.Recorder, _ ticke
 }
 
 // runStalled drives the developer through n failing verifications whose output
-// is IDENTICAL every time, which is the shape a stalled attempt makes, and
-// returns what the loop decided.
-//
-// It is redRun's structure with a Referee interface rather than the concrete
-// fixture, so a judge that answers differently on the second ask can be used.
-// The edits alternate so each one applies: old_str must match exactly once, and
-// an edit that does not apply never reaches a verification — which would look
-// exactly like a referee that was never asked.
+// is identical every time — a suite that BUILDS and fails the same assertion —
+// and returns what the loop decided.
 func runStalled(t *testing.T, j Referee, n int) (workflow.Outcome, string) {
 	t.Helper()
 
@@ -62,10 +57,6 @@ func runStalled(t *testing.T, j Referee, n int) (workflow.Outcome, string) {
 		files:    map[string]string{"main.go": storeGo, "store_test.go": "package main\n"},
 		verdicts: verdicts,
 	}
-	// THE BUDGET HAS TO OUTLAST THE STALL. devAgent defaults to 8 turns, and the
-	// second consult cannot arrive before RefereeAfterFailures + RefereeOnStall
-	// verifications — so at the default the loop ended first and the test read as
-	// "the referee was never asked again" when it had never been given the chance.
 	a := devAgent(&gw{replies: replies}, b, &board{}, Options{MaxTurns: n + 4})
 	a.ref = j
 
@@ -76,81 +67,193 @@ func runStalled(t *testing.T, j Referee, n int) (workflow.Outcome, string) {
 	return out, detail
 }
 
-// SameFailure IS THE STALL SIGNAL, so pin exactly what moves it.
+// ONE FAULT THAT MOVED DOWN A FILE IS ONE FAULT.
 //
-// A developer that is converging produces changing output. One that has stopped
-// produces the identical block over and over — on run 21 the same four lines
-// repeated for dozens of turns.
-func TestIdenticalRedVerificationsAreCounted(t *testing.T) {
-	const fail = "--- FAIL: TestRoutes\n    main_test.go:46: got 404"
-	s := &State{Staged: map[string]string{"main.go": "package main\n"}}
-
-	s.RecordVerification(fail, false, ModeDevelop)
-	if s.SameFailure != 0 {
-		t.Fatalf("the first red counted as a repeat: %d", s.SameFailure)
-	}
-	for i := 2; i <= 4; i++ {
-		s.RecordVerification(fail, false, ModeDevelop)
-	}
-	if s.SameFailure != 3 {
-		t.Errorf("three repeats counted as %d", s.SameFailure)
+// Read off run 50: the referee was asked about "undefined bytesReader" at
+// handlers.go:67, the developer edited above it, and the identical fault at
+// handlers.go:68 was counted as a new question and bought a second verdict 62
+// seconds later. Two of three consults went to one typo.
+func TestAFaultThatMovedIsTheSameFault(t *testing.T) {
+	a := "# demo\n./handlers.go:67:14: undefined: bytesReader"
+	b := "# demo\n./handlers.go:68:14: undefined: bytesReader"
+	if FailureFingerprint(a) != FailureFingerprint(b) {
+		t.Errorf("a line-number drift made one fault look like two:\n%q\n%q",
+			FailureFingerprint(a), FailureFingerprint(b))
 	}
 
-	// A DIFFERENT FAILURE IS PROGRESS. The developer moved the work somewhere
-	// new, which is exactly what the counter must not treat as being stuck.
-	s.RecordVerification(fail+"\n    main_test.go:52: and another", false, ModeDevelop)
-	if s.SameFailure != 0 {
-		t.Errorf("a changed failure left the stall counter at %d", s.SameFailure)
-	}
-
-	s.RecordVerification(fail, false, ModeDevelop)
-	s.RecordVerification("ok\n", true, ModeDevelop)
-	if s.SameFailure != 0 {
-		t.Errorf("a passing verification left the stall counter at %d", s.SameFailure)
+	// The same message in a DIFFERENT file is a different fault.
+	c := "# demo\n./board.go:67:14: undefined: bytesReader"
+	if FailureFingerprint(a) == FailureFingerprint(c) {
+		t.Error("two files were collapsed into one fault")
 	}
 }
 
-// THE VERDICT MUST NOT BE FROZEN AT THE EARLIEST MOMENT IT COULD BE TAKEN.
+// A CYCLE IS WHAT BEING STUCK ACTUALLY LOOKS LIKE, and a consecutive counter
+// cannot see one.
 //
-// Read off run 21: the referee was asked 90 seconds in and correctly answered
-// "dev" — there was a compile error in board.go. RefereeAsked was then set and
-// the developer spent 70 more turns oscillating against an assertion no
-// implementation could satisfy, with the failure completely different from the
-// one that had been judged. Nothing asked again; the attempt died on the clock.
-func TestAStalledAttemptAsksTheRefereeAgain(t *testing.T) {
-	j := &sequenceJudge{}
-	runStalled(t, j, 18)
-	if j.judged < 2 {
-		t.Errorf("the referee was asked %d time(s) across a stalled attempt; the "+
-			"first verdict was frozen while the failure changed underneath it", j.judged)
+// Run 21's developer alternated between Go 1.22 pattern routing and a /tickets/
+// prefix every thirty seconds. Run 50's alternated between a heading-order
+// failure and a missing-form failure, each fix re-breaking the other. In neither
+// did a failure ever repeat twice in a row.
+func TestAnAlternatingFailureIsCountedAsRecurrence(t *testing.T) {
+	s := &State{Staged: map[string]string{"board.go": "package main\n"}}
+	A := "--- FAIL: TestHeadingOrder\n    board_test.go:31: open before closed"
+	B := "--- FAIL: TestCreateForm\n    board_test.go:88: missing description field"
+
+	for _, out := range []string{A, B, A, B, A} {
+		s.RecordVerification(out, false, ModeDevelop)
+	}
+
+	if got := s.FailureSightings[FailureFingerprint(A)]; got != 3 {
+		t.Errorf("the recurring failure was counted %d times, want 3 — an "+
+			"alternating pair reads as progress to a consecutive counter", got)
 	}
 }
 
-// THE QUESTIONS ARE SPACED, not merely capped.
+// A COMPILE ERROR IS NOT AN OPEN QUESTION, so it never reaches the referee.
 //
-// Resetting SameFailure when the referee is asked is what spaces them. Without
-// the reset the stall condition stays true and the next turn asks again on the
-// same evidence, so the whole allowance is spent within two turns of the first
-// stall and nothing is left for a later, different failure.
-//
-// The ceiling alone does not catch that: three asks bunched together and three
-// asks spread across the attempt both total three. The arithmetic, with
-// RefereeAfterFailures 3 and RefereeOnStall 8: the first ask lands on iteration
-// 5, the second on 13, the third on 21. Eighteen turns therefore fit exactly two
-// — unless the counter never restarts, when the third arrives on iteration 12.
-func TestTheStallCounterRestartsWithEachQuestion(t *testing.T) {
+// The matcher attributes it without an opinion. On run 50 eight of ten consults
+// were spent on compile errors and every one came back "dev", which the matcher
+// already knew.
+func TestCompileErrorsNeverReachTheReferee(t *testing.T) {
 	j := &sequenceJudge{}
-	runStalled(t, j, 14) // MaxTurns becomes 18
+	a := &Agent{ref: j, mode: ModeDevelop}
+	s := &State{
+		FailedVerifications: RefereeAfterFailures,
+		LastTest:            "# demo\n./handlers.go:139:22: cannot use &NotFound{} as error",
+		FailureSightings:    map[string]int{},
+	}
+	s.FailureSightings[FailureFingerprint(s.LastTest)] = 99 // recurring, and still not asked
 
+	a.consultReferee(context.Background(), ticket.Ticket{}, s)
+
+	if j.judged != 0 {
+		t.Errorf("a compile error bought a verdict the matcher had already reached: "+
+			"judged=%d", j.judged)
+	}
+}
+
+// AND A FAILURE THAT KEEPS CHANGING IS PROGRESS, not a question.
+func TestAChangingFailureDoesNotReachTheReferee(t *testing.T) {
+	j := &sequenceJudge{}
+	a := &Agent{ref: j, mode: ModeDevelop}
+	s := &State{FailedVerifications: RefereeAfterFailures, FailureSightings: map[string]int{}}
+
+	for _, out := range []string{
+		"--- FAIL: TestOne\n    a_test.go:10: got 1 want 2",
+		"--- FAIL: TestTwo\n    a_test.go:20: got 3 want 4",
+		"--- FAIL: TestThree\n    a_test.go:30: got 5 want 6",
+	} {
+		s.RecordVerification(out, false, ModeDevelop)
+		a.consultReferee(context.Background(), ticket.Ticket{}, s)
+	}
+
+	if j.judged != 0 {
+		t.Errorf("a developer working through three different failures was "+
+			"second-guessed %d time(s)", j.judged)
+	}
+}
+
+// WHAT DOES REACH IT is a suite that builds and fails the same assertion again
+// and again — the one case no mechanical route can attribute.
+func TestARecurringAssertionReachesTheReferee(t *testing.T) {
+	j := &sequenceJudge{}
+	a := &Agent{ref: j, mode: ModeDevelop}
+	s := &State{FailedVerifications: RefereeAfterFailures, FailureSightings: map[string]int{}}
+
+	out := "--- FAIL: TestRoutesAreRegistered\n    main_test.go:46: GET /tickets/1 got 404"
+	for range RefereeOnRecurrence {
+		s.RecordVerification(out, false, ModeDevelop)
+		a.consultReferee(context.Background(), ticket.Ticket{}, s)
+	}
+
+	if j.judged != 1 {
+		t.Errorf("a failure seen %d times was judged %d time(s), want once",
+			RefereeOnRecurrence, j.judged)
+	}
+}
+
+// ASKING RESETS THE COUNT, so the allowance is SPACED rather than spent at once.
+//
+// Without the reset the condition stays true and the next turn buys another
+// verdict on the same evidence, so the whole allowance goes in three consecutive
+// turns and nothing is left for a later, different failure. The ceiling alone
+// cannot catch that: three asks bunched and three asks spread both total three.
+func TestAskingResetsTheSightingsForThatFailure(t *testing.T) {
+	j := &sequenceJudge{}
+	a := &Agent{ref: j, mode: ModeDevelop}
+	s := &State{FailedVerifications: RefereeAfterFailures, FailureSightings: map[string]int{}}
+
+	out := "--- FAIL: TestRoutes\n    main_test.go:46: GET /tickets/1 got 404"
+	ask := func() {
+		s.RecordVerification(out, false, ModeDevelop)
+		a.consultReferee(context.Background(), ticket.Ticket{}, s)
+	}
+
+	for range RefereeOnRecurrence {
+		ask()
+	}
+	if j.judged != 1 {
+		t.Fatalf("the first consult did not happen as expected: judged=%d", j.judged)
+	}
+
+	// One short of the threshold again: the question is not yet re-opened.
+	for range RefereeOnRecurrence - 1 {
+		ask()
+	}
+	if j.judged != 1 {
+		t.Errorf("the allowance was spent on consecutive turns: judged=%d after only "+
+			"%d further sightings", j.judged, RefereeOnRecurrence-1)
+	}
+
+	// The failure comes back once more, reaching the threshold a second time.
+	ask()
 	if j.judged != 2 {
-		t.Errorf("the referee was asked %d times in 18 turns, want exactly 2; the "+
-			"allowance is being spent on consecutive turns instead of on separate "+
-			"stalls", j.judged)
+		t.Errorf("a failure that recurred a second full time did not re-open the "+
+			"question: judged=%d", j.judged)
 	}
 }
 
-// AND IT IS BOUNDED. The referee is a large-model call; a stalled developer
-// would otherwise buy one every RefereeOnStall turns until the ceiling.
+// THE VERDICT REACHES THE AGENT THAT HAS TO ACT ON IT.
+//
+// It used to be discarded unless it blamed the specification. Run 50 bought ten
+// diagnoses of the form "handlers.go:139 and 143 pass non-pointer values to
+// errors.As, which requires a pointer to a type that implements error" and threw
+// every one away, while the developer went on failing the same way.
+func TestAVerdictAgainstTheDeveloperBecomesAdviceToIt(t *testing.T) {
+	const reason = "handlers.go passes non-pointer values to errors.As, which " +
+		"requires a pointer to a type implementing error"
+	j := &sequenceJudge{answers: []*referee.Verdict{
+		{Owner: referee.OwnerDev, Confidence: "high", Reason: reason},
+	}}
+	a := &Agent{ref: j, mode: ModeDevelop}
+	s := &State{FailedVerifications: RefereeAfterFailures, FailureSightings: map[string]int{}}
+
+	out := "--- FAIL: TestUpdate\n    handlers_test.go:12: got 500 want 404"
+	for range RefereeOnRecurrence {
+		s.RecordVerification(out, false, ModeDevelop)
+		a.consultReferee(context.Background(), ticket.Ticket{}, s)
+	}
+
+	if s.Hint != reason {
+		t.Fatalf("the diagnosis was discarded; Hint = %q", s.Hint)
+	}
+	if s.SpecBroken != "" {
+		t.Errorf("advice to the developer was treated as a hand-back: %q", s.SpecBroken)
+	}
+
+	// And the agent actually sees it, framed as advice rather than a refusal.
+	p := RenderProgress(s)
+	if !strings.Contains(p, reason) {
+		t.Error("the second opinion never reached the prompt")
+	}
+	if !strings.Contains(p, "advice, not a refusal") {
+		t.Error("the second opinion is not distinguished from a rejected action")
+	}
+}
+
+// AND IT IS BOUNDED. The referee is a large-model call; a developer stuck on one
+// assertion would otherwise buy one every RefereeOnRecurrence sightings forever.
 func TestAStalledAttemptDoesNotBuyAVerdictEveryTurn(t *testing.T) {
 	j := &sequenceJudge{}
 	runStalled(t, j, 60)
@@ -160,24 +263,20 @@ func TestAStalledAttemptDoesNotBuyAVerdictEveryTurn(t *testing.T) {
 	}
 }
 
-// AND A LATE VERDICT STILL ENDS THE ATTEMPT. Re-asking is worth nothing if the
-// answer cannot act — the second opinion has to reach the same hand-back the
-// mechanical route uses.
+// AND A SPEC VERDICT REACHED LATE STILL ENDS THE ATTEMPT. Asking again is worth
+// nothing if the answer cannot act.
 func TestASpecVerdictReachedLateStillHandsTheTicketBack(t *testing.T) {
 	j := &sequenceJudge{answers: []*referee.Verdict{
-		nil, // the early look: not enough to go on
 		{Owner: referee.OwnerSpec, Confidence: "high",
-			Reason: "the test treats 404 as proof a route is unregistered, " +
-				"which an empty store returns for a valid route"},
+			Reason: "the test treats 404 as proof a route is unregistered, which an " +
+				"empty store returns for a valid route"},
 	}}
 	out, detail := runStalled(t, j, 18)
 
-	if j.judged < 2 {
-		t.Fatalf("the referee was only asked %d time(s); the late verdict never happened",
-			j.judged)
+	if j.judged == 0 {
+		t.Fatal("the referee was never asked")
 	}
 	if out != workflow.OutcomeReturned {
-		t.Errorf("outcome = %q (%s), want the ticket returned to its author",
-			out, detail)
+		t.Errorf("outcome = %q (%s), want the ticket returned to its author", out, detail)
 	}
 }

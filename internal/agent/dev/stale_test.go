@@ -62,34 +62,15 @@ func TestAVerdictSurvivesWhileItsEvidenceDoes(t *testing.T) {
 	}
 }
 
-// THE SECOND OPINION IS ASKED BY THE EVIDENCE, NOT BY A SCHEDULE.
+// THE CHANGE TRIGGER IS GONE, replaced by recurrence.
 //
-// A verdict ruled on one failure says nothing about the next, so a failure that
-// has CHANGED is a question that has not been asked.
-func TestAChangedFailureAsksTheRefereeAgain(t *testing.T) {
-	j := &sequenceJudge{}
-	a := &Agent{ref: j, mode: ModeDevelop}
-	s := &State{FailedVerifications: RefereeAfterFailures}
-
-	s.LastTest = "--- FAIL: TestA\n    a_test.go:10: got 1 want 2"
-	a.consultReferee(context.Background(), ticket.Ticket{}, s)
-	if j.judged != 1 {
-		t.Fatalf("the first look did not happen: judged=%d", j.judged)
-	}
-
-	// Same failure again: nothing new to rule on.
-	a.consultReferee(context.Background(), ticket.Ticket{}, s)
-	if j.judged != 1 {
-		t.Errorf("an unchanged failure bought a second verdict: judged=%d", j.judged)
-	}
-
-	// A different failure entirely — the question has moved.
-	s.LastTest = "./handlers.go:94:27: cannot use req.Title as string"
-	a.consultReferee(context.Background(), ticket.Ticket{}, s)
-	if j.judged != 2 {
-		t.Errorf("a changed failure did not reach the referee: judged=%d", j.judged)
-	}
-}
+// f0a3850 re-opened the question whenever the failure DIFFERED from the one last
+// judged. Run 50 showed why that is the wrong signal twice over: a line number
+// drifting from handlers.go:67 to :68 counted as a new question and bought a
+// second verdict on one typo, and a developer working through three different
+// assertion failures in a row was second-guessed for making progress. A failure
+// that keeps changing is progress; one that keeps coming back is not. See
+// TestARecurringAssertionReachesTheReferee and TestAChangingFailureDoesNotReachTheReferee.
 
 // IT CONVICTS BUT DOES NOT ACQUIT, and the deference is deliberate.
 //
