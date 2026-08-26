@@ -98,11 +98,17 @@ func SpecScript(testCommand string, repairing bool) string {
 	if repairing {
 		return SpecParseScript + fmt.Sprintf(`
 echo '--- the tests must COMPILE; they are not required to fail on a repair ---'
+cat > /tmp/.gate-cmd <<'BLACKSMITH_GATE_CMD'
+{ %s ; }
+BLACKSMITH_GATE_CMD
 rc=0
-out=$(%s 2>&1) || rc=$?
+out=$(timeout %d sh /tmp/.gate-cmd 2>&1) || rc=$?
 echo "$out" | tail -40
+if [ "$rc" -eq 124 ]; then
+  echo '%s'
+fi
 echo "checks ran (exit $rc); on a repair only compilation is required"
-`, testCommand)
+`, testCommand, TestTimeoutSeconds, TimedOutNotice)
 	}
 
 	// THE FAILURE TEXT IS ALWAYS PRINTED, and it used to be printed only when the
@@ -136,9 +142,16 @@ echo "checks ran (exit $rc); on a repair only compilation is required"
 	// reads as more.
 	return SpecParseScript + fmt.Sprintf(`
 echo '--- the specification must fail against the current code ---'
+cat > /tmp/.gate-cmd <<'BLACKSMITH_GATE_CMD'
+{ %s ; }
+BLACKSMITH_GATE_CMD
 rc=0
-out=$(%s 2>&1) || rc=$?
+out=$(timeout %d sh /tmp/.gate-cmd 2>&1) || rc=$?
 echo "$out" | tail -40
+if [ "$rc" -eq 124 ]; then
+  echo '%s'
+  exit 1
+fi
 if [ "$rc" -eq 0 ]; then
   srcs=$(ls *.go 2>/dev/null | grep -v '_test[.]go$') || true
   impl=0
@@ -154,7 +167,8 @@ if [ "$rc" -eq 0 ]; then
   exit 1
 fi
 echo "the specification fails as it should (exit $rc), which is what the developer is given to fix"
-`, testCommand, SpecAlreadyBuiltMarker, SpecVacuousMarker)
+`, testCommand, TestTimeoutSeconds, TimedOutNotice,
+		SpecAlreadyBuiltMarker, SpecVacuousMarker)
 }
 
 // SpecParseScript checks the TEST files for syntax errors without compiling.
