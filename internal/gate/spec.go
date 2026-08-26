@@ -107,7 +107,7 @@ func SpecScript(testCommand string, repairing bool) string {
 	}
 
 	if repairing {
-		return SpecParseScript + fmt.Sprintf(`
+		return SpecParseScript + SelfSatisfiedScript() + fmt.Sprintf(`
 echo '--- the tests must COMPILE; they are not required to fail on a repair ---'
 cat > /tmp/.gate-cmd <<'BLACKSMITH_GATE_CMD'
 { %s ; }
@@ -151,7 +151,7 @@ echo "checks ran (exit $rc); on a repair only compilation is required"
 	// wherever the code lives. The pristine baseline has none — package main with
 	// a single func main — so a stub reads as zero and any real implementation
 	// reads as more.
-	return SpecParseScript + fmt.Sprintf(`
+	return SpecParseScript + SelfSatisfiedScript() + fmt.Sprintf(`
 echo '--- the specification must fail against the current code ---'
 cat > /tmp/.gate-cmd <<'BLACKSMITH_GATE_CMD'
 { %s ; }
