@@ -111,7 +111,8 @@ const MaxOldStrLines = 5
 // these only under `go test`, so it exactly separates "code that ships" from
 // "code that checks it". A language with a different convention would need this
 // to be configuration; today it would be configuration with one possible value.
-func IsTestFile(p string) bool { return strings.HasSuffix(path.Clean(p), "_test.go") }
+// IsTestFile moved to testfile.go, where the segment rule it now needs has room
+// to explain itself.
 
 // Address reports which addressing mode an edit uses, for a caller that has to
 // refuse one that uses none or several.
