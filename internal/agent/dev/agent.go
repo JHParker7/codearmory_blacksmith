@@ -512,9 +512,16 @@ func (a *Agent) consultReferee(ctx context.Context, t ticket.Ticket, s *State) {
 	if s.SpecBroken != "" || s.RefereeAsks >= MaxRefereeAsks {
 		return
 	}
-	first := s.RefereeAsks == 0 && s.FailedVerifications >= RefereeAfterFailures
+	if s.FailedVerifications < RefereeAfterFailures {
+		return
+	}
+	first := s.RefereeAsks == 0
+	// A DIFFERENT FAILURE IS A DIFFERENT QUESTION. This is what makes the second
+	// opinion automatic: the developer does not decide when it is asked, the
+	// evidence does. A verdict ruled on one failure says nothing about the next.
+	changed := s.RefereeAsks > 0 && s.LastTest != s.LastJudgedFailure
 	stalled := s.RefereeAsks > 0 && s.SameFailure >= RefereeOnStall
-	if !first && !stalled {
+	if !first && !changed && !stalled {
 		return
 	}
 	// Counted before the call, not after: a call that fails is still a call
@@ -525,7 +532,20 @@ func (a *Agent) consultReferee(ctx context.Context, t ticket.Ticket, s *State) {
 	// stays true and every remaining turn buys another verdict on the same
 	// evidence, which is the runaway the ask ceiling would then have to absorb.
 	s.SameFailure = 0
+	// RECORDED BEFORE THE CALL for the same reason the count is: what matters is
+	// which failure was PUT to the referee, whether or not an answer came back.
+	s.LastJudgedFailure = s.LastTest
 
+	// IT CONVICTS BUT DOES NOT ACQUIT, and that asymmetry is deliberate. The guard
+	// above means this never runs while a verdict stands, because a compile fault
+	// local to a test file is conclusive on sight and there is nothing to
+	// arbitrate. Letting a second opinion overturn that would put a sampler's bad
+	// day between a broken specification and the agent that can fix it.
+	//
+	// What made the standing verdict dangerous was that it outlived its evidence,
+	// and that is fixed where it was caused — JudgeSpec now clears when the
+	// failure leaves the test files. An acquittal here would have been a second
+	// mechanism aimed at the same defect.
 	if v := a.ref.Judge(ctx, recorderFrom(ctx), t, s.Read, s.LastTest); v.Blames(referee.OwnerSpec) {
 		s.SpecBroken = v.Reason
 	}

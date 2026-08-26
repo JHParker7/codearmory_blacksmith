@@ -167,6 +167,16 @@ type State struct {
 	// nothing asked again. The attempt died on the wall clock at 45 minutes.
 	RefereeAsks int
 
+	// LastJudgedFailure is the verification output the referee last ruled on.
+	//
+	// A DIFFERENT FAILURE IS A DIFFERENT QUESTION, and this is what lets the
+	// second opinion be asked automatically rather than on a schedule. The
+	// deterministic matcher reads the compiler and is right about compile faults;
+	// what it cannot see is that the failure it ruled on has been replaced. Run
+	// 42 blocked a ticket over test-file errors that had already been fixed,
+	// while three errors sat in the developer's own handlers.go.
+	LastJudgedFailure string
+
 	// SameFailure counts consecutive red verifications whose output was byte for
 	// byte the one before it.
 	//
