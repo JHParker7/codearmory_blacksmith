@@ -30,6 +30,28 @@ func IsDocFile(p string) bool {
 	return false
 }
 
+// ErrNoChangeAsked marks an edit that provably could not change anything —
+// today, one whose old_str and replace are the same text.
+//
+// A SENTINEL BECAUSE THE LOOP REFUNDS THE TURN. The refusal already names the
+// cause precisely and has done since the flat write landed, and the model sends
+// one anyway: read off run 61, the developer wrote three of them in three
+// minutes, labelling them "no-op placeholder" and "placeholder to test" between
+// three correct attempts at the fix it had just been advised to make.
+//
+// A message did not stop it, which is this repo's oldest lesson, and the shape
+// cannot be made unrepresentable — old_str and replace are both free strings and
+// no schema can say they must differ. What CAN be fixed is the price: an edit
+// that cannot touch the tree costs the repository nothing, so charging a turn
+// for it takes budget from the work without teaching anything the refusal did
+// not already say. Worse, each one produces another identical failing
+// verification, which is what drove the referee to buy the same verdict three
+// times in that run.
+//
+// The attempt is still bounded: MaxDeadRefusals counts refusals, not turns, so a
+// developer that only ever sends these still ends.
+var ErrNoChangeAsked = errors.New("the edit asks for no change")
+
 // Apply validates a batch of edits and commits it to the staged tree.
 //
 // EVERY RETURN HERE IS A MESSAGE THE AGENT READS, and naming the symptom rather
@@ -106,7 +128,7 @@ func Apply(s *State, edits []edit.Edit, mode Mode) error {
 			return fmt.Errorf("%s: old_str and replace are IDENTICAL, so this edit would change "+
 				"nothing. old_str is the text as it is NOW; replace is what it should BECOME. If you "+
 				"are rewriting a whole function, name it in \"decl\" and send the new body once in "+
-				`"replace" — you never have to type the old text twice`, cp)
+				`"replace" — you never have to type the old text twice: %w`, cp, ErrNoChangeAsked)
 		}
 
 		// Both filled is not a mistake the agent can avoid: every field is required
