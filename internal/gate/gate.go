@@ -153,10 +153,18 @@ func TestScript(testCommand string) string {
 	//
 	// Grouping captures the whole chain, so a build error lands in the file where
 	// the source-quoting search can find the file and line it names.
-	return fmt.Sprintf(`if { %s ; } > /tmp/.gate-out 2>&1; then
+	return fmt.Sprintf(`cat > /tmp/.gate-cmd <<'BLACKSMITH_GATE_CMD'
+{ %s ; }
+BLACKSMITH_GATE_CMD
+rc=0
+timeout %d sh /tmp/.gate-cmd > /tmp/.gate-out 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
   cat /tmp/.gate-out
 else
   cat /tmp/.gate-out
+  if [ "$rc" -eq 124 ]; then
+    echo '%s'
+  fi
   echo '--- source of the failing assertions (you may READ these; you may not edit them) ---'
   grep -oE '[A-Za-z0-9_./-]+\.go:[0-9]+' /tmp/.gate-out | sort -u | head -%d | while IFS=: read -r f l; do
     [ -f "$f" ] || continue
@@ -167,8 +175,40 @@ else
   echo '%s%s'
   exit 1
 fi
-`, testCommand, MaxFailureSites, FailureContextBefore, FailureContextAfter, Marker, ReasonTest)
+`, testCommand, TestTimeoutSeconds, TimedOutNotice,
+		MaxFailureSites, FailureContextBefore, FailureContextAfter, Marker, ReasonTest)
 }
+
+// TestTimeoutSeconds bounds the whole test command, because a suite that never
+// returns otherwise consumes the attempt one verification at a time.
+//
+// Measured on run 31: a specification called main() from a test, main() blocks in
+// ListenAndServe, and every verification then ran until Go's own ten-minute
+// panic. Consecutive verifications were 10m40s and 10m36s apart, the attempt
+// managed three of them in half an hour, and it ended on the 45-minute deadline
+// having learned almost nothing. The developer was not stuck — it was waiting.
+//
+// FOUR MINUTES IS GENEROUS FOR THE SUITES THIS RUNS and still an order of
+// magnitude below the ten minutes a hang was costing. It bounds the COMMAND
+// rather than relying on any one toolchain's own flag, so a repo whose tests are
+// not Go gets the same protection.
+const TestTimeoutSeconds = 240
+
+// TimedOutNotice is what a bounded-out suite says for itself.
+//
+// IT NAMES THE CAUSE, NOT THE SYMPTOM. "exit 124" tells an agent nothing it can
+// act on; a suite that did not finish is nearly always one test that blocks, and
+// Go prints which under "running tests:" just above this line.
+//
+// Built from the constant rather than repeating the number, so the sentence
+// cannot come to disagree with the timeout it describes.
+var TimedOutNotice = fmt.Sprintf(
+	"--- THE TESTS DID NOT FINISH ---\n"+
+		"The suite was stopped after %d seconds. It did not fail: it never returned.\n"+
+		"Something in it blocks — a server started in-process that is never shut down,\n"+
+		"a read from a channel nothing writes, a loop with no exit. Any test named above\n"+
+		"under \"running tests:\" is the one still going when time ran out.",
+	TestTimeoutSeconds)
 
 // TestImportOffenders lists the non-test Go files importing a testing package,
 // leaving the list in $bad.
