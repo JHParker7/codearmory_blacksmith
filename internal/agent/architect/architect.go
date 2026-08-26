@@ -103,6 +103,11 @@ Rules:
 - types/types.go MUST begin with "package types". It goes in its own folder because
   the repository root already has a package, and two packages in one directory stop
   the whole tree building. The other stages import it.
+- ARCHITECTURE.md MUST say, in one sentence, which package the code at the
+  repository root belongs to — normally "package main" — and that every file there,
+  tests included, declares it. Later stages write those files in isolation and
+  cannot see each other: if you do not say, each one picks a different name and the
+  directory ends up holding several packages, which does not compile at all.
 - README.md: what the project is, how to build and run it, and what each part does.
 - ARCHITECTURE.md: the pieces, the NAMES they use, how they fit, and the shape of the interfaces between them. Name concrete types, functions and endpoints, because a developer building one piece needs to know exactly what the neighbouring piece is called.
 - Describe what WILL be built, in the present tense, as a specification. Do not describe the current empty repository.

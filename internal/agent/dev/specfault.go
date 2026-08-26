@@ -245,7 +245,30 @@ func NonUndefinedCompileErrors(out string) []string {
 
 // RedIsExpected reports whether the only thing wrong is the red a test-first
 // specification is supposed to produce before its implementation exists.
-func RedIsExpected(out string) bool { return len(NonUndefinedCompileErrors(out)) == 0 }
+//
+// A PACKAGE CONFLICT IS NOT THAT RED, and it needs saying separately because Go
+// reports it without a position:
+//
+//	found packages main (board_test.go) and api (handlers_test.go) in /workspace
+//
+// NonUndefinedCompileErrors matches on file:line:column, so this text is
+// invisible to it, and a tree that does not build read as the expected red of
+// test-first.
+//
+// Measured on run 92, where it cost the ticket twice over. Four spec agents
+// wrote four different package clauses at the root — main, api, store_test —
+// because the architect declares the shared TYPES but never says which package
+// the code under test lives in. The author's gate passed it, so an unbuildable
+// tree reached the developer; and because the gate reported a pass, the author
+// STOPPED after correcting one file per hand-back rather than working until the
+// package agreed everywhere. Five of six files were right and the sixth spent
+// both repairs.
+func RedIsExpected(out string) bool {
+	if len(goPackageConflict.FindStringSubmatch(out)) > 0 {
+		return false
+	}
+	return len(NonUndefinedCompileErrors(out)) == 0
+}
 
 // goPackageConflict matches Go's "found packages a (a.go) and b (b.go) in DIR",
 // reported per directory rather than per line — hence no position.
