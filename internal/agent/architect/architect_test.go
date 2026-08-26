@@ -274,8 +274,8 @@ func TestOnlyMarkdownAtTheRootIsEverCommitted(t *testing.T) {
 		{Path: "/etc/cron.d/x", Content: "evil\n"},
 		{Path: "../../outside.md", Content: "evil\n"},
 		{Path: ".github/workflows/ci.yml", Content: "evil\n"},
-		{Path: "types.go", Content: "package main\n\ntype Ticket struct{ ID string }\n\nfunc NewStore() *Store { panic(\"not implemented\") }\n"},
-		{Path: "worker.go", Content: "package main\n\nfunc Work() int { return 41 + 1 }\n"},
+		{Path: "types/types.go", Content: "package types\n\ntype Ticket struct{ ID string }\n\nfunc NewStore() *Store { panic(\"not implemented\") }\n"},
+		{Path: "types/worker.go", Content: "package types\n\nfunc Work() int { return 41 + 1 }\n"},
 		{Path: "store_test.go", Content: "package main\n"},
 		{Path: "empty.md", Content: "   \n"},
 	}})
@@ -289,12 +289,12 @@ func TestOnlyMarkdownAtTheRootIsEverCommitted(t *testing.T) {
 	}
 	// DECLARATIONS ARE NOW A LEGITIMATE OUTPUT, so the filter is no longer "is it
 	// markdown" — it is "is it documentation, or a declaration with no behaviour".
-	if !got["types.go"] {
+	if !got["types/types.go"] {
 		t.Errorf("a declarations file was dropped: %v", PathsOf(files))
 	}
 	for _, bad := range []string{
 		"/etc/cron.d/x", "../../outside.md", ".github/workflows/ci.yml",
-		"worker.go",     // has a body: that is the developer's work
+		"types/worker.go", // has a body: that is the developer's work
 		"store_test.go", // is a test: that is the author's work
 	} {
 		if got[bad] {

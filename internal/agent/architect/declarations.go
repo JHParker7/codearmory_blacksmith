@@ -60,6 +60,17 @@ func OnlyDeclarations(src string) error {
 		return fmt.Errorf("%w: it does not parse: %v", ErrNotDeclarations, err)
 	}
 
+	if f.Name == nil || f.Name.Name != DeclarationsPackage {
+		got := "nothing"
+		if f.Name != nil {
+			got = f.Name.Name
+		}
+		return fmt.Errorf("%w: it declares package %s, but a file in %s/ must declare "+
+			"package %s — a package name that disagrees with its directory does not "+
+			"build, and one that collides with the root package stops the whole tree "+
+			"building", ErrNotDeclarations, got, DeclarationsDir, DeclarationsPackage)
+	}
+
 	for _, d := range f.Decls {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok {
@@ -106,13 +117,33 @@ func stubBody(b *ast.BlockStmt) bool {
 	}
 }
 
+// DeclarationsDir is the one directory the architect may write Go into, and
+// DeclarationsPackage is the package it must declare.
+//
+// ITS OWN FOLDER, BECAUSE THE ROOT ALREADY HAS A PACKAGE. Measured on run 90:
+// the architect wrote ticket.go at the repository root declaring "package
+// ticket", beside a main.go declaring "package main". Two packages in one
+// directory is not a style problem — nothing in the tree compiles, so the very
+// thing declarations exist to buy, tests that type-check, is destroyed by the
+// declarations themselves.
+//
+// A directory of its own cannot collide with anything, needs no knowledge of
+// what the repository already contains, and is what a Go author would do anyway.
+const (
+	DeclarationsDir     = "types"
+	DeclarationsPackage = "types"
+)
+
 // IsDeclarationFile reports whether a path is one the architect may write Go
-// into: a .go file that is not a test.
+// into: a non-test .go file inside DeclarationsDir.
 //
 // TESTS ARE THE AUTHOR'S AND ONLY THE AUTHOR'S. An architect that writes a test
 // file has written the specification, from the request alone, before the stage
 // whose whole job that is has seen it.
 func IsDeclarationFile(p string) bool {
 	c := strings.ToLower(path.Clean(p))
-	return strings.HasSuffix(c, ".go") && !strings.HasSuffix(c, "_test.go")
+	if !strings.HasSuffix(c, ".go") || strings.HasSuffix(c, "_test.go") {
+		return false
+	}
+	return path.Dir(c) == DeclarationsDir
 }
