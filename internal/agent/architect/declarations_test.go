@@ -172,3 +172,60 @@ func TestDeclarationsAtTheRootAreRejectedOutright(t *testing.T) {
 		t.Fatalf("rejected = %v, want the root Go file named", rejected)
 	}
 }
+
+// Error() AND String() MUST HAVE BODIES, and demanding a stub is worse than
+// allowing one.
+//
+// A panicking Error() is a runtime hazard rather than a placeholder: any %v that
+// formats the error panics, and error values are formatted from log lines and
+// refusal messages throughout this pipeline. Read off run 91 — the architect
+// declared a validation error with the idiomatic
+//
+//	func (e *InvalidTitle) Error() string { return e.msg }
+//
+// and the entire declarations file was refused over it, so the run went on with
+// no shared types at all.
+func TestTheConventionalStringerMethodsMayHaveBodies(t *testing.T) {
+	src := `package types
+
+type InvalidTitle struct{ msg string }
+
+func (e *InvalidTitle) Error() string { return e.msg }
+
+type Status string
+
+func (s Status) String() string { return string(s) }
+
+func (s Status) Valid() bool { panic("not implemented") }
+`
+	if err := OnlyDeclarations(src); err != nil {
+		t.Errorf("an idiomatic Error or String method was refused: %v", err)
+	}
+}
+
+// AND THE EXCEPTION IS NARROW. It covers the Go convention and nothing else, so
+// an ordinary method still cannot smuggle behaviour past the check.
+func TestTheStringerExceptionDoesNotCoverOtherMethods(t *testing.T) {
+	for name, src := range map[string]string{
+		"an ordinary method": `package types
+
+type Store struct{ n int }
+
+func (s *Store) Count() int { return s.n }
+`,
+		"Error with arguments is not the convention": `package types
+
+type E struct{}
+
+func (e *E) Error(verbose bool) string { return "boom" }
+`,
+		"a plain function called Error": `package types
+
+func Error() string { return "boom" }
+`,
+	} {
+		if err := OnlyDeclarations(src); err == nil {
+			t.Errorf("%s: a body was accepted", name)
+		}
+	}
+}
