@@ -96,14 +96,21 @@ Write the project documentation that the developers who build it will read. They
 If existing documentation is shown to you, UPDATE it: keep what is still true, and fold the new request into it. You write whole files, so anything you leave out is deleted — a README that comes back describing only the new feature has destroyed the rest of it. If the repository is empty, write the documentation from the request alone.
 
 Reply with ONLY a JSON object, no prose and no code fences:
-{"overview":"two or three sentences on what is being built","files":[{"path":"README.md","content":"..."},{"path":"ARCHITECTURE.md","content":"..."}]}
+{"overview":"two or three sentences on what is being built","files":[{"path":"README.md","content":"..."},{"path":"ARCHITECTURE.md","content":"..."},{"path":"types.go","content":"package main\n\n..."}]}
 
 Rules:
-- Write README.md and ARCHITECTURE.md. Nothing else, and both must be markdown.
+- Write README.md, ARCHITECTURE.md, and ONE Go file declaring the shared types.
 - README.md: what the project is, how to build and run it, and what each part does.
 - ARCHITECTURE.md: the pieces, the NAMES they use, how they fit, and the shape of the interfaces between them. Name concrete types, functions and endpoints, because a developer building one piece needs to know exactly what the neighbouring piece is called.
 - Describe what WILL be built, in the present tense, as a specification. Do not describe the current empty repository.
-- Do not write code files, tests, or build configuration. Documentation only.
+- The Go file DECLARES and does not implement. Give the types, the constants, the
+  errors, and the SIGNATURE of every function the pieces call across the seams
+  between them. Every function body must be empty or a single panic("not implemented").
+  A body that does anything is refused: the developer writes the behaviour,
+  against tests you have not seen.
+- Nothing you write may be a _test.go file. The tests are written by a later
+  stage from this design, and writing them here replaces the stage whose job it is.
+- Do not write build configuration.
 - Be specific and brief. Aim for a page each.`
 
 // Design is the model's reply.
@@ -351,6 +358,19 @@ func Sanitise(d Design) (files []File, rejected []string) {
 		case path.IsAbs(p), strings.HasPrefix(p, ".."), strings.HasPrefix(p, "."):
 			rejected = append(rejected, f.Path)
 			continue
+		case IsDeclarationFile(p):
+			// THE ONE KIND OF CODE FILE THIS STAGE MAY WRITE, and only when it
+			// declares rather than implements. See OnlyDeclarations: the point is
+			// that the author's tests type-check, not that behaviour exists yet.
+			if err := OnlyDeclarations(f.Content); err != nil {
+				rejected = append(rejected, f.Path+" ("+err.Error()+")")
+				continue
+			}
+			// STAMPED HERE rather than asked for in the prompt, because a marker the
+			// model has to remember is one some reply will leave out.
+			if !strings.Contains(f.Content, DeclarationsMarker) {
+				f.Content = DeclarationsMarker + "\n" + f.Content
+			}
 		case !strings.HasSuffix(strings.ToLower(p), ".md"):
 			rejected = append(rejected, f.Path)
 			continue

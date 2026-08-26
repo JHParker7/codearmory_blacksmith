@@ -32,6 +32,17 @@ const (
 	SpecAlreadyBuiltMarker = "<<<SPEC-ALREADY-IMPLEMENTED>>>"
 )
 
+// DeclarationsMarker is the comment the architect stamps on the file holding the
+// shared type declarations.
+//
+// DECLARATIONS ARE NOT AN IMPLEMENTATION, and the already-built check counts
+// exported declarations to decide whether a specification's subject exists
+// already. Since the architect began emitting shapes so the author's tests
+// type-check, every ticket would otherwise start with a tree full of exported
+// names and read as finished work. Duplicated from the architect package rather
+// than imported, because gate is below it and must not depend on an agent.
+const DeclarationsMarker = "blacksmith:declarations"
+
 // SpecVerdict is what the author's gate decided.
 type SpecVerdict int
 
@@ -153,7 +164,8 @@ if [ "$rc" -eq 124 ]; then
   exit 1
 fi
 if [ "$rc" -eq 0 ]; then
-  srcs=$(find . -name '*.go' ! -name '*_test.go' -not -path './.git/*' -not -path './vendor/*') || true
+  srcs=$(find . -name '*.go' ! -name '*_test.go' -not -path './.git/*' -not -path './vendor/*' \
+    -exec grep -L '%s' {} + ) || true
   impl=0
   if [ -n "$srcs" ]; then
     impl=$(echo "$srcs" | xargs grep -hE '^(type [A-Z]|func [A-Z]|func \([a-z]+ \*?[A-Z])' | wc -l)
@@ -167,7 +179,7 @@ if [ "$rc" -eq 0 ]; then
   exit 1
 fi
 echo "the specification fails as it should (exit $rc), which is what the developer is given to fix"
-`, testCommand, TestTimeoutSeconds, TimedOutNotice,
+`, testCommand, TestTimeoutSeconds, TimedOutNotice, DeclarationsMarker,
 		SpecAlreadyBuiltMarker, SpecVacuousMarker)
 }
 

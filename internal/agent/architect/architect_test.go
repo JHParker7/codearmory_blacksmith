@@ -188,7 +188,10 @@ func TestEveryWayADesignCanFailStillLetsTheRequestThrough(t *testing.T) {
 			wantSay: "not valid JSON",
 		},
 		"no usable files": {
-			res:     design(File{Path: "main.go", Content: "package main\n"}),
+			// A YAML FILE, NOT A .go ONE. Since the architect began declaring types
+			// a Go file is a legitimate output, so "package main" is no longer an
+			// example of producing nothing usable.
+			res:     design(File{Path: ".github/workflows/ci.yml", Content: "evil\n"}),
 			wantSay: "no usable documentation file",
 		},
 		"the push failed": {
@@ -271,7 +274,9 @@ func TestOnlyMarkdownAtTheRootIsEverCommitted(t *testing.T) {
 		{Path: "/etc/cron.d/x", Content: "evil\n"},
 		{Path: "../../outside.md", Content: "evil\n"},
 		{Path: ".github/workflows/ci.yml", Content: "evil\n"},
-		{Path: "main.go", Content: "package main\n"},
+		{Path: "types.go", Content: "package main\n\ntype Ticket struct{ ID string }\n\nfunc NewStore() *Store { panic(\"not implemented\") }\n"},
+		{Path: "worker.go", Content: "package main\n\nfunc Work() int { return 41 + 1 }\n"},
+		{Path: "store_test.go", Content: "package main\n"},
 		{Path: "empty.md", Content: "   \n"},
 	}})
 
@@ -282,7 +287,16 @@ func TestOnlyMarkdownAtTheRootIsEverCommitted(t *testing.T) {
 	if !got["README.md"] || !got["docs/GUIDE.md"] {
 		t.Errorf("legitimate documentation was dropped: %v", PathsOf(files))
 	}
-	for _, bad := range []string{"/etc/cron.d/x", "../../outside.md", ".github/workflows/ci.yml", "main.go"} {
+	// DECLARATIONS ARE NOW A LEGITIMATE OUTPUT, so the filter is no longer "is it
+	// markdown" — it is "is it documentation, or a declaration with no behaviour".
+	if !got["types.go"] {
+		t.Errorf("a declarations file was dropped: %v", PathsOf(files))
+	}
+	for _, bad := range []string{
+		"/etc/cron.d/x", "../../outside.md", ".github/workflows/ci.yml",
+		"worker.go",     // has a body: that is the developer's work
+		"store_test.go", // is a test: that is the author's work
+	} {
 		if got[bad] {
 			t.Errorf("%q was accepted for commit", bad)
 		}
@@ -532,8 +546,14 @@ func TestThePromptAsksForAPlanRatherThanADescription(t *testing.T) {
 	for _, want := range []string{
 		"WILL be built",
 		"Do not describe the current empty repository",
-		"Documentation only",
 		"anything you leave out is deleted",
+		// THE STAGE NO LONGER WRITES DOCUMENTATION ONLY. It declares the shared
+		// types as well, so the tests a later stage writes type-check — see
+		// OnlyDeclarations. What has to stay said is the LIMIT on that: shapes,
+		// not behaviour.
+		"DECLARES and does not implement",
+		"empty or a single panic",
+		"may be a _test.go file",
 	} {
 		if !strings.Contains(SystemPrompt, want) {
 			t.Errorf("the prompt does not say %q", want)
