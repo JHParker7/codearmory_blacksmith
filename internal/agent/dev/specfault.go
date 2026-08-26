@@ -1,6 +1,7 @@
 package dev
 
 import (
+	"slices"
 	"regexp"
 	"strings"
 
@@ -502,13 +503,51 @@ func HasCompileErrors(out string) bool {
 // CONCLUDED HERE rather than only at the next verification, because an agent in
 // this state may never reach one: it is being refused, not working, and the
 // refusal ceiling arrives first.
-func (s *State) NoteTestEditRefusal(mode Mode) {
+func (s *State) NoteTestEditRefusal(mode Mode, path string) {
 	if mode != ModeDevelop {
 		return
 	}
 	s.TestEditRefusals++
-	if s.TestEditRefusals >= MaxTestEditRefusals && !s.RedIsExpected && s.LastCompileBroke() != "" {
+	if path != "" && !slices.Contains(s.TestEditTargets, path) {
+		s.TestEditTargets = append(s.TestEditTargets, path)
+	}
+	if s.TestEditRefusals < MaxTestEditRefusals {
+		return
+	}
+	if !s.RedIsExpected && s.LastCompileBroke() != "" {
 		s.SpecBroken = s.LastCompileBroke()
+		return
+	}
+
+	// AND WITH NO VERIFICATION TO QUOTE, THE REFUSALS ARE THE EVIDENCE.
+	//
+	// The route above needs a failing verification naming test files, and a
+	// developer that never lands a write never produces one: a refused edit does
+	// not change the tree, and a verification only follows a change.
+	//
+	// Measured on run 81. The specification called t.Error with a format
+	// directive, which go vet rejects. The developer diagnosed it correctly and
+	// repeatedly — "fix vet error: remove unused %q directive" — and tried to
+	// edit store_test.go 21 times. Every attempt was refused, so no verification
+	// ever ran: 99 turns across three attempts, ZERO verifications, and the
+	// attempt died on the refusal ceiling reporting "made 20 actions in a row
+	// that changed nothing". The machinery to hand this back existed and was
+	// unreachable, because it was gated on evidence the developer could not
+	// generate.
+	//
+	// A developer that has spent its whole refusal allowance on ONE file has
+	// named that file as surely as any compiler line would. It cannot edit it and
+	// cannot route around it, so the only remaining move is the author's.
+	//
+	// STILL NOT ON THE EXPECTED RED. A developer poking at a test file while the
+	// only failure is a symbol it has yet to write is out of bounds rather than
+	// onto something, and convicting the author there would send back a
+	// specification that is perfectly sound. Run 81 passes this: with no
+	// verification at all there is no expected red to speak of.
+	if !s.RedIsExpected && len(s.TestEditTargets) > 0 {
+		s.SpecBroken = strings.Join(s.TestEditTargets, ", ")
+		s.SpecFault = "the developer spent its whole refusal allowance trying to correct " +
+			"them and may not edit a test file, so whatever is wrong there is yours to fix"
 	}
 }
 

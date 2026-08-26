@@ -229,7 +229,7 @@ func TestARunOfTestEditRefusalsReachesTheVerdict(t *testing.T) {
 	s.RedIsExpected = false
 
 	for i := 0; i < MaxTestEditRefusals; i++ {
-		s.NoteTestEditRefusal(ModeDevelop)
+		s.NoteTestEditRefusal(ModeDevelop, "store_test.go")
 	}
 	if s.SpecBroken == "" {
 		t.Fatal("a run of refused test edits reached no verdict; the agent has no " +
@@ -246,7 +246,7 @@ func TestRefusalsDoNotConvictOnExpectedRed(t *testing.T) {
 	s.RedIsExpected = true
 
 	for i := 0; i < MaxTestEditRefusals*2; i++ {
-		s.NoteTestEditRefusal(ModeDevelop)
+		s.NoteTestEditRefusal(ModeDevelop, "store_test.go")
 	}
 	if s.SpecBroken != "" {
 		t.Fatalf("SpecBroken = %q on the expected red of test-first", s.SpecBroken)
