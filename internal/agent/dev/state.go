@@ -194,6 +194,14 @@ type State struct {
 	// same way.
 	Hint string
 
+	// TestEditTargets are the test files the developer has been refused on.
+	//
+	// A DEVELOPER NAMES THE FILE BY TRYING TO EDIT IT, and that is the only
+	// evidence available when no write ever lands: a refused edit changes nothing,
+	// so no verification runs and there is no compiler output to quote. See
+	// NoteTestEditRefusal.
+	TestEditTargets []string
+
 	// ParseFails counts consecutive replies that were not valid actions, and
 	// Refunded counts turns given back for reads.
 	ParseFails int

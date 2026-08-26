@@ -260,7 +260,7 @@ func (a *Agent) loop(
 		// A REFUSAL IS EVIDENCE TOO. An agent being told it may not edit a test is
 		// not working, so it may never reach another verification to be judged at.
 		if applyErr != nil && edit.IsTestFile(firstEditPath(act)) {
-			s.NoteTestEditRefusal(a.mode)
+			s.NoteTestEditRefusal(a.mode, firstEditPath(act))
 		}
 		s.Remember(TurnRecord(act, res.Content), a.outcomeOf(ctx, sb, s, act, applyErr))
 
