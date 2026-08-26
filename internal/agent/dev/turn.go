@@ -222,6 +222,32 @@ func (s *State) Advance(act Action, mode Mode) (verify bool, err error) {
 // RecordVerification files what the checks decided, and resets what that
 // decision has made stale.
 func (s *State) RecordVerification(output string, pass bool, mode Mode) {
+	// AN AUTHOR IS NOT FINISHED WHILE ITS OWN TESTS WILL NOT COMPILE, and
+	// NEITHER SPEC GATE CAN REPORT THAT BY ITSELF.
+	//
+	// gate.SpecScript has two branches and both exit 0 on a test file that does
+	// not build. The repair branch captures the test command's status into $rc,
+	// prints it and ends on an echo, so the script's own exit is the echo's. The
+	// authoring branch exits 0 for red deliberately — red is what it is looking
+	// for — and a file that fails to compile is red. The classification that
+	// would catch it runs only when a verification FAILS, so on this path it
+	// never runs at all.
+	//
+	// Measured on run 11, ticket e1528130: handlers_test.go called handleList
+	// both as (w, r) and as (w, r, s), 8 call sites in one file. The author was
+	// told it passed and stopped after a single edit — twice, once per repair,
+	// each time believing itself done. The developer, which does compile, handed
+	// it back until MaxSpecRepairs ran out and the ticket blocked with 6 sites
+	// still wrong. Neither agent was at fault: the gate said yes.
+	//
+	// RedIsExpected is the discriminator that already exists and the reason this
+	// cannot simply be `exit $rc`. "undefined: NewStore" is the red a test-first
+	// specification MUST produce before its implementation is written; a wrong
+	// argument count is not, and only the second means the author has more to do.
+	if pass && mode.WritesSpec() && !RedIsExpected(output) {
+		pass = false
+	}
+
 	s.LastTest = output
 	s.TestsPass = pass
 	// THE FINGERPRINT, NOT A COUNTER. See TreeHash.

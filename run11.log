@@ -1,0 +1,38 @@
+2026/08/26 08:32:57 INFO agents host starting host=osiris classes=2
+2026/08/26 08:32:57 INFO transcript capture enabled dir=/home/jhp1403/.local/share/codearmory-agents/transcripts
+2026/08/26 08:32:57 INFO metrics exporting over OTLP service=blacksmith
+2026/08/26 08:32:57 INFO model class routed class=large endpoint=http://192.168.58.1:11434/v1 model=qwen3.8:latest slots=1 authenticated=false
+2026/08/26 08:32:57 INFO model class routed class=small endpoint=http://192.168.58.1:11434/v1 model=qwen3.8:latest slots=1 authenticated=true
+2026/08/26 08:32:57 INFO sandbox session renews on expiry login_url=http://192.168.58.2:30081 email=admin@blacksmith.invalid
+2026/08/26 08:32:57 INFO sandboxes run on a LOCAL forge with its own gatekeeper url=http://192.168.58.2:30083
+2026/08/26 08:32:57 INFO STANDALONE: this host's own store holds the tickets and the platform is not consulted url=http://192.168.58.2:30086
+2026/08/26 08:32:57 INFO stage running role=architect-agent class=large
+2026/08/26 08:32:57 INFO stage running role=pm-agent class=small
+2026/08/26 08:32:57 INFO stage running role=ticket-merge-agent class=none
+2026/08/26 08:32:57 INFO stage running role=test-agent class=large
+2026/08/26 08:32:57 INFO stage running role=spec-agent class=large
+2026/08/26 08:32:57 INFO stage running role=spec-merge-agent class=large
+2026/08/26 08:32:57 INFO stage running role=dev-agent class=large
+2026/08/26 08:32:57 INFO stage running role=maintenance-agent class=large
+2026/08/26 08:32:57 INFO stage running role=sec-agent class=small
+2026/08/26 08:32:57 INFO stage running role=integrator class=none
+2026/08/26 08:32:57 INFO stage running role=resolver class=small
+2026/08/26 08:32:57 INFO department ready host=osiris stages=11
+2026/08/26 08:33:07 WARN metrics are not reaching a collector; counters are being dropped. Reported once — the total follows at shutdown error="failed to upload metrics: Post \"http://localhost:4318/v1/metrics\": dial tcp [::1]:4318: connect: connection refused"
+2026/08/26 08:33:53 INFO stage finished ticket_id=771ae9ea-6b19-4df7-9754-f65be7d04905 role=architect-agent status=success detail="designed: README.md, ARCHITECTURE.md"
+2026/08/26 08:35:07 INFO split a task into specification sections ticket_id=771ae9ea-6b19-4df7-9754-f65be7d04905 title="In-memory ticket store with validation and unique ID assignment" criteria=5 sections=2
+2026/08/26 08:35:20 INFO split a task into specification sections ticket_id=771ae9ea-6b19-4df7-9754-f65be7d04905 title="JSON REST API handlers for ticket CRUD with 4xx error handling" criteria=5 sections=2
+2026/08/26 08:35:37 INFO split a task into specification sections ticket_id=771ae9ea-6b19-4df7-9754-f65be7d04905 title="HTML board page at / with grouped tickets and a create form" criteria=4 sections=2
+2026/08/26 08:35:50 INFO stage finished ticket_id=771ae9ea-6b19-4df7-9754-f65be7d04905 role=pm-agent status=success detail="opened 4 tasks and 0 specification sections"
+2026/08/26 08:35:50 INFO merged the plan's tasks into one ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 absorbed=3 sections=4
+2026/08/26 08:35:50 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=ticket-merge-agent status=success detail="merged 4 tasks into one"
+2026/08/26 08:36:31 INFO stage finished ticket_id=3412106b-20ef-4624-aa45-bfc43dd8014e role=spec-agent status=success detail="1 file(s) in 2 turns"
+2026/08/26 08:37:19 INFO stage finished ticket_id=24cd5a8e-cbdf-4d0c-9db9-ad56c012ead4 role=spec-agent status=success detail="1 file(s) in 2 turns"
+2026/08/26 08:38:02 INFO stage finished ticket_id=856992f4-2526-411f-9523-1399dd84f6df role=spec-agent status=success detail="1 file(s) in 2 turns"
+2026/08/26 08:38:51 INFO stage finished ticket_id=fe764426-6f87-48c2-b740-d130b0113027 role=spec-agent status=success detail="1 file(s) in 2 turns"
+2026/08/26 08:39:27 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=spec-merge-agent status=success detail="1 file(s) in 2 turns"
+2026/08/26 08:40:43 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=dev-agent status=returned detail="specification is unsatisfiable; returned to its author"
+2026/08/26 08:41:20 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=spec-merge-agent status=success detail="1 file(s) in 2 turns"
+2026/08/26 08:43:00 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=dev-agent status=returned detail="specification is unsatisfiable; returned to its author"
+2026/08/26 08:43:31 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=spec-merge-agent status=success detail="1 file(s) in 2 turns"
+2026/08/26 08:44:22 INFO stage finished ticket_id=e1528130-aaa0-498f-a02c-a4a81d6b1652 role=dev-agent status=blocked detail="specification is unsatisfiable"
