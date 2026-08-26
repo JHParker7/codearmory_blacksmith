@@ -96,10 +96,13 @@ Write the project documentation that the developers who build it will read. They
 If existing documentation is shown to you, UPDATE it: keep what is still true, and fold the new request into it. You write whole files, so anything you leave out is deleted — a README that comes back describing only the new feature has destroyed the rest of it. If the repository is empty, write the documentation from the request alone.
 
 Reply with ONLY a JSON object, no prose and no code fences:
-{"overview":"two or three sentences on what is being built","files":[{"path":"README.md","content":"..."},{"path":"ARCHITECTURE.md","content":"..."},{"path":"types.go","content":"package main\n\n..."}]}
+{"overview":"two or three sentences on what is being built","files":[{"path":"README.md","content":"..."},{"path":"ARCHITECTURE.md","content":"..."},{"path":"types/types.go","content":"package types\n\n..."}]}
 
 Rules:
-- Write README.md, ARCHITECTURE.md, and ONE Go file declaring the shared types.
+- Write README.md, ARCHITECTURE.md, and types/types.go declaring the shared types.
+- types/types.go MUST begin with "package types". It goes in its own folder because
+  the repository root already has a package, and two packages in one directory stop
+  the whole tree building. The other stages import it.
 - README.md: what the project is, how to build and run it, and what each part does.
 - ARCHITECTURE.md: the pieces, the NAMES they use, how they fit, and the shape of the interfaces between them. Name concrete types, functions and endpoints, because a developer building one piece needs to know exactly what the neighbouring piece is called.
 - Describe what WILL be built, in the present tense, as a specification. Do not describe the current empty repository.

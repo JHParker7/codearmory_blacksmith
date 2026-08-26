@@ -14,7 +14,7 @@ import (
 // reason, and only surfaced later inside a file the developer was forbidden to
 // edit — 99 turns, zero verifications, blocked.
 func TestDeclarationsAreAccepted(t *testing.T) {
-	src := `package main
+	src := `package types
 
 import "errors"
 
@@ -43,7 +43,7 @@ type Ticket struct {
 // BUT A STUB IS NOT AN IMPLEMENTATION. An architect that writes bodies has done
 // the developer's work, and done it without having seen the tests.
 func TestABodyThatDoesAnythingIsRefused(t *testing.T) {
-	src := `package main
+	src := `package types
 
 func Add(a, b int) int { return a + b }
 `
@@ -64,7 +64,7 @@ func Add(a, b int) int { return a + b }
 // written against it would be GREEN before the developer started — which the
 // author's own gate then reads as work already finished.
 func TestAStubThatReturnsAValueIsRefused(t *testing.T) {
-	if err := OnlyDeclarations("package main\n\nfunc NewStore() *Store { return nil }\n"); err == nil {
+	if err := OnlyDeclarations("package types\n\nfunc NewStore() *Store { return nil }\n"); err == nil {
 		t.Error("a stub returning a zero value was accepted as a declaration")
 	}
 }
@@ -72,7 +72,7 @@ func TestAStubThatReturnsAValueIsRefused(t *testing.T) {
 // A FILE THAT DOES NOT PARSE IS REFUSED WITH THE PARSE ERROR, because the whole
 // point is that what lands in the tree compiles for everyone downstream.
 func TestAFileThatDoesNotParseIsRefused(t *testing.T) {
-	err := OnlyDeclarations("package main\n\nfunc Broken( {\n")
+	err := OnlyDeclarations("package types\n\nfunc Broken( {\n")
 	if err == nil {
 		t.Fatal("a file that does not parse was accepted")
 	}
@@ -86,9 +86,11 @@ func TestAFileThatDoesNotParseIsRefused(t *testing.T) {
 // whole job that is has seen it.
 func TestATestFileIsNotADeclarationFile(t *testing.T) {
 	for path, want := range map[string]bool{
-		"types.go":        true,
-		"ticket/types.go": true,
-		"store_test.go":   false,
+		"types/types.go":  true,
+		"types/store.go":  true,
+		"types.go":        false, // the ROOT already has a package; see run 90
+		"ticket/types.go": false, // one folder, so there is one place to look
+		"types/x_test.go": false, // tests are the author's
 		"README.md":       false,
 		"Makefile":        false,
 	} {
@@ -103,7 +105,7 @@ func TestATestFileIsNotADeclarationFile(t *testing.T) {
 func TestAnAcceptedDeclarationFileIsMarked(t *testing.T) {
 	files, rejected := Sanitise(Design{Files: []File{
 		{Path: "README.md", Content: "# ok\n"},
-		{Path: "types.go", Content: "package main\n\ntype Ticket struct{ ID string }\n"},
+		{Path: "types/types.go", Content: "package types\n\ntype Ticket struct{ ID string }\n"},
 	}})
 
 	if len(rejected) != 0 {
@@ -111,7 +113,7 @@ func TestAnAcceptedDeclarationFileIsMarked(t *testing.T) {
 	}
 	var got string
 	for _, f := range files {
-		if f.Path == "types.go" {
+		if f.Path == "types/types.go" {
 			got = f.Content
 		}
 	}
@@ -128,7 +130,7 @@ func TestAnAcceptedDeclarationFileIsMarked(t *testing.T) {
 // than silently shipping a design with a hole in it.
 func TestARefusedDeclarationFileSaysWhy(t *testing.T) {
 	_, rejected := Sanitise(Design{Files: []File{
-		{Path: "worker.go", Content: "package main\n\nfunc Work() int { return 41 + 1 }\n"},
+		{Path: "types/worker.go", Content: "package types\n\nfunc Work() int { return 41 + 1 }\n"},
 	}})
 
 	if len(rejected) != 1 {
@@ -136,5 +138,37 @@ func TestARefusedDeclarationFileSaysWhy(t *testing.T) {
 	}
 	if !strings.Contains(rejected[0], "Work") {
 		t.Errorf("the rejection does not say what was wrong: %q", rejected[0])
+	}
+}
+
+// THE PACKAGE MUST MATCH ITS FOLDER, which is the defect run 90 shipped.
+//
+// The architect wrote ticket.go at the repository ROOT declaring "package
+// ticket", beside a main.go declaring "package main". Two packages in one
+// directory means nothing in the tree builds — so the declarations destroyed the
+// very thing they exist to buy, tests that type-check. A folder of its own
+// cannot collide, and the package name is checked against it.
+func TestAPackageThatDisagreesWithItsFolderIsRefused(t *testing.T) {
+	err := OnlyDeclarations("package ticket\n\ntype Ticket struct{ ID string }\n")
+	if err == nil {
+		t.Fatal("a file declaring the wrong package was accepted")
+	}
+	if !errors.Is(err, ErrNotDeclarations) {
+		t.Errorf("the refusal is not identifiable: %v", err)
+	}
+	for _, want := range []string{"package ticket", "types"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+}
+
+// AND THE ROOT IS NOT A PLACE FOR THEM AT ALL, whatever they declare.
+func TestDeclarationsAtTheRootAreRejectedOutright(t *testing.T) {
+	_, rejected := Sanitise(Design{Files: []File{
+		{Path: "ticket.go", Content: "package ticket\n\ntype Ticket struct{ ID string }\n"},
+	}})
+	if len(rejected) != 1 {
+		t.Fatalf("rejected = %v, want the root Go file named", rejected)
 	}
 }
