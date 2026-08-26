@@ -61,7 +61,21 @@ const (
 
 	// AgentResetTurns is how many turns an attempt runs before the agent's MEMORY
 	// is cleared while its WORK is kept. See State.ResetAgent.
-	AgentResetTurns = 40
+	//
+	// FIFTEEN, BECAUSE FORTY IS LONGER THAN THE LOOPS LAST. Forty was set before
+	// there was a day of runs to read, and measured against them it almost never
+	// fired: run 95's developer circled main() for 18 turns and reset once at the
+	// very end; run 94 oscillated on board.go for 36 turns and never reset at all;
+	// run 93 managed 43 turns and one reset. The loops form at ten to twenty
+	// turns, so a threshold of forty arrives after the damage rather than during
+	// it.
+	//
+	// WHAT IT COSTS is the agent's own prose reasoning, and nothing else: the code
+	// it wrote is folded into Baseline and the last verification survives, so a
+	// productive agent reset mid-flow keeps its work and its current failure and
+	// loses only the story of how it got there. That is a real but small loss
+	// against a loop that costs four minutes a turn when the suite hangs.
+	AgentResetTurns = 15
 
 	// MaxAgentResets bounds it, because a reset that has not helped four times
 	// will not help a fifth. A starting figure to be measured, not a derived one.

@@ -133,8 +133,16 @@ func TestCompileErrorsNeverReachTheReferee(t *testing.T) {
 	}
 }
 
-// AND A FAILURE THAT KEEPS CHANGING IS PROGRESS, not a question.
-func TestAChangingFailureDoesNotReachTheReferee(t *testing.T) {
+// EVERY BEHAVIOURAL FAILURE IS A QUESTION NOW.
+//
+// Waiting for a fault to recur failed twice for reasons unrelated to the idea —
+// the fingerprint counted handlers.go:67 and :68 as different faults, then the
+// same failure at 0.519s and 0.402s as different faults — and a loop ran to
+// exhaustion both times while the mechanism built to stop it sat idle. Since the
+// verdict became advice to the developer rather than something discarded, a
+// consult is no longer a call spent to learn nothing, so the cheaper side of the
+// trade is to ask.
+func TestEveryBehaviouralFailureReachesTheReferee(t *testing.T) {
 	j := &sequenceJudge{}
 	a := &Agent{ref: j, mode: ModeDevelop}
 	s := &State{FailedVerifications: RefereeAfterFailures, FailureSightings: map[string]int{}}
@@ -148,9 +156,10 @@ func TestAChangingFailureDoesNotReachTheReferee(t *testing.T) {
 		a.consultReferee(context.Background(), ticket.Ticket{}, s)
 	}
 
-	if j.judged != 0 {
-		t.Errorf("a developer working through three different failures was "+
-			"second-guessed %d time(s)", j.judged)
+	if j.judged != 3 {
+		t.Errorf("three behavioural failures bought %d verdicts, want one each — "+
+			"a diagnosis the developer never receives is the loop this exists to end",
+			j.judged)
 	}
 }
 

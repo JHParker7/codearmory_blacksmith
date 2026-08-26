@@ -474,12 +474,35 @@ const RefereeAfterFailures = 3
 // THREE, because two is ordinary. A test that fails, is addressed, and fails
 // once more is a normal edit-and-recheck. A third sighting means two attempts
 // at it have not moved it.
-const RefereeOnRecurrence = 3
+// ONE, WHICH MEANS EVERY BEHAVIOURAL FAILURE. It was three, and waiting for a
+// fault to come back three times has now failed twice for reasons that had
+// nothing to do with the idea: the fingerprint counted handlers.go:67 and :68 as
+// different faults (1da8996), then counted the same failure at 0.519s and 0.402s
+// as different faults (14e8c6a). Both times the mechanism was right, the
+// fingerprint was subtly wrong, and a loop ran to exhaustion while the thing
+// built to stop it sat idle.
+//
+// THE ECONOMICS CHANGED WHEN THE VERDICT BECAME ADVICE. Run 50's ten consults
+// were waste — every one said "dev" and every one was discarded, which is what
+// the counting was for. Since 1da8996 the reason reaches the developer's prompt,
+// and run 61 showed it acted on: three attempts at exactly the fix the referee
+// described. A verdict is no longer a call spent to learn nothing.
+//
+// Against that, a loop costs minutes: run 21 ran 45 minutes, run 94 oscillated
+// 36 turns on one file, run 93 43 turns. A consult costs one model call. Buying
+// a diagnosis on every failure that a compiler cannot attribute is the cheaper
+// side of that trade, and it removes the fingerprint from the critical path.
+const RefereeOnRecurrence = 1
 
 // MaxRefereeAsks bounds the second opinion for the whole attempt, because the
 // referee is a large-model call and a stalled developer would otherwise buy one
 // every eight turns until the ceiling.
-const MaxRefereeAsks = 3
+// THE CEILING IS A RUNAWAY GUARD, NOT THE MECHANISM. It was three, which made
+// it the thing that actually limited consultation; the compile-error filter is
+// what should do that, because those failures already have a mechanical answer.
+// Set high enough not to bind on a healthy attempt and low enough that a
+// pathological one cannot spend the slot indefinitely.
+const MaxRefereeAsks = 30
 
 // consultReferee asks whose fault the failures are, once there have been enough
 // of them to be worth asking about, and AGAIN if the attempt later stalls.

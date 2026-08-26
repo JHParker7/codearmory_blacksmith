@@ -1,11 +1,6 @@
 package dev
 
-import (
-	"context"
-	"testing"
-
-	"github.com/code-armory-app/blacksmith/internal/ticket"
-)
+import "testing"
 
 // TIME IS NOT PART OF A FAULT.
 //
@@ -42,24 +37,29 @@ func TestStrippingTimesDoesNotCollapseDistinctFailures(t *testing.T) {
 	}
 }
 
-// AND THE REFEREE IS REACHED because of it. The unit above is only how it gets
-// there; this is the behaviour run 94 needed and did not have.
-func TestARepeatedFailureAtVaryingSpeedsReachesTheReferee(t *testing.T) {
-	j := &sequenceJudge{}
-	a := &Agent{ref: j, mode: ModeDevelop}
-	s := &State{FailedVerifications: RefereeAfterFailures, FailureSightings: map[string]int{}}
+// AND THE SIGHTINGS ACCUMULATE ACROSS THEM, which is the property run 94 needed
+// and did not have.
+//
+// Asserted without consulting, because a consult deliberately resets the count
+// for that fingerprint — so counting after one proves nothing. What matters is
+// that nineteen occurrences of one failure at nineteen different speeds are
+// nineteen sightings of the SAME fault rather than nineteen different ones.
+func TestSightingsAccumulateAcrossVaryingSpeeds(t *testing.T) {
+	s := &State{Staged: map[string]string{"board.go": "package main\n"}}
 
-	for i, secs := range []string{"0.519s", "0.402s", "0.611s"} {
-		out := "--- FAIL: TestBoardLists (0.00s)\n" +
-			"    board_test.go:78: POST /tickets: status = 404, want 201\n" +
-			"FAIL\tdemo\t" + secs
-		s.RecordVerification(out, false, ModeDevelop)
-		a.consultReferee(context.Background(), ticket.Ticket{}, s)
-		_ = i
+	for _, secs := range []string{"0.519s", "0.402s", "0.611s", "0.480s"} {
+		s.RecordVerification("--- FAIL: TestBoardLists (0.00s)\n"+
+			"    board_test.go:78: POST /tickets: status = 404, want 201\n"+
+			"FAIL\tdemo\t"+secs, false, ModeDevelop)
 	}
 
-	if j.judged != 1 {
-		t.Errorf("one failure seen three times at three speeds was judged %d time(s), "+
-			"want once — run 94 saw it nineteen times and asked nobody", j.judged)
+	if len(s.FailureSightings) != 1 {
+		t.Fatalf("one failure at four speeds produced %d distinct faults; run 94 saw "+
+			"nineteen and asked nobody", len(s.FailureSightings))
+	}
+	for _, n := range s.FailureSightings {
+		if n != 4 {
+			t.Errorf("the failure was counted %d times, want 4", n)
+		}
 	}
 }
