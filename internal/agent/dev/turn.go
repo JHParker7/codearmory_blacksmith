@@ -2,6 +2,7 @@ package dev
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -190,6 +191,16 @@ func (s *State) Advance(act Action, mode Mode) (verify bool, err error) {
 		// on refused verifications instead.
 		if err := Apply(s, act.Edits, mode); err != nil {
 			s.NoProgress("Rejected: " + err.Error())
+			// AN EDIT THAT COULD NOT HAVE CHANGED ANYTHING IS NOT CHARGED FOR. See
+			// ErrNoChangeAsked: the refusal has named the cause precisely for a long
+			// time and the model still sends one, so the remaining lever is the
+			// price. It cost the repository nothing and the turn buys nothing back.
+			//
+			// The refusal itself still counts toward MaxDeadRefusals, so this
+			// forgives the budget without making the attempt unbounded.
+			if errors.Is(err, ErrNoChangeAsked) {
+				s.Refunded++
+			}
 			return false, err
 		}
 
