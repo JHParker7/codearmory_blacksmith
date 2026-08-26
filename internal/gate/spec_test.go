@@ -245,16 +245,87 @@ func TestAnAuthorThatWroteNothingIsToldSo(t *testing.T) {
 	}
 }
 
-// THE SCRIPT NAMES THE TEST FILES RATHER THAN ".". Measured on r92: 8.5 seconds
-// per section against 512ms for the developer's gate, which runs the same
-// preamble AND the whole suite. The difference was "." descending the tree.
+// GOFMT IS GIVEN THE TEST FILES, NEVER ".". Measured on r92: 8.5 seconds per
+// section against 512ms for the developer's gate, which runs the same preamble
+// AND the whole suite. The difference was "." descending the tree.
+//
+// ASSERTED BY BEHAVIOUR RATHER THAN BY THE LITERAL GLOB. This used to require
+// the exact string "gofmt -e -l *_test.go", which pinned one spelling of the fix
+// rather than the property — and that spelling was wrong: it globs the ROOT, so
+// a specification written into a package directory was invisible to it.
 func TestTheParseCheckDoesNotWalkTheWholeTree(t *testing.T) {
 	if strings.Contains(SpecParseScript, "gofmt -e -l .") {
 		t.Error("the parse check walks the tree; it took 8.5s per section that way")
 	}
-	if !strings.Contains(SpecParseScript, "gofmt -e -l *_test.go") {
-		t.Error("the parse check does not name the files the author may write")
+
+	// A badly formatted NON-test file must not reach gofmt, or the author is
+	// failed for a file it may not edit.
+	dir := t.TempDir()
+	writeFile(t, dir+"/store.go", "package main\nfunc  X( ) {\n}\n")
+	writeFile(t, dir+"/store_test.go", "package main\n\nfunc TestX() {}\n")
+
+	out, ok := runIn(t, dir, SpecParseScript)
+	if !ok {
+		t.Fatalf("a well-formed specification failed its parse check:\n%s", out)
 	}
+}
+
+// AND IT FINDS TESTS WHEREVER THE ARCHITECT PUT THEM.
+//
+// Read off run 71. The architect designed packages rather than one flat main,
+// the author wrote ticket/types_test.go, and the root glob found nothing — so
+// the gate answered "no test files were written" in the same prompt that listed
+// ticket/types_test.go as already on the branch. The author rewrote the
+// identical 931-token file 101 times against a check it could never pass.
+func TestTheParseCheckFindsTestsInSubdirectories(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/ticket", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir+"/ticket/types_test.go", "package ticket\n\nfunc TestX() {}\n")
+
+	out, ok := runIn(t, dir, SpecParseScript)
+	if !ok {
+		t.Fatalf("a specification in a package directory failed its own gate:\n%s", out)
+	}
+	if strings.Contains(out, "no test files were written") {
+		t.Errorf("tests in a subdirectory were reported as absent:\n%s", out)
+	}
+	if !strings.Contains(out, "types_test.go") {
+		t.Errorf("the gate did not name the test it found:\n%s", out)
+	}
+}
+
+// AND A PARSE ERROR IN A SUBDIRECTORY IS STILL CAUGHT. Widening the search must
+// not widen it past the point of checking what it finds.
+func TestAParseErrorInASubdirectoryIsStillCaught(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/ticket", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir+"/ticket/types_test.go", "package ticket\n\nfunc TestX() {\n")
+
+	out, ok := runIn(t, dir, SpecParseScript)
+	if ok {
+		t.Errorf("a test file that does not parse passed the gate:\n%s", out)
+	}
+}
+
+// writeFile puts one file on disk for a gate script to look at.
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runIn executes a gate script in dir, because the thing under test is shell.
+func runIn(t *testing.T, dir, script string) (string, bool) {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err == nil
 }
 
 // EVERY SPLICED COMMAND MUST BE SAFE UNDER `set -e`, which the sandbox preamble

@@ -153,10 +153,10 @@ if [ "$rc" -eq 124 ]; then
   exit 1
 fi
 if [ "$rc" -eq 0 ]; then
-  srcs=$(ls *.go 2>/dev/null | grep -v '_test[.]go$') || true
+  srcs=$(find . -name '*.go' ! -name '*_test.go' -not -path './.git/*' -not -path './vendor/*') || true
   impl=0
   if [ -n "$srcs" ]; then
-    impl=$(grep -hE '^(type [A-Z]|func [A-Z]|func \([a-z]+ \*?[A-Z])' $srcs | wc -l)
+    impl=$(echo "$srcs" | xargs grep -hE '^(type [A-Z]|func [A-Z]|func \([a-z]+ \*?[A-Z])' | wc -l)
   fi
   if [ "$impl" -gt 0 ]; then
     echo "the subject of these tests is already built: $impl exported declaration(s) in non-test files"
@@ -186,7 +186,8 @@ echo "the specification fails as it should (exit $rc), which is what the develop
 // which already looks for *_test.go in the root, and with the message the author
 // is given, which says the TESTS do not parse.
 const SpecParseScript = `
-if ! ls *_test.go >/dev/null 2>&1; then
+tests=$(find . -name '*_test.go' -not -path './.git/*' -not -path './vendor/*' | sort)
+if [ -z "$tests" ]; then
   echo "no test files were written"
   exit 1
 fi
@@ -196,11 +197,11 @@ fi
 # reports a failure with an empty body. Observed exactly that way: an author was
 # told "the tests do not parse" with nothing after it, had no idea what was
 # wrong, and rewrote the file blindly until its budget ran out.
-err=$(gofmt -e -l *_test.go 2>&1 >/dev/null) || true
+err=$(echo "$tests" | xargs gofmt -e -l 2>&1 >/dev/null) || true
 if [ -n "$err" ]; then
   echo "$err"
   exit 1
 fi
 echo "--- tests written ---"
-ls *_test.go
+echo "$tests"
 `
