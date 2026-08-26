@@ -472,7 +472,9 @@ func FailureFingerprint(out string) string {
 		if l == "" {
 			continue
 		}
-		b.WriteString(failurePosition.ReplaceAllString(l, "$1:"))
+		l = failurePosition.ReplaceAllString(l, "$1:")
+		l = failureElapsed.ReplaceAllString(l, "")
+		b.WriteString(l)
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -481,6 +483,28 @@ func FailureFingerprint(out string) string {
 // failurePosition matches the "file.go:12:34:" a compiler prints and the
 // "file.go:12:" a test failure prints, keeping only the file.
 var failurePosition = regexp.MustCompile(`([\w./-]+\.go):\d+(:\d+)?:`)
+
+// failureElapsed matches the durations go test prints, and the (cached) marker
+// that replaces them when a package is not re-run.
+//
+// TIME IS NOT PART OF A FAULT, and leaving it in defeated the whole fingerprint.
+// Every run ends with a line like
+//
+//	FAIL	demo	0.519s
+//
+// and that number changes every time, so a failure that had not moved still
+// hashed differently on every verification.
+//
+// Measured on run 94: the SAME pair of failing tests —
+// TestBoardEscapesHTMLInTicketTitles and
+// TestBoardListsTicketsInTheirStatusSection — came back 19 times while the
+// developer oscillated on board.go, and the sightings counter never reached
+// RefereeOnRecurrence because no two of the nineteen looked alike. The referee
+// was asked once, at the start, and never again.
+//
+// This is the line-number drift one layer down: positions were normalised and
+// the timings sitting directly beneath them were not.
+var failureElapsed = regexp.MustCompile(`\s*\d+\.\d+s\b|\s*\(cached\)`)
 
 // HasCompileErrors reports whether the toolchain refused to build.
 //
