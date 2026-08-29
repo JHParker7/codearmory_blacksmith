@@ -1,8 +1,8 @@
 package dev
 
 import (
-	"slices"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/code-armory-app/blacksmith/internal/edit"

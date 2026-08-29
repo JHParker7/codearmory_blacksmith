@@ -11,7 +11,15 @@ make test           # unit + integration (hermetic, safe anywhere)
 make race           # -race -count=2 — dispatch and the queue are concurrent
 make vet fmt        # go vet ./... and gofmt
 go test -run TestName ./...
+
+# The simple shape: run the roles in order over a directory.
+go run ./cmd/simple -repo ./scratch -task "build a task tracker" -dry-run
+go run ./cmd/simple -repo ./scratch -task "..." -roles architect,spec,dev
 ```
+
+`-dry-run` prints the wiring — forge URL, image, and each role's class and check
+— without calling a model or acquiring a sandbox. It is the fastest way to find
+out whether this host is configured to run a stage at all.
 
 `make e2e` creates real tickets on a real board and needs `CODEARMORY_URL`,
 `CODEARMORY_TOKEN` and `BLACKSMITH_E2E_BOARD`. It is not part of `make test` for
@@ -54,17 +62,32 @@ the machinery exists to serve that one rule:
 
 ## Layout
 
-One `package main` at the root. The clusters, by prefix:
+`main.go` at the root runs the full department; everything else is a package
+under `internal/`. There are TWO SHAPES in the tree at once, deliberately:
 
-| files | what |
+- **the department** — board-driven, several hosts, one package per stage. This
+  is what `main.go` runs and what has the operating history.
+- **the simple shape** — `internal/tools` and `internal/agents`, driven by
+  `cmd/simple`, which runs the roles in order over a directory with no board and
+  no claiming. This is the rebuild, and it is where new work starts.
+
+They share the parts that were expensive to get right — `internal/edit`,
+`internal/forge`, `internal/model` — and nothing else. The simple shape is not
+wired into dispatch, and dispatch is what it grows back into once several hosts
+have to share a board.
+
+| package | what |
 |---|---|
-| `agent_*.go` | one file per stage; `agent_dev.go` is the developer loop and by far the largest |
-| `agent_dev_prompt.go` | the developer's prompt, tool schema and reply parsing |
-| `dispatch.go`, `workflow.go`, `projdispatch.go` | claiming, columns, per-project scheduling |
-| `codearmory.go`, `forge.go`, `sandbox.go` | platform, forge and lease clients |
-| `inference.go`, `classes.go`, `queue.go` | the model gateway, serving classes, admission |
-| `transcript.go`, `telemetry_metrics.go` | JSONL transcripts and OTel metrics |
-| `tui.go` | the terminal UI |
+| `internal/tools` | the tool set and the sandbox they run in: the in-memory workspace, the write guards, the forge-backed runner |
+| `internal/agents` | the only model calls in the rebuild: one loop, and one role per stage as data |
+| `cmd/simple` | runs the roles in order over a directory |
+| `internal/agent/*` | the department's stages, one package each; `agent/dev` is the largest |
+| `internal/dispatch`, `internal/workflow`, `internal/department` | claiming, columns, per-project scheduling |
+| `internal/platform`, `internal/forge`, `internal/transport` | platform, forge and lease clients |
+| `internal/model`, `internal/queue` | the model gateway, serving classes, admission |
+| `internal/edit`, `internal/gate` | edit resolution and the verification gate |
+| `internal/transcript`, `internal/telemetry` | JSONL transcripts and OTel metrics |
+| `internal/window` | the terminal UI |
 
 ## Conventions that matter
 

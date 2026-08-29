@@ -49,5 +49,8 @@ vet:
 	GOWORK=off go vet ./...
 	GOWORK=off go vet -tags e2e ./...
 
+# RECURSIVE. This formatted only the root *.go for as long as the whole program
+# lived there; it has not since the packages moved under internal/, so `make fmt`
+# was quietly skipping almost every file it was meant to cover.
 fmt:
-	gofmt -w *.go
+	gofmt -w .

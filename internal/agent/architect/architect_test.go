@@ -295,7 +295,7 @@ func TestOnlyMarkdownAtTheRootIsEverCommitted(t *testing.T) {
 	for _, bad := range []string{
 		"/etc/cron.d/x", "../../outside.md", ".github/workflows/ci.yml",
 		"types/worker.go", // has a body: that is the developer's work
-		"store_test.go", // is a test: that is the author's work
+		"store_test.go",   // is a test: that is the author's work
 	} {
 		if got[bad] {
 			t.Errorf("%q was accepted for commit", bad)
