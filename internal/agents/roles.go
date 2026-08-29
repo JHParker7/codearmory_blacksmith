@@ -57,6 +57,35 @@ func (c Creator) Stage(name string, files map[string]string) (*Agent, error) {
 		name, strings.Join(Stages(), ", "))
 }
 
+// Baseline is ONE unrestricted agent doing the whole job alone.
+//
+// NOT PART OF THE PIPELINE, and deliberately not in Stages(). It exists to be
+// measured against: the pipeline's cost is six model stages, a specification
+// nobody may edit and a reviewer that cannot fix what it finds, and the only
+// way to know whether that cost buys anything is to run the same request
+// through an agent with none of it and compare the output.
+//
+// So it gets what the pipeline withholds — AllowAll, every tool, no separate
+// author for the tests — and the comparison is only fair if it keeps them. A
+// baseline quietly given the developer's guard would be measuring a different
+// question and would flatter the pipeline.
+func (c Creator) Baseline(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  "baseline",
+		Class: model.ClassLarge,
+		Prompt: "You are a Go developer. Build what the user asks for in this repository, and " +
+			"write tests for it. Put go.mod and the packages at the repository root. Run the " +
+			"check as you go and fix what it reports — do not finish on a tree that does not " +
+			"compile or whose tests fail.",
+		Guard:         tools.AllowAll,
+		Tools:         writing(tools.RunCommand),
+		Check:         "go build ./... && go test ./...",
+		MaxIterations: 150,
+		Temperature:   0.2,
+		MaxTokens:     12000,
+	})
+}
+
 // Reading tools every stage gets. Named once because a stage that cannot look
 // around cannot do anything useful, and leaving one out of a list is a silent
 // way to produce exactly that.

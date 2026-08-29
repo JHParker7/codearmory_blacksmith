@@ -64,7 +64,29 @@ type Set struct {
 	// and the accepted ones cannot drift apart — a tool offered but not accepted
 	// is a trap.
 	Names []string
+
+	// served is what each path held the last time it was read, so a read that
+	// returns the same bytes can SAY SO. Lazily built.
+	served map[string]string
+
+	// staleReads counts consecutive reads that told the agent nothing.
+	staleReads int
 }
+
+// MaxStaleReads is how many times in a row a read may return what the agent
+// already had before the notice stops being gentle.
+//
+// A REPEAT IS NOT REFUSED. The refusal aimed at the wrong thing: an edit names
+// the exact text it replaces, so an agent re-checking what it is about to match
+// is doing what the edit format requires. The failure worth catching is making
+// no PROGRESS, and re-reading is only its symptom.
+//
+// What the notice buys is the agent KNOWING the turn told it nothing, which it
+// cannot otherwise tell — the contents look identical either way. Measured on
+// the first live run of this loop: 76 reads against 2 writes, the same two files
+// over and over, and run_command never once called. Nothing in the reply
+// distinguished the 70th read from the first.
+const MaxStaleReads = 3
 
 // Definitions renders the tools for the model, in the configured order.
 func (s *Set) Definitions() []model.Tool {
@@ -271,7 +293,12 @@ func (s *Set) readFiles(paths []string) string {
 	if err != nil {
 		return "Error: " + err.Error()
 	}
+	if s.served == nil {
+		s.served = map[string]string{}
+	}
+
 	var b strings.Builder
+	var fresh int
 	for _, p := range clean {
 		fmt.Fprintf(&b, "=== %s ===\n", p)
 		content, ok := s.Workspace.Read(p)
@@ -280,12 +307,41 @@ func (s *Set) readFiles(paths []string) string {
 			// a path retries the same guess when told only "not found"; shown what is
 			// actually there, it corrects on the next turn.
 			b.WriteString("Error: no such file. " + s.nearby(p) + "\n\n")
+			// A miss is not a stale read: it did tell the agent something.
+			fresh++
 			continue
 		}
+		if had, seen := s.served[p]; !seen || had != content {
+			fresh++
+		}
+		s.served[p] = content
 		b.WriteString(numbered(content))
 		b.WriteString("\n\n")
 	}
+
+	// THE CONTENTS ARE STILL SERVED. Withholding them would break the edit
+	// format, which requires quoting text exactly as it stands; what is added is
+	// the one thing the bytes cannot say, which is that they have not changed.
+	if fresh == 0 {
+		s.staleReads++
+		b.WriteString(s.staleNotice(clean))
+	} else {
+		s.staleReads = 0
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (s *Set) staleNotice(paths []string) string {
+	notice := fmt.Sprintf(
+		"NOTE: you already had %s — the contents above are current, and this read returned the "+
+			"same bytes. It told you nothing new.", strings.Join(paths, ", "))
+	if s.staleReads >= MaxStaleReads {
+		notice += fmt.Sprintf(" You have now re-read %d times in a row without changing anything. "+
+			"Nothing new can come from asking again. Call %s to change something, or %s to find "+
+			"out whether what you have already written works.",
+			s.staleReads, WriteFile, RunCommand)
+	}
+	return notice
 }
 
 // nearby names the files in the same directory, so a wrong path is correctable.

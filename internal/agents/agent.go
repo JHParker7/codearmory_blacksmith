@@ -183,6 +183,15 @@ type Outcome struct {
 	// what its check said.
 	LastCheck string
 
+	// Stalled reports that the stage was stopped for looping rather than for
+	// running out of budget.
+	//
+	// KEPT APART FROM "ran out of budget", because they need opposite responses.
+	// A stage that spent its budget working may deserve a larger one; a stage
+	// that stopped moving would do exactly the same thing with twice as many
+	// turns, and the fix is in the prompt or the tools rather than the number.
+	Stalled bool
+
 	Trail []Step
 }
 
@@ -196,6 +205,7 @@ type Outcome struct {
 // trail — what was tried and what came back — rendered fresh each time.
 func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 	out := Outcome{}
+	idle := 0
 
 	for i := 0; i < a.opts.MaxIterations; i++ {
 		out.Iterations = i + 1
@@ -245,6 +255,10 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 				Result: result,
 			})
 
+			if progressed(call.Name, result) {
+				idle = 0
+			}
+
 			if call.Name == tools.RunCommand {
 				out.LastCheck = result
 				if checkPassed(result) {
@@ -254,10 +268,37 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 				}
 			}
 		}
+
+		if idle++; idle >= MaxIdleTurns {
+			out.Stalled = true
+			a.logf("%s: stopped after %d turns with nothing changed in the last %d",
+				a.opts.Name, out.Iterations, idle)
+			return out, nil
+		}
 	}
 
 	a.logf("%s: out of budget after %d turns", a.opts.Name, out.Iterations)
 	return out, nil
+}
+
+// progressed reports whether a tool call changed anything.
+//
+// READING IS NOT PROGRESS, however much of it happens. Only a write that was
+// accepted and a check that actually ran move a stage forward — everything else
+// is the agent deciding what to do, which is necessary but cannot be the thing
+// that keeps it alive.
+//
+// A REFUSED WRITE DOES NOT COUNT, and that is the whole point: an agent
+// repeating an edit the guard rejects is exactly as stuck as one re-reading, and
+// counting the attempt would hide it.
+func progressed(name, result string) bool {
+	switch name {
+	case tools.WriteFile, tools.UndoEdit:
+		return !strings.HasPrefix(result, "Error:")
+	case tools.RunCommand:
+		return true
+	}
+	return false
 }
 
 func (a *Agent) logf(format string, args ...any) {
@@ -289,6 +330,24 @@ func (a *Agent) messages(task string, trail []Step, lastCheck string) []model.Me
 		{Role: "user", Content: b.String()},
 	}
 }
+
+// MaxIdleTurns is how many turns in a row may pass without the agent changing
+// anything before the stage is stopped.
+//
+// A BUDGET BOUNDS THE WORK; THIS BOUNDS THE LOOPING, and they are different
+// failures. A stage that spends 120 turns writing and re-checking is expensive
+// and working. A stage that spends 120 turns reading is not working at all, and
+// the turns it has left are the only thing keeping it alive.
+//
+// Measured on the first live run of this loop: 76 reads, 2 writes, run_command
+// never called, and the same two files read to the end of the budget. Every one
+// of those turns cost a model call. Stopping at the point where nothing has
+// changed for a while turns a wasted budget into a report that says what
+// happened.
+//
+// Generous on purpose. Reading several files before an edit is normal, and this
+// must not fire on a careful agent — only on one that has stopped moving.
+const MaxIdleTurns = 15
 
 // TrailWindow is how many past steps a turn is shown.
 //

@@ -39,15 +39,17 @@ func main() {
 	task := flag.String("task", "", "what to build (required)")
 	only := flag.String("roles", "", "comma-separated stages to run; default is the whole pipeline")
 	dryRun := flag.Bool("dry-run", false, "print the plan and the wiring, then stop")
+	single := flag.Bool("single", false,
+		"run ONE unrestricted agent instead of the pipeline, as a baseline to measure against")
 	flag.Parse()
 
-	if err := run(*repoDir, *task, *only, *dryRun); err != nil {
+	if err := run(*repoDir, *task, *only, *dryRun, *single); err != nil {
 		fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
 }
 
-func run(repoDir, task, only string, dryRun bool) error {
+func run(repoDir, task, only string, dryRun, single bool) error {
 	if repoDir == "" || task == "" {
 		return fmt.Errorf("-repo and -task are both required")
 	}
@@ -61,6 +63,16 @@ func run(repoDir, task, only string, dryRun bool) error {
 	stages, err := selectStages(only)
 	if err != nil {
 		return err
+	}
+	// THE BASELINE IS ONE STAGE THAT IS NOT ONE OF THE STAGES. Handled by
+	// swapping the list rather than by a second code path, so the preflight, the
+	// sandbox and the write-back below are the same ones the pipeline uses — the
+	// two things being compared must not run through different plumbing.
+	if single {
+		if only != "" {
+			return fmt.Errorf("-single runs one agent and -roles selects several; use one or the other")
+		}
+		stages = []string{stageBaseline}
 	}
 
 	files, err := readTree(repoDir)
@@ -84,7 +96,7 @@ func run(repoDir, task, only string, dryRun bool) error {
 	var missing []string
 	var wantsSandbox bool
 	for _, name := range stages {
-		a, err := maker.Stage(name, nil)
+		a, err := stage(maker, name, nil)
 		if err != nil {
 			return err
 		}
@@ -129,7 +141,7 @@ func run(repoDir, task, only string, dryRun bool) error {
 	}
 
 	for _, name := range stages {
-		agent, err := maker.Stage(name, files)
+		agent, err := stage(maker, name, files)
 		if err != nil {
 			return err
 		}
@@ -157,13 +169,51 @@ func run(repoDir, task, only string, dryRun bool) error {
 			fmt.Printf("\n--- %s ---\n%s\n", agent.Name(), outcome.Answer)
 		}
 		if !outcome.Passed {
-			return fmt.Errorf("stage %s ran out of budget after %d turns and its check never "+
-				"passed. What it last said:\n%s", agent.Name(), outcome.Iterations, outcome.LastCheck)
+			// TOLD APART, because they need opposite responses: a stage that spent
+			// its budget working may deserve a larger one, while a stage that stopped
+			// moving would do the same thing with twice as many turns.
+			why := fmt.Sprintf("ran out of budget after %d turns", outcome.Iterations)
+			if outcome.Stalled {
+				why = fmt.Sprintf("stopped after %d turns having changed nothing in the last %d",
+					outcome.Iterations, agents.MaxIdleTurns)
+			}
+			return fmt.Errorf("stage %s %s and its check never passed. What it last said:\n%s",
+				agent.Name(), why, orNone(outcome.LastCheck))
 		}
 	}
 
 	slog.Info("pipeline finished", "repo", repoDir, "files", len(files))
 	return nil
+}
+
+// planeCredential is how this host authenticates to its own sandbox plane.
+//
+// A SESSION RATHER THAN A FIXED TOKEN wherever a password is configured, because
+// the local gatekeeper issues SHORT ones. A client that cannot renew works until
+// the first expiry and then reports "unauthorized" against a plane that is
+// perfectly healthy — which reads as a broken deployment or a wrong URL, and
+// sends you to look at the cluster. This cost the first live run of the rebuilt
+// pipeline: cmd/simple used the static token alone and forge refused every lease
+// with `POST /leases: denied: unauthorized` while the plane was up and serving.
+//
+// Deliberately the same rule as clients() in the root main.go. Two ways of
+// authenticating to one plane is how they drift.
+func planeCredential(cfg config.Config) transport.Credential {
+	if cfg.ForgeEmail != "" && cfg.ForgePassword != "" {
+		session, err := transport.Login(cfg.SandboxLoginURL(), cfg.ForgeEmail, cfg.ForgePassword, nil)
+		if err == nil {
+			slog.Info("sandbox session renews on expiry",
+				"login_url", cfg.SandboxLoginURL(), "email", cfg.ForgeEmail)
+			return session
+		}
+		slog.Warn("could not build a renewing sandbox session; falling back to the static token",
+			"error", err)
+	}
+	if cfg.ForgeToken == "" {
+		slog.Warn("no plane credential: set AGENTS_FORGE_EMAIL and AGENTS_FORGE_PASSWORD, " +
+			"or AGENTS_FORGE_TOKEN")
+	}
+	return transport.Static(cfg.ForgeToken)
 }
 
 func acquireSandbox(ctx context.Context, cfg config.Config) (tools.Sandbox, func(), error) {
@@ -172,7 +222,7 @@ func acquireSandbox(ctx context.Context, cfg config.Config) (tools.Sandbox, func
 			"a stage in this run has a check and there is no sandbox to run it in. Set " +
 				"AGENTS_FORGE_URL to the forge on this host")
 	}
-	client := forge.Local(cfg.ForgeURL, transport.Static(cfg.ForgeToken))
+	client := forge.Local(cfg.ForgeURL, planeCredential(cfg))
 	sb, err := client.Acquire(ctx, forge.SandboxSpec{
 		Image:           cfg.Repo.Image,
 		RunnerClass:     cfg.Repo.RunnerClass,
@@ -191,6 +241,19 @@ func acquireSandbox(ctx context.Context, cfg config.Config) (tools.Sandbox, func
 	// a substitute for a run that finished. WithoutCancel because the release must
 	// still go out when the run ended on an interrupt.
 	return tools.ForgeSandbox{Sandbox: sb}, func() { sb.Release(context.WithoutCancel(ctx)) }, nil
+}
+
+// stageBaseline names the unrestricted single agent. Not in agents.Stages(),
+// because it is what the pipeline is measured AGAINST rather than part of it.
+const stageBaseline = "baseline"
+
+// stage resolves a name to a built agent, including the baseline that the
+// pipeline's own dispatcher does not know about.
+func stage(c agents.Creator, name string, files map[string]string) (*agents.Agent, error) {
+	if name == stageBaseline {
+		return c.Baseline(files), nil
+	}
+	return c.Stage(name, files)
 }
 
 func selectStages(only string) ([]string, error) {
