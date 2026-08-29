@@ -9,7 +9,8 @@ plans/
 
 # Local operator state — keys, model symlinks, transcripts
 *.key
-__pycache__/
-*.pyc
-.venv-test/
-.pytest_cache/
+
+# Scratch checkouts the agents build into, and the leftover python virtualenv.
+# Neither is source; both are local to a workstation.
+/test_repo/
+/venv/
