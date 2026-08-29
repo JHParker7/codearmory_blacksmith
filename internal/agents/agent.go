@@ -307,10 +307,33 @@ func (a *Agent) logf(format string, args ...any) {
 	}
 }
 
+// MaxKnownChars bounds the file contents carried in a prompt.
+//
+// Generous, because this is the agent's memory of its own work and starving it
+// is what this bound exists to prevent rather than cause. When the budget runs
+// out the remaining files are LISTED BY NAME rather than truncated: a name tells
+// the agent to go and read the file, while half a file tells it nothing is
+// missing.
+const MaxKnownChars = 60000
+
 // messages renders the whole prompt for one turn.
 func (a *Agent) messages(task string, trail []Step, lastCheck string) []model.Message {
 	var b strings.Builder
 	b.WriteString(task)
+
+	// THE FILES COME BEFORE THE TRAIL, and they come in full.
+	//
+	// The prompt is rebuilt every turn, so whatever is not written here does not
+	// exist as far as this turn is concerned. Reconstructing the tree from tool
+	// results in the trail was the original design and it does not work: results
+	// are trimmed, the window rolls, and a file the agent wrote twenty turns ago
+	// silently becomes half a file. Served from the workspace instead, which is
+	// the same bytes the edit tools resolve against — so what the agent is shown
+	// and what it addresses cannot disagree.
+	if known := a.space.Known(); len(known) > 0 {
+		b.WriteString("\n\n--- the files you have read or written, as they are NOW ---\n")
+		b.WriteString(a.renderKnown(known))
+	}
 
 	if len(trail) > 0 {
 		b.WriteString("\n\n--- what you have done so far ---\n")
@@ -349,6 +372,54 @@ func (a *Agent) messages(task string, trail []Step, lastCheck string) []model.Me
 // must not fire on a careful agent — only on one that has stopped moving.
 const MaxIdleTurns = 15
 
+// renderKnown writes the current contents of the files the agent knows about,
+// newest first, until the budget runs out.
+//
+// NEWEST FIRST because the file just written is the one the next action depends
+// on, and if anything has to be dropped it should be the one touched longest
+// ago. Numbered, because every edit refusal tells the agent to copy from "the
+// numbered contents" and to address repeated lines by number.
+func (a *Agent) renderKnown(known []string) string {
+	var b strings.Builder
+	var spent int
+	var omitted []string
+
+	for i := len(known) - 1; i >= 0; i-- {
+		p := known[i]
+		content, ok := a.space.Read(p)
+		if !ok {
+			continue
+		}
+		block := fmt.Sprintf("=== %s ===\n%s\n\n", p, numbered(content))
+		if spent+len(block) > MaxKnownChars {
+			omitted = append(omitted, p)
+			continue
+		}
+		spent += len(block)
+		b.WriteString(block)
+	}
+
+	if len(omitted) > 0 {
+		// NAMED, NOT TRUNCATED. A name is an instruction the agent can act on;
+		// half a file reads as a whole one and is acted on as though nothing were
+		// missing.
+		fmt.Fprintf(&b, "(not shown, read them if you need them: %s)\n",
+			strings.Join(omitted, ", "))
+	}
+	return b.String()
+}
+
+// numbered prefixes each line with its number, matching what read_files serves.
+func numbered(text string) string {
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	width := len(fmt.Sprint(len(lines)))
+	var b strings.Builder
+	for i, l := range lines {
+		fmt.Fprintf(&b, "%*d\t%s\n", width, i+1, l)
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 // TrailWindow is how many past steps a turn is shown.
 //
 // A WINDOW RATHER THAN THE WHOLE HISTORY, because the prompt has to stay bounded
@@ -368,10 +439,18 @@ func RenderTrail(trail []Step) string {
 		fmt.Fprintf(&b, "(%d earlier steps not shown)\n", from)
 	}
 	for i, s := range trail[from:] {
-		fmt.Fprintf(&b, "%d. %s %s\n   -> %s\n", from+i+1, s.Tool, s.Args, trim(s.Result, 1200))
+		fmt.Fprintf(&b, "%d. %s %s\n   -> %s\n", from+i+1, s.Tool, s.Args, trim(s.Result, TrailResultChars))
 	}
 	return b.String()
 }
+
+// TrailResultChars is how much of a tool's result the trail carries.
+//
+// SHORT ON PURPOSE, now that the files are rendered in full above it. The trail
+// is a record of WHAT WAS TRIED — the file contents it used to carry were a
+// duplicate of the real ones and, being truncated, a misleading duplicate. Spend
+// the budget on the files.
+const TrailResultChars = 400
 
 // checkPassed reads the exit status out of run_command's output.
 //

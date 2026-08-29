@@ -39,6 +39,45 @@ type Workspace struct {
 	// written yet. Content of "" with existed=false means the file was created
 	// and undoing it means removing it.
 	last *undoRecord
+
+	// known is every path the agent has read or written, in the order it first
+	// touched them.
+	//
+	// THIS IS THE AGENT'S MEMORY, and it exists because the prompt is rebuilt
+	// from scratch each turn. Without it the only record of a file the agent
+	// wrote twenty turns ago is a tool result in a rolling window, truncated —
+	// and a truncated file is worse than no file, because the agent cannot tell
+	// which half it is missing. Measured on the first live run: model.go
+	// rendered to 2,348 characters, the trail trimmed results to 1,200 keeping
+	// the TAIL, so `type Comment struct` was never once visible. The agent wrote
+	// a Comment literal with a field the struct does not have, then re-read the
+	// same file fifteen times trying to see the half it was never shown.
+	known      map[string]bool
+	knownOrder []string
+}
+
+// Seen records that the agent has looked at a path, so the prompt can carry its
+// contents. Called by the read tools; writes record themselves.
+func (w *Workspace) Seen(path string) {
+	if w.known == nil {
+		w.known = map[string]bool{}
+	}
+	if !w.known[path] {
+		w.known[path] = true
+		w.knownOrder = append(w.knownOrder, path)
+	}
+}
+
+// Known lists the paths the agent has read or written, in the order it first
+// touched them, skipping any that have since been removed.
+func (w *Workspace) Known() []string {
+	out := make([]string, 0, len(w.knownOrder))
+	for _, p := range w.knownOrder {
+		if _, ok := w.files[p]; ok {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 type undoRecord struct {
@@ -192,6 +231,7 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 
 	w.last = &undoRecord{path: e.Path, before: before, existed: existed}
 	w.files[e.Path] = edit.WithTrailingNewline(after)
+	w.Seen(e.Path)
 
 	where := fmt.Sprintf("lines %d-%d of", span.From, span.To)
 	switch {

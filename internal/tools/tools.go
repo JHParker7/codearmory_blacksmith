@@ -315,6 +315,9 @@ func (s *Set) readFiles(paths []string) string {
 			fresh++
 		}
 		s.served[p] = content
+		// Recorded so the prompt carries this file's contents from now on. A read
+		// whose result scrolls out of the trail must not take the file with it.
+		s.Workspace.Seen(p)
 		b.WriteString(numbered(content))
 		b.WriteString("\n\n")
 	}
