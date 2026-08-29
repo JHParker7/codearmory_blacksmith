@@ -271,6 +271,27 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 
 		if idle++; idle >= MaxIdleTurns {
 			out.Stalled = true
+
+			// A STAGE WITH NO CHECK IS DONE WHEN IT STOPS CHANGING THINGS.
+			//
+			// Its success condition is "produced its deliverable and stopped", and
+			// the deliverable is the tree it leaves behind. Stopping by answering in
+			// prose and stopping by running out of things to change are the same
+			// event seen from two angles; only the first was being treated as
+			// finishing. Measured: an architect wrote a 424-line plan and a 298-line
+			// test plan, then circled without answering, and this reported the stage
+			// FAILED and threw all 722 lines away.
+			//
+			// Stalled is still recorded, because "it stopped tidily" and "it went
+			// round in circles until we stopped it" are worth telling apart in a
+			// report even when both count as done.
+			if a.opts.Check == "" {
+				out.Passed = true
+				a.logf("%s: stopped changing anything after %d turns; taking the tree as its answer",
+					a.opts.Name, out.Iterations)
+				return out, nil
+			}
+
 			a.logf("%s: stopped after %d turns with nothing changed in the last %d",
 				a.opts.Name, out.Iterations, idle)
 			return out, nil

@@ -180,7 +180,17 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 	// A whole-file write over a file that already has content is the silent
 	// deletion this addressing scheme exists to prevent: whatever the model did
 	// not carry forward is simply gone, and nothing in the reply says so.
-	if mode, _ := e.Address(); mode == "whole file" && existed && strings.TrimSpace(before) != "" {
+	//
+	// SOURCE ONLY. The asymmetry that justifies the refusal is a property of
+	// code: a declaration dropped in a rewrite does not announce itself, it
+	// surfaces a whole verification round later as a compile error somewhere
+	// else. Prose has no such delay — a plan missing a section is missing it
+	// visibly, to the next reader, and revising a document by rewriting it is the
+	// normal way to revise one. Measured: an architect that had written a
+	// 424-line plan tried to restructure it, was told to "quote a short snippet"
+	// instead, and spent the rest of its budget circling.
+	if mode, _ := e.Address(); mode == "whole file" && existed &&
+		strings.TrimSpace(before) != "" && isSource(e.Path) {
 		return "", fmt.Errorf(
 			"%s already exists, so a whole-file write would discard whatever you did not carry "+
 				"forward. Address the change instead: quote a short snippet in \"old_str\", or name "+
@@ -271,6 +281,16 @@ func (w *Workspace) Undo() (string, bool) {
 	}
 	w.files[u.path] = u.before
 	return u.path, true
+}
+
+// isSource reports whether a path holds code, as opposed to prose.
+//
+// The distinction decides which files are protected from a wholesale rewrite.
+// Only Go is listed because Go is the only language this department writes; a
+// second one belongs here the day it does, and until then a shorter list is an
+// honest one.
+func isSource(p string) bool {
+	return strings.HasSuffix(p, ".go")
 }
 
 // isWholeFile reports whether an edit addresses the file as a whole rather than
