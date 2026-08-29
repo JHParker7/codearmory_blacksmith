@@ -79,7 +79,7 @@ have to share a board.
 | package | what |
 |---|---|
 | `internal/tools` | the tool set and the sandbox they run in: the in-memory workspace, the write guards, the forge-backed runner |
-| `internal/agents` | the only model calls in the rebuild: one loop, and one role per stage as data |
+| `internal/agents` | the only model calls in the rebuild: a `Creator` that builds a wired agent, one loop, and one constructor per stage |
 | `cmd/simple` | runs the roles in order over a directory |
 | `internal/agent/*` | the department's stages, one package each; `agent/dev` is the largest |
 | `internal/dispatch`, `internal/workflow`, `internal/department` | claiming, columns, per-project scheduling |

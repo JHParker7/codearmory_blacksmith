@@ -1,14 +1,16 @@
-// Package agents is the model loop and the roles that run in it.
+// Package agents creates agents and runs them.
 //
 // It holds the ONLY calls to the model in the rebuilt pipeline. Everything a
 // stage does that is not "ask the model something" is a tool call, and the tools
 // live in internal/tools; what remains here is a loop, a budget, and one
-// description per role.
+// constructor per stage.
 //
-// The roles are data rather than code — see roles.go — because the differences
-// between an architect and a developer that actually matter are a prompt, a set
-// of tools and a write guard. Every time one of those differences was expressed
-// as a separate code path instead, the paths drifted.
+// CREATION IS THE ABSTRACTION. A Creator holds the wiring every agent on a host
+// shares — the gateway, the sandbox, where the log goes — so building a stage
+// says only what makes that stage different: its instruction, what it may write,
+// which tools it gets, and what decides it is done. Assembling a workspace, a
+// tool set and a loop by hand at each call site is how those three drift out of
+// agreement, and the guard is the one of them that must not.
 package agents
 
 import (
@@ -27,6 +29,135 @@ import (
 type Gateway interface {
 	Chat(ctx context.Context, class model.Class, req model.ChatRequest) (model.ChatResult, error)
 }
+
+// Creator builds agents that share a host's wiring.
+//
+// The zero value is not useful: Gateway is required, and an agent whose stage
+// has a check needs a Sandbox to run it in.
+type Creator struct {
+	Gateway Gateway
+
+	// Sandbox is where a check runs. Nil is allowed and only matters for the
+	// stages that have one — the reviewer and the document stages never touch it.
+	Sandbox tools.Sandbox
+
+	// Check overrides every stage's default check command.
+	//
+	// "Does this work" is a property of the REPOSITORY, not of the stage looking
+	// at it. The defaults exist so the pipeline runs on a host that configured
+	// nothing; this is what an operator sets when their tree is not built the way
+	// the default assumes.
+	Check string
+
+	// Log receives one line per tool call. Nil is fine. Present because a stage
+	// that takes twenty minutes in silence is indistinguishable from a hung one.
+	Log func(string)
+}
+
+// Options is what makes one stage different from another.
+//
+// Everything here is per-stage. Anything shared between stages belongs on the
+// Creator, and the test for which is whether two stages could sensibly disagree
+// about it.
+type Options struct {
+	// Name appears in logs and errors. It is also how -roles addresses a stage,
+	// so it is part of the interface rather than decoration.
+	Name string
+
+	// Class is the serving class this stage asks for. Which model that is, and
+	// where it runs, is the gateway's business and not the stage's.
+	Class model.Class
+
+	// Prompt is the standing instruction: what this stage IS. What a particular
+	// piece of work is goes to Run instead.
+	Prompt string
+
+	// Guard decides what this stage may write. The strongest statement of what a
+	// stage is for, and the only one a model cannot talk its way past.
+	Guard tools.Guard
+
+	// Tools limits what is offered. Empty offers everything, which is almost
+	// never what a stage wants.
+	Tools []string
+
+	// Check is the command that decides whether this stage succeeded. Empty means
+	// the stage ends when the model stops calling tools — right for a stage whose
+	// product is prose, wrong for every stage that writes code.
+	Check string
+
+	MaxIterations int
+	Temperature   float64
+	MaxTokens     int
+}
+
+// An Agent is one stage, wired and ready to run.
+//
+// It OWNS its workspace, so the tree it produces is read back from it rather
+// than from a workspace the caller built and kept a handle on. Those two
+// arrangements look the same until a guard is attached to one of them.
+type Agent struct {
+	opts    Options
+	tools   *tools.Set
+	space   *tools.Workspace
+	gateway Gateway
+	log     func(string)
+}
+
+// New builds an agent over a snapshot of a file tree.
+func (c Creator) New(files map[string]string, o Options) *Agent {
+	if o.Guard == nil {
+		// A stage with no guard may write anything, and a nil guard is far more
+		// likely to be an omission than an intention. Refusing to infer "write
+		// anything" from silence costs a caller one explicit tools.AllowAll.
+		o.Guard = tools.DenyAll
+	}
+	space := tools.NewWorkspace(files, o.Guard)
+	return &Agent{
+		opts:  o,
+		space: space,
+		tools: &tools.Set{
+			Workspace: space,
+			Sandbox:   c.Sandbox,
+			Check:     c.checkFor(o),
+			Names:     o.Tools,
+		},
+		gateway: c.Gateway,
+		log:     c.Log,
+	}
+}
+
+// checkFor resolves the command a stage gates on, preferring what the operator
+// configured for this repository over the stage's own default.
+func (c Creator) checkFor(o Options) string {
+	if o.Check == "" {
+		return ""
+	}
+	if c.Check != "" {
+		return c.Check
+	}
+	return o.Check
+}
+
+// Name is the stage this agent runs.
+func (a *Agent) Name() string { return a.opts.Name }
+
+// Class is the serving class this agent will ask for.
+func (a *Agent) Class() model.Class { return a.opts.Class }
+
+// Check is the command this agent gates on, resolved against any operator
+// override, or empty when the stage ends on its answer instead.
+//
+// Exposed so a caller can report the wiring — which class, which command —
+// WITHOUT running anything. A host that cannot serve a stage should say so
+// before it spends an hour discovering it at the fifth one.
+func (a *Agent) Check() string { return a.tools.Check }
+
+// Files is the tree as the agent left it.
+func (a *Agent) Files() map[string]string { return a.space.Files() }
+
+// Offers reports the tools this agent may call, for a caller that wants to check
+// the wiring without running anything.
+func (a *Agent) Offers() []model.Tool { return a.tools.Definitions() }
 
 // A Step is one thing the agent did, kept for the trail.
 type Step struct {
@@ -49,24 +180,13 @@ type Outcome struct {
 
 	// LastCheck is the output of the last check that ran, empty if none did. The
 	// caller needs it: a stage that ends unpassed is only actionable alongside
-	// what the check said.
+	// what its check said.
 	LastCheck string
 
 	Trail []Step
 }
 
-// Agent runs one role to completion.
-type Agent struct {
-	Role    Role
-	Tools   *tools.Set
-	Gateway Gateway
-
-	// Log receives one line per turn. Nil is fine. Present because a stage that
-	// takes twenty minutes with no output is indistinguishable from a hung one.
-	Log func(string)
-}
-
-// Run works the task until the role's check passes or its budget runs out.
+// Run works the task until the stage's check passes or its budget runs out.
 //
 // THE PROMPT IS REBUILT EVERY TURN rather than accumulated as a conversation.
 // That is this department's convention and it is load-bearing twice over: the
@@ -77,27 +197,27 @@ type Agent struct {
 func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 	out := Outcome{}
 
-	for i := 0; i < a.Role.MaxIterations; i++ {
+	for i := 0; i < a.opts.MaxIterations; i++ {
 		out.Iterations = i + 1
 
-		res, err := a.Gateway.Chat(ctx, a.Role.Class, model.ChatRequest{
+		res, err := a.gateway.Chat(ctx, a.opts.Class, model.ChatRequest{
 			Messages:    a.messages(task, out.Trail, out.LastCheck),
-			Temperature: a.Role.Temperature,
-			MaxTokens:   a.Role.MaxTokens,
-			Tools:       a.Tools.Definitions(),
+			Temperature: a.opts.Temperature,
+			MaxTokens:   a.opts.MaxTokens,
+			Tools:       a.tools.Definitions(),
 		})
 		if err != nil {
-			return out, fmt.Errorf("%s: turn %d: %w", a.Role.Name, out.Iterations, err)
+			return out, fmt.Errorf("%s: turn %d: %w", a.opts.Name, out.Iterations, err)
 		}
 
 		// NO TOOL CALL MEANS IT ANSWERED. For a stage with a check that is
 		// premature — the check is what decides — so it gets told so and the turn
 		// is spent. For a stage without one, the answer IS the deliverable.
 		if len(res.Calls) == 0 {
-			if a.Role.Check == "" {
+			if a.opts.Check == "" {
 				out.Answer = res.Content
 				out.Passed = true
-				a.logf("%s: finished after %d turns", a.Role.Name, out.Iterations)
+				a.logf("%s: finished after %d turns", a.opts.Name, out.Iterations)
 				return out, nil
 			}
 			out.Trail = append(out.Trail, Step{
@@ -111,14 +231,14 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 		}
 
 		for _, call := range res.Calls {
-			result, err := a.Tools.Invoke(ctx, call.Name, call.Arguments)
+			result, err := a.tools.Invoke(ctx, call.Name, call.Arguments)
 			if err != nil {
 				// The sandbox is unreachable or similar. Not something the model can
 				// reason its way out of, so it ends the stage rather than becoming a
 				// refusal it would keep retrying.
-				return out, fmt.Errorf("%s: %s: %w", a.Role.Name, call.Name, err)
+				return out, fmt.Errorf("%s: %s: %w", a.opts.Name, call.Name, err)
 			}
-			a.logf("%s: %s -> %s", a.Role.Name, call.Name, firstLine(result))
+			a.logf("%s: %s -> %s", a.opts.Name, call.Name, firstLine(result))
 			out.Trail = append(out.Trail, Step{
 				Tool:   call.Name,
 				Args:   trim(call.Arguments, 300),
@@ -129,20 +249,20 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 				out.LastCheck = result
 				if checkPassed(result) {
 					out.Passed = true
-					a.logf("%s: check passed after %d turns", a.Role.Name, out.Iterations)
+					a.logf("%s: check passed after %d turns", a.opts.Name, out.Iterations)
 					return out, nil
 				}
 			}
 		}
 	}
 
-	a.logf("%s: out of budget after %d turns", a.Role.Name, out.Iterations)
+	a.logf("%s: out of budget after %d turns", a.opts.Name, out.Iterations)
 	return out, nil
 }
 
 func (a *Agent) logf(format string, args ...any) {
-	if a.Log != nil {
-		a.Log(fmt.Sprintf(format, args...))
+	if a.log != nil {
+		a.log(fmt.Sprintf(format, args...))
 	}
 }
 
@@ -165,7 +285,7 @@ func (a *Agent) messages(task string, trail []Step, lastCheck string) []model.Me
 	}
 
 	return []model.Message{
-		{Role: "system", Content: a.Role.System},
+		{Role: "system", Content: a.opts.Prompt},
 		{Role: "user", Content: b.String()},
 	}
 }

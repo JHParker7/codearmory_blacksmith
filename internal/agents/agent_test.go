@@ -40,29 +40,32 @@ func (f fakeSandbox) Run(context.Context, map[string]string, string) (tools.Outp
 	return tools.Output{ExitCode: f.exit, Stdout: "output\n"}, nil
 }
 
-func agentFor(t *testing.T, gw Gateway, role Role, files map[string]string, box tools.Sandbox) *Agent {
-	t.Helper()
-	return &Agent{
-		Role:    role,
-		Gateway: gw,
-		Tools: &tools.Set{
-			Workspace: tools.NewWorkspace(files, role.Guard),
-			Sandbox:   box,
-			Check:     role.Check,
-			Names:     role.ToolNames,
-		},
+// checked is a minimal stage that gates on a command, for the loop's own tests.
+// Written here rather than borrowing a real stage so that changing the
+// developer's budget does not silently change what these prove.
+func checked() Options {
+	return Options{
+		Name:          "checked",
+		Class:         model.ClassLarge,
+		Prompt:        "make it work",
+		Guard:         tools.AllowAll,
+		Tools:         []string{tools.ReadFiles, tools.ListFiles, tools.WriteFile, tools.RunCommand},
+		Check:         "go test ./...",
+		MaxIterations: 5,
+		MaxTokens:     100,
 	}
 }
 
-func checkedRole() Role {
-	r := Dev()
-	r.MaxIterations = 5
-	return r
+func unchecked() Options {
+	o := checked()
+	o.Name, o.Check, o.Tools = "unchecked", "", []string{tools.ReadFiles, tools.ListFiles}
+	return o
 }
 
 func TestACheckThatPassesEndsTheStage(t *testing.T) {
 	gw := &fakeGateway{replies: []model.ChatResult{calls(tools.RunCommand, `{}`)}}
-	a := agentFor(t, gw, checkedRole(), map[string]string{"a.go": "package p\n"}, fakeSandbox{exit: 0})
+	a := Creator{Gateway: gw, Sandbox: fakeSandbox{exit: 0}}.
+		New(map[string]string{"a.go": "package p\n"}, checked())
 
 	out, err := a.Run(context.Background(), "make it work")
 	if err != nil {
@@ -81,7 +84,8 @@ func TestAFailingCheckKeepsGoingAndCarriesItsOutputForward(t *testing.T) {
 		calls(tools.RunCommand, `{}`),
 		calls(tools.RunCommand, `{}`),
 	}}
-	a := agentFor(t, gw, checkedRole(), map[string]string{"a.go": "package p\n"}, fakeSandbox{exit: 1})
+	a := Creator{Gateway: gw, Sandbox: fakeSandbox{exit: 1}}.
+		New(map[string]string{"a.go": "package p\n"}, checked())
 
 	out, err := a.Run(context.Background(), "make it work")
 	if err != nil {
@@ -107,7 +111,7 @@ func TestAFailingCheckKeepsGoingAndCarriesItsOutputForward(t *testing.T) {
 // stage with a check does not get to declare itself finished.
 func TestAStageWithoutACheckEndsOnItsAnswer(t *testing.T) {
 	gw := &fakeGateway{replies: []model.ChatResult{{Content: "here is the design"}}}
-	a := agentFor(t, gw, Sec(), map[string]string{"a.go": "package p\n"}, nil)
+	a := Creator{Gateway: gw}.New(map[string]string{"a.go": "package p\n"}, unchecked())
 
 	out, err := a.Run(context.Background(), "review it")
 	if err != nil {
@@ -123,7 +127,8 @@ func TestAStageWithACheckCannotDeclareItselfFinished(t *testing.T) {
 		{Content: "I am done"},
 		calls(tools.RunCommand, `{}`),
 	}}
-	a := agentFor(t, gw, checkedRole(), map[string]string{"a.go": "package p\n"}, fakeSandbox{exit: 0})
+	a := Creator{Gateway: gw, Sandbox: fakeSandbox{exit: 0}}.
+		New(map[string]string{"a.go": "package p\n"}, checked())
 
 	out, err := a.Run(context.Background(), "make it work")
 	if err != nil {
@@ -141,14 +146,15 @@ func TestAStageWithACheckCannotDeclareItselfFinished(t *testing.T) {
 }
 
 func TestARunOutOfBudgetReportsWhatTheCheckLastSaid(t *testing.T) {
-	role := checkedRole()
-	role.MaxIterations = 3
+	o := checked()
+	o.MaxIterations = 3
 	gw := &fakeGateway{replies: []model.ChatResult{
 		calls(tools.RunCommand, `{}`),
 		calls(tools.RunCommand, `{}`),
 		calls(tools.RunCommand, `{}`),
 	}}
-	a := agentFor(t, gw, role, map[string]string{"a.go": "package p\n"}, fakeSandbox{exit: 1})
+	a := Creator{Gateway: gw, Sandbox: fakeSandbox{exit: 1}}.
+		New(map[string]string{"a.go": "package p\n"}, o)
 
 	out, err := a.Run(context.Background(), "make it work")
 	if err != nil {
@@ -164,7 +170,7 @@ func TestARunOutOfBudgetReportsWhatTheCheckLastSaid(t *testing.T) {
 
 func TestAModelFailureEndsTheStage(t *testing.T) {
 	gw := &fakeGateway{err: errors.New("endpoint refused the connection")}
-	a := agentFor(t, gw, checkedRole(), map[string]string{}, fakeSandbox{})
+	a := Creator{Gateway: gw, Sandbox: fakeSandbox{}}.New(map[string]string{}, checked())
 
 	if _, err := a.Run(context.Background(), "go"); err == nil {
 		t.Fatal("an unreachable model did not end the stage")
@@ -175,12 +181,14 @@ func TestAModelFailureEndsTheStage(t *testing.T) {
 // the run. This is the difference between the tool returning a string and
 // returning an error.
 func TestARefusedEditIsFedBackRatherThanEndingTheStage(t *testing.T) {
+	o := checked()
+	o.Guard = tools.NoTests
 	gw := &fakeGateway{replies: []model.ChatResult{
 		calls(tools.WriteFile, `{"path":"a_test.go","replace":"package q\n","summary":"x","type":"fix"}`),
 		calls(tools.RunCommand, `{}`),
 	}}
-	a := agentFor(t, gw, checkedRole(),
-		map[string]string{"a_test.go": "package p\n"}, fakeSandbox{exit: 0})
+	a := Creator{Gateway: gw, Sandbox: fakeSandbox{exit: 0}}.
+		New(map[string]string{"a_test.go": "package p\n"}, o)
 
 	out, err := a.Run(context.Background(), "make it work")
 	if err != nil {
@@ -197,15 +205,16 @@ func TestARefusedEditIsFedBackRatherThanEndingTheStage(t *testing.T) {
 // The prompt is rebuilt every turn rather than accumulated. Two messages, always
 // — a system instruction and one user turn holding the task and the trail.
 func TestThePromptIsRebuiltEachTurnRatherThanAccumulated(t *testing.T) {
-	role := checkedRole()
-	role.MaxIterations = 4
+	o := checked()
+	o.MaxIterations = 4
 	gw := &fakeGateway{replies: []model.ChatResult{
 		calls(tools.ListFiles, `{}`),
 		calls(tools.ListFiles, `{}`),
 		calls(tools.ListFiles, `{}`),
 		calls(tools.ListFiles, `{}`),
 	}}
-	a := agentFor(t, gw, role, map[string]string{"a.go": "package p\n"}, fakeSandbox{exit: 1})
+	a := Creator{Gateway: gw, Sandbox: fakeSandbox{exit: 1}}.
+		New(map[string]string{"a.go": "package p\n"}, o)
 
 	if _, err := a.Run(context.Background(), "look around"); err != nil {
 		t.Fatalf("run: %v", err)
@@ -218,6 +227,79 @@ func TestThePromptIsRebuiltEachTurnRatherThanAccumulated(t *testing.T) {
 			t.Fatalf("turn %d has the wrong message roles: %+v", i+1, req.Messages)
 		}
 	}
+}
+
+// The agent owns its workspace, so what a stage produced is read back from it
+// rather than from a tree the caller kept a handle on.
+func TestTheTreeIsReadBackFromTheAgent(t *testing.T) {
+	gw := &fakeGateway{replies: []model.ChatResult{
+		calls(tools.WriteFile, `{"path":"new.md","replace":"hello\n","summary":"add","type":"docs"}`),
+		{Content: "done"},
+	}}
+	o := unchecked()
+	o.Guard = tools.AllowAll
+	o.Tools = []string{tools.ReadFiles, tools.ListFiles, tools.WriteFile}
+	a := Creator{Gateway: gw}.New(map[string]string{}, o)
+
+	if _, err := a.Run(context.Background(), "write it"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := a.Files()["new.md"]; got != "hello\n" {
+		t.Fatalf("the agent's tree does not hold the write: %q", got)
+	}
+}
+
+// A nil guard is far more likely to be an omission than an intention, and the
+// cost of guessing wrong is a stage that may write anything.
+func TestAnOmittedGuardRefusesRatherThanPermitting(t *testing.T) {
+	gw := &fakeGateway{replies: []model.ChatResult{
+		calls(tools.WriteFile, `{"path":"a.go","replace":"package p\n","summary":"x","type":"fix"}`),
+		{Content: "done"},
+	}}
+	o := unchecked()
+	o.Guard = nil
+	o.Tools = []string{tools.ReadFiles, tools.WriteFile}
+	a := Creator{Gateway: gw}.New(map[string]string{}, o)
+
+	out, err := a.Run(context.Background(), "write it")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, ok := a.Files()["a.go"]; ok {
+		t.Fatal("a stage created with no guard was allowed to write")
+	}
+	if len(out.Trail) == 0 || !strings.Contains(out.Trail[0].Result, "Error") {
+		t.Fatalf("the write was not refused: %+v", out.Trail)
+	}
+}
+
+// "Does this work" is a property of the repository, not of the stage looking at
+// it, so an operator's command wins over the stage's default.
+func TestTheOperatorsCheckOverridesTheStagesDefault(t *testing.T) {
+	box := &recordingSandbox{}
+	a := Creator{Gateway: &fakeGateway{}, Sandbox: box, Check: "make verify"}.
+		New(map[string]string{}, checked())
+
+	if a.Check() != "make verify" {
+		t.Fatalf("the override was not applied: %q", a.Check())
+	}
+}
+
+// ... but a stage with no check must not acquire one from the override. A
+// reviewer that suddenly gates on a command is a reviewer that can fail.
+func TestAnOverrideDoesNotGiveACheckToAStageWithoutOne(t *testing.T) {
+	a := Creator{Gateway: &fakeGateway{}, Check: "make verify"}.New(map[string]string{}, unchecked())
+
+	if a.Check() != "" {
+		t.Fatalf("a stage with no check acquired one: %q", a.Check())
+	}
+}
+
+type recordingSandbox struct{ command string }
+
+func (r *recordingSandbox) Run(_ context.Context, _ map[string]string, command string) (tools.Output, error) {
+	r.command = command
+	return tools.Output{}, nil
 }
 
 // A stage may run for a hundred turns and the prompt has to stay bounded.
@@ -247,19 +329,5 @@ func TestALongOutputKeepsItsTail(t *testing.T) {
 	}
 	if !strings.Contains(got, "omitted") {
 		t.Fatalf("the truncation is not declared: %q", got)
-	}
-}
-
-func TestTheToolsOfferedAreTheRolesOwn(t *testing.T) {
-	gw := &fakeGateway{replies: []model.ChatResult{{Content: "done"}}}
-	a := agentFor(t, gw, Sec(), map[string]string{"a.go": "package p\n"}, nil)
-
-	if _, err := a.Run(context.Background(), "review"); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	for _, tool := range gw.seen[0].Tools {
-		if tool.Name == tools.WriteFile {
-			t.Fatal("the reviewer was offered a way to write")
-		}
 	}
 }

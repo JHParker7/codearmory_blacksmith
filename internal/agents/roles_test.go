@@ -4,19 +4,85 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/code-armory-app/blacksmith/internal/model"
 	"github.com/code-armory-app/blacksmith/internal/tools"
 )
 
+// maker builds stages with a gateway that is never called. Every test here is
+// about how a stage is WIRED, which is settled at construction.
+func maker() Creator {
+	return Creator{Gateway: &fakeGateway{}, Sandbox: fakeSandbox{}}
+}
+
+// built returns every stage in the pipeline, constructed.
+func built(t *testing.T) []*Agent {
+	t.Helper()
+	c := maker()
+	var out []*Agent
+	for _, name := range Stages() {
+		a, err := c.Stage(name, map[string]string{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// offers reports whether a built stage may call a tool.
+func offers(a *Agent, name string) bool {
+	for _, tool := range a.Offers() {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// writes reports whether a stage's guard permits a path.
+func writes(a *Agent, path string) bool {
+	return a.opts.Guard(path) == nil
+}
+
+func TestEveryStageCanBeBuiltByName(t *testing.T) {
+	c := maker()
+	for _, name := range Stages() {
+		a, err := c.Stage(name, map[string]string{})
+		if err != nil {
+			t.Fatalf("%s could not be built: %v", name, err)
+		}
+		if a.Name() != name {
+			t.Errorf("%s built a stage called %q", name, a.Name())
+		}
+	}
+}
+
+// A name that is not a stage must be an error naming the ones that are. The
+// alternative is a silently skipped stage and a pipeline reporting success
+// having never run the developer.
+func TestAnUnknownStageIsRefusedWithTheList(t *testing.T) {
+	_, err := maker().Stage("architekt", map[string]string{})
+	if err == nil {
+		t.Fatal("an unknown stage was built")
+	}
+	for _, name := range Stages() {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the refusal does not name %q: %v", name, err)
+		}
+	}
+}
+
 // THE LOAD-BEARING RULE. A developer that can edit the specification can always
 // go green without making the code work, and the run reports success. Asserted
-// on the role rather than on a prompt because a prompt did not hold this line.
+// on the built stage rather than on a prompt because a prompt did not hold it.
 func TestTheDeveloperCannotWriteATestFile(t *testing.T) {
-	for _, r := range []Role{Dev(), Integrator()} {
-		if err := r.Guard("store_test.go"); err == nil {
-			t.Errorf("%s may write a test file", r.Name)
+	c := maker()
+	for _, a := range []*Agent{c.Dev(nil), c.Integrator(nil)} {
+		if writes(a, "store_test.go") {
+			t.Errorf("%s may write a test file", a.Name())
 		}
-		if err := r.Guard("store.go"); err != nil {
-			t.Errorf("%s may not write ordinary source: %v", r.Name, err)
+		if !writes(a, "store.go") {
+			t.Errorf("%s may not write ordinary source", a.Name())
 		}
 	}
 }
@@ -25,39 +91,42 @@ func TestTheDeveloperCannotWriteATestFile(t *testing.T) {
 // what the developer may not do. If both were guarded the same way the pipeline
 // would have no way to produce a specification at all.
 func TestTheSpecificationAuthorCanWriteTests(t *testing.T) {
-	if err := Spec().Guard("store_test.go"); err != nil {
-		t.Fatalf("the spec author may not write a test: %v", err)
+	if !writes(maker().Spec(nil), "store_test.go") {
+		t.Fatal("the spec author may not write a test")
 	}
 }
 
 // A specification that also implements its subject cannot fail, so it never asks
-// the developer for anything. Its check is what catches that, and both halves
-// matter: a suite that does not compile is a broken specification, not the
-// expected red.
-func TestEveryCodeWritingStageHasACheck(t *testing.T) {
-	for _, r := range []Role{Spec(), Dev(), Integrator()} {
-		if r.Check == "" {
-			t.Errorf("%s writes code and has no check", r.Name)
+// the developer for anything. Its check is what catches that.
+func TestEveryCodeWritingStageHasACheckAndCanRunIt(t *testing.T) {
+	c := maker()
+	for _, a := range []*Agent{c.Spec(nil), c.Dev(nil), c.Integrator(nil)} {
+		if a.Check() == "" {
+			t.Errorf("%s writes code and has no check", a.Name())
+		}
+		if !offers(a, tools.RunCommand) {
+			t.Errorf("%s has a check and no way to run it", a.Name())
 		}
 	}
-	for _, r := range []Role{Architect(), PM(), Sec()} {
-		if r.Check != "" {
-			t.Errorf("%s produces a document and should not gate on a command", r.Name)
+	for _, a := range []*Agent{c.Architect(nil), c.PM(nil), c.Sec(nil)} {
+		if a.Check() != "" {
+			t.Errorf("%s produces a document and should not gate on a command", a.Name())
 		}
 	}
 }
 
 // A reviewer that can edit stops reviewing and starts rewriting, and its report
-// then describes code that no longer exists. Guarded twice, on purpose: the
-// missing tool is what the model sees, and the guard is what happens if someone
-// adds the tool back.
+// then describes code that no longer exists. Guarded twice on purpose: the
+// missing tool is what the model sees, the guard is what happens if someone adds
+// the tool back.
 func TestTheReviewerCanNeitherWriteNorRun(t *testing.T) {
-	r := Sec()
-	if err := r.Guard("a.go"); err == nil {
+	a := maker().Sec(nil)
+
+	if writes(a, "a.go") {
 		t.Fatal("the reviewer may write")
 	}
-	for _, name := range r.ToolNames {
-		if name == tools.WriteFile || name == tools.RunCommand || name == tools.UndoEdit {
+	for _, name := range []string{tools.WriteFile, tools.UndoEdit, tools.RunCommand} {
+		if offers(a, name) {
 			t.Errorf("the reviewer is offered %s", name)
 		}
 	}
@@ -67,73 +136,63 @@ func TestTheReviewerCanNeitherWriteNorRun(t *testing.T) {
 // code writes the code instead of the design, and the stages meant to read a
 // design read half an implementation.
 func TestTheArchitectWritesDocumentsAndNotCode(t *testing.T) {
-	if err := Architect().Guard("main.go"); err == nil {
+	a := maker().Architect(nil)
+
+	if writes(a, "main.go") {
 		t.Fatal("the architect may write Go")
 	}
-	if err := Architect().Guard("docs/design.md"); err != nil {
-		t.Fatalf("the architect may not write markdown: %v", err)
+	if !writes(a, "docs/design.md") {
+		t.Fatal("the architect may not write markdown")
 	}
 }
 
 // A stage that cannot look around cannot do anything useful, and leaving a read
-// tool out of one role's list is a silent way to produce exactly that.
-func TestEveryRoleCanReadTheRepository(t *testing.T) {
-	for _, r := range Pipeline() {
-		var canRead, canList bool
-		for _, name := range r.ToolNames {
-			switch name {
-			case tools.ReadFiles:
-				canRead = true
-			case tools.ListFiles:
-				canList = true
+// tool out of one constructor is a silent way to produce exactly that.
+func TestEveryStageCanReadTheRepository(t *testing.T) {
+	for _, a := range built(t) {
+		for _, name := range []string{tools.ReadFiles, tools.ListFiles, tools.SearchFiles} {
+			if !offers(a, name) {
+				t.Errorf("%s cannot call %s", a.Name(), name)
 			}
-		}
-		if !canRead || !canList {
-			t.Errorf("%s cannot read (%v) or list (%v) the repository", r.Name, canRead, canList)
 		}
 	}
 }
 
-// A stage whose check it cannot run can only ever end by running out of budget.
-func TestAStageWithACheckIsOfferedTheToolThatRunsIt(t *testing.T) {
-	for _, r := range Pipeline() {
-		if r.Check == "" {
-			continue
-		}
-		var offered bool
-		for _, name := range r.ToolNames {
-			if name == tools.RunCommand {
-				offered = true
-			}
-		}
-		if !offered {
-			t.Errorf("%s has a check and no way to run it", r.Name)
-		}
-	}
-}
-
-func TestEveryRoleIsUsable(t *testing.T) {
+func TestEveryStageIsUsable(t *testing.T) {
 	seen := map[string]bool{}
-	for _, r := range Pipeline() {
-		if r.Name == "" {
-			t.Fatal("a role has no name")
+	for _, a := range built(t) {
+		if a.Name() == "" {
+			t.Fatal("a stage has no name")
 		}
-		if seen[r.Name] {
-			t.Fatalf("two roles are called %q; -roles could not tell them apart", r.Name)
+		if seen[a.Name()] {
+			t.Fatalf("two stages are called %q; -roles could not tell them apart", a.Name())
 		}
-		seen[r.Name] = true
+		seen[a.Name()] = true
 
-		if r.MaxIterations <= 0 {
-			t.Errorf("%s has no budget and would never take a turn", r.Name)
+		if a.opts.MaxIterations <= 0 {
+			t.Errorf("%s has no budget and would never take a turn", a.Name())
 		}
-		if r.MaxTokens <= 0 {
-			t.Errorf("%s has no reply budget", r.Name)
+		if a.opts.MaxTokens <= 0 {
+			t.Errorf("%s has no reply budget", a.Name())
 		}
-		if strings.TrimSpace(r.System) == "" {
-			t.Errorf("%s has no instruction", r.Name)
+		if strings.TrimSpace(a.opts.Prompt) == "" {
+			t.Errorf("%s has no instruction", a.Name())
 		}
-		if r.Guard == nil {
-			t.Errorf("%s has no write guard, so it may write anything", r.Name)
+		if a.Class() == "" {
+			t.Errorf("%s asks for no serving class", a.Name())
+		}
+		if a.opts.Guard == nil {
+			t.Errorf("%s has no write guard", a.Name())
+		}
+	}
+}
+
+// A stage that asked for the none class would be one that calls no model, and
+// every stage here calls one.
+func TestEveryStageAsksForAServingClass(t *testing.T) {
+	for _, a := range built(t) {
+		if a.Class() == model.ClassNone {
+			t.Errorf("%s asks for the none class but has a prompt", a.Name())
 		}
 	}
 }
@@ -141,12 +200,12 @@ func TestEveryRoleIsUsable(t *testing.T) {
 // The order is the pipeline: a stage's input is the tree the one before it left
 // behind. Specifying before implementing is the whole design.
 func TestTheSpecificationIsWrittenBeforeTheImplementation(t *testing.T) {
-	var spec, dev int = -1, -1
-	for i, r := range Pipeline() {
-		switch r.Name {
-		case "spec":
+	spec, dev := -1, -1
+	for i, name := range Stages() {
+		switch name {
+		case StageSpec:
 			spec = i
-		case "dev":
+		case StageDev:
 			dev = i
 		}
 	}
