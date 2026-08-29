@@ -285,7 +285,13 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			// Stalled is still recorded, because "it stopped tidily" and "it went
 			// round in circles until we stopped it" are worth telling apart in a
 			// report even when both count as done.
-			if a.opts.Check == "" {
+			// ...BUT ONLY IF IT PRODUCED SOMETHING. A stage that stopped without
+			// ever writing has not finished quietly, it has done nothing, and
+			// calling that done hands the next stage an empty tree and a plan that
+			// does not exist. Measured: an architect called list_files fifteen times
+			// against an empty repository, wrote nothing, was reported as passed,
+			// and the developer then started from nothing and stalled the same way.
+			if a.opts.Check == "" && a.space.Writes() > 0 {
 				out.Passed = true
 				a.logf("%s: stopped changing anything after %d turns; taking the tree as its answer",
 					a.opts.Name, out.Iterations)

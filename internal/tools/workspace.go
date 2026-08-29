@@ -53,7 +53,14 @@ type Workspace struct {
 	// a Comment literal with a field the struct does not have, then re-read the
 	// same file fifteen times trying to see the half it was never shown.
 	knownOrder []string
+
+	// writes counts edits that were actually applied. A stage that produced
+	// nothing has not finished, however tidily it stopped.
+	writes int
 }
+
+// Writes is how many edits this workspace has accepted.
+func (w *Workspace) Writes() int { return w.writes }
 
 // Seen records that the agent has just used a path, moving it to the most-recent
 // end of the queue.
@@ -249,6 +256,7 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 
 	w.last = &undoRecord{path: e.Path, before: before, existed: existed}
 	w.files[e.Path] = edit.WithTrailingNewline(after)
+	w.writes++
 	w.Seen(e.Path)
 
 	where := fmt.Sprintf("lines %d-%d of", span.From, span.To)
