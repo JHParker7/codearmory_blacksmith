@@ -41,15 +41,18 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "print the plan and the wiring, then stop")
 	single := flag.Bool("single", false,
 		"run ONE unrestricted agent instead of the pipeline, as a baseline to measure against")
+	plan := flag.Bool("plan", false,
+		"run the two-stage experiment: an architect that plans the work and the tests, then a "+
+			"developer that builds from that plan")
 	flag.Parse()
 
-	if err := run(*repoDir, *task, *only, *dryRun, *single); err != nil {
+	if err := run(*repoDir, *task, *only, *dryRun, *single, *plan); err != nil {
 		fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
 }
 
-func run(repoDir, task, only string, dryRun, single bool) error {
+func run(repoDir, task, only string, dryRun, single, plan bool) error {
 	if repoDir == "" || task == "" {
 		return fmt.Errorf("-repo and -task are both required")
 	}
@@ -68,11 +71,18 @@ func run(repoDir, task, only string, dryRun, single bool) error {
 	// swapping the list rather than by a second code path, so the preflight, the
 	// sandbox and the write-back below are the same ones the pipeline uses — the
 	// two things being compared must not run through different plumbing.
-	if single {
-		if only != "" {
-			return fmt.Errorf("-single runs one agent and -roles selects several; use one or the other")
-		}
+	if single && plan {
+		return fmt.Errorf("-single and -plan are two different arrangements; run one at a time")
+	}
+	if (single || plan) && only != "" {
+		return fmt.Errorf("-roles selects stages from the pipeline; it cannot be combined with " +
+			"-single or -plan, which are their own arrangements")
+	}
+	switch {
+	case single:
 		stages = []string{stageBaseline}
+	case plan:
+		stages = agents.PlanStages()
 	}
 
 	files, err := readTree(repoDir)
@@ -250,8 +260,13 @@ const stageBaseline = "baseline"
 // stage resolves a name to a built agent, including the baseline that the
 // pipeline's own dispatcher does not know about.
 func stage(c agents.Creator, name string, files map[string]string) (*agents.Agent, error) {
-	if name == stageBaseline {
+	switch name {
+	case stageBaseline:
 		return c.Baseline(files), nil
+	case agents.StagePlanArchitect:
+		return c.PlanningArchitect(files), nil
+	case agents.StagePlanDev:
+		return c.PlanFollowingDev(files), nil
 	}
 	return c.Stage(name, files)
 }

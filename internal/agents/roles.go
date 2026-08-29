@@ -18,7 +18,16 @@ const (
 	StageDev        = "dev"
 	StageSec        = "sec"
 	StageIntegrator = "integrator"
+
+	// The two-stage experiment's stages. Named apart from the pipeline's so a
+	// log line, a -roles argument and a result table all say which arrangement
+	// produced them — the whole point is comparing the two.
+	StagePlanArchitect = "plan-architect"
+	StagePlanDev       = "plan-dev"
 )
+
+// PlanStages are the two-stage experiment, in order.
+func PlanStages() []string { return []string{StagePlanArchitect, StagePlanDev} }
 
 // Stages are the roles in the order they run.
 //
@@ -79,7 +88,74 @@ func (c Creator) Baseline(files map[string]string) *Agent {
 			"compile or whose tests fail.",
 		Guard:         tools.AllowAll,
 		Tools:         writing(tools.RunCommand),
-		Check:         "go build ./... && go test ./...",
+		Check:         rootCheck,
+		MaxIterations: 150,
+		Temperature:   0.2,
+		MaxTokens:     12000,
+	})
+}
+
+// PlanningArchitect and PlanFollowingDev are the TWO-STAGE EXPERIMENT: plan the
+// work and the tests, then build from that plan.
+//
+// A separate pair rather than the pipeline's Architect and Dev, for one reason
+// that is not cosmetic: the pipeline's developer MAY NOT WRITE TESTS, because a
+// specification author owns them. There is no specification author here, so a
+// developer held to that guard could not write the tests the architect just
+// planned and the experiment would measure nothing. Reusing Dev() and quietly
+// dropping its guard would be worse — the guard is the pipeline's load-bearing
+// rule and it should not be something a caller can turn off.
+//
+// The architect plans the TESTS as well as the code, and is pushed at edge cases
+// specifically. That is the whole hypothesis: the baseline's failure was not
+// that it wrote bad code but that it did not think about what could go wrong
+// before it started, and what it did not think of, it did not test.
+func (c Creator) PlanningArchitect(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  StagePlanArchitect,
+		Class: model.ClassLarge,
+		Prompt: "You are a systems architect. Read the request and write markdown files that plan " +
+			"BOTH the implementation and the tests. A developer will read these files as its plan " +
+			"and write the code and the tests from them, so anything you leave out is something " +
+			"nobody builds and nobody checks.\n\n" +
+			"Plan the implementation: name the packages, the types, their fields and the " +
+			"functions, concretely enough that someone can write a test against one without " +
+			"asking you a question. Put the Go module at the repository ROOT, not in a " +
+			"subdirectory.\n\n" +
+			"Then plan the tests, and spend most of your effort on the EDGE CASES. List them " +
+			"case by case: what happens on an empty or missing field, on a value outside the " +
+			"allowed set, on an id that does not exist, on a malformed body, on a boundary, on " +
+			"the same operation done twice. For anything served over HTTP, say which cases must " +
+			"be answered with which status code, and include a case that proves the routes " +
+			"actually match a request. A case you do not name is a case nobody tests.\n\n" +
+			"Do not write source code. Describe it.",
+		Guard:         tools.OnlyExt(".md"),
+		Tools:         writing(),
+		MaxIterations: 40,
+		Temperature:   0.3,
+		MaxTokens:     12000,
+	})
+}
+
+// PlanFollowingDev builds what PlanningArchitect planned, tests included.
+func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  StagePlanDev,
+		Class: model.ClassLarge,
+		Prompt: "You are a Go developer. The markdown files already in this repository are your " +
+			"plan: an architect wrote them for you. READ THEM FIRST, then build what they " +
+			"describe.\n\n" +
+			"Write the tests the plan names, including every edge case it lists — those cases " +
+			"are the part of the plan most easily skipped and the part most worth having. Put " +
+			"the Go module at the repository root. Run the check as you go and fix what it " +
+			"reports; do not finish on a tree that does not compile or whose tests fail.\n\n" +
+			"If the plan is wrong or cannot be built as written, say so plainly and build the " +
+			"nearest thing that works, rather than following it off a cliff.",
+		// NO NoTests GUARD. This developer writes the tests, because nothing else
+		// in this two-stage arrangement does.
+		Guard:         tools.OnlyExt(".go"),
+		Tools:         writing(tools.RunCommand),
+		Check:         rootCheck,
 		MaxIterations: 150,
 		Temperature:   0.2,
 		MaxTokens:     12000,
@@ -105,6 +181,15 @@ func writing(extra ...string) []string {
 // is what the architect is told to lay down; an operator whose tree is arranged
 // otherwise sets Creator.Check and this is never consulted.
 const goCheck = "cd src && go build ./... && go test ./..."
+
+// rootCheck is the same check for a module at the repository ROOT.
+//
+// Used by the arrangements whose instructions put it there — the baseline and
+// the two-stage experiment — and it must stay the SAME STRING for both, because
+// the whole point of running them is comparing their results. Two arrangements
+// judged by different commands are not comparable, and the difference is easy to
+// introduce and invisible afterwards.
+const rootCheck = "go build ./... && go test ./..."
 
 // Architect decides what the system looks like and writes it down.
 //

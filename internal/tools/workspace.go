@@ -52,24 +52,32 @@ type Workspace struct {
 	// the TAIL, so `type Comment struct` was never once visible. The agent wrote
 	// a Comment literal with a field the struct does not have, then re-read the
 	// same file fifteen times trying to see the half it was never shown.
-	known      map[string]bool
 	knownOrder []string
 }
 
-// Seen records that the agent has looked at a path, so the prompt can carry its
-// contents. Called by the read tools; writes record themselves.
+// Seen records that the agent has just used a path, moving it to the most-recent
+// end of the queue.
+//
+// MOST RECENTLY USED, NOT FIRST TOUCHED, and the difference is not academic.
+// When the prompt budget cannot hold every file, the ones dropped are the ones
+// at the far end — so under first-touch ordering a file the agent re-read ten
+// times in a row stayed exactly as droppable as one it had not looked at since
+// the first turn. Measured: a developer hit a compile error in a 335-line test
+// file, re-read that file fifteen times, and stalled — the file it was asking
+// for was the one the budget was discarding, and re-reading it could never bring
+// it back. Promotion on use is what makes read_files a way OUT of that.
 func (w *Workspace) Seen(path string) {
-	if w.known == nil {
-		w.known = map[string]bool{}
+	for i, p := range w.knownOrder {
+		if p == path {
+			w.knownOrder = append(w.knownOrder[:i], w.knownOrder[i+1:]...)
+			break
+		}
 	}
-	if !w.known[path] {
-		w.known[path] = true
-		w.knownOrder = append(w.knownOrder, path)
-	}
+	w.knownOrder = append(w.knownOrder, path)
 }
 
-// Known lists the paths the agent has read or written, in the order it first
-// touched them, skipping any that have since been removed.
+// Known lists the paths the agent has read or written, least recently used
+// first, skipping any that have since been removed.
 func (w *Workspace) Known() []string {
 	out := make([]string, 0, len(w.knownOrder))
 	for _, p := range w.knownOrder {
