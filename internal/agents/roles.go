@@ -255,19 +255,23 @@ func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 		Tools:        writing(tools.RunCommand),
 		Check:        rootCheck,
 		RewriteWhole: true,
-		// FIFTEEN MINUTES, THEN A FRESH DEV TAKES THE TREE. Eight was tried
-		// first, calibrated on this arrangement's fastest devs (under three
-		// minutes), and it killed an honest slow one three attempts running —
-		// the last of them one failing subtest from green. The operator's
-		// calibration is the right one: in the arm before this, a healthy dev
-		// was seventy percent of the whole run, five to six minutes, and a
-		// struggling honest dev legitimately needs more. The bound exists to
-		// stop the wedge that evades every other bound — a check-loop burning
-		// fifteen minutes before its respin is still bounded — not to race the
-		// median. The respin keeps the files and discards the trail, because
-		// the trail is where the wedge lives.
-		AttemptTimeout: 15 * time.Minute,
-		Respins:        2,
+		// EIGHT MINUTES, NO RESPINS: a slow dev FAILS THE RUN, and the
+		// whole-run reroll draws everything fresh. The respin era (15m ×3,
+		// fresh dev on the same tree) taught its own limit on the nine-run
+		// batch — the one failing seed's curse was the TEST SUITE, an envelope
+		// its own helper could not decode, so every fresh dev inherited the
+		// trap and died in it. A dev respin keeps the cursed suite; the run
+		// reroll replaces plan, suite and dev together, and a fresh draw is a
+		// measured 8-in-9 fast pass.
+		//
+		// Eight, because the batch's dev times were bimodal: seven of eight
+		// passes finished under 6m39s, then nothing until 13m27s, and past
+		// eight minutes the conditional pass rate fell to a coin flip while
+		// the remaining cost ballooned. The one slow-honest pass this cuts
+		// (19m30s total) redraws in an expected ~10m — the case that "loses"
+		// roughly breaks even, and the 45-minute tail is gone entirely.
+		AttemptTimeout: 8 * time.Minute,
+		Respins:        0,
 		MaxIterations:  150,
 		Temperature:    0.2,
 		MaxTokens:      12000,
