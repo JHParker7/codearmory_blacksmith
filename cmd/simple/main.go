@@ -42,8 +42,8 @@ func main() {
 	single := flag.Bool("single", false,
 		"run ONE unrestricted agent instead of the pipeline, as a baseline to measure against")
 	plan := flag.Bool("plan", false,
-		"run the two-stage experiment: an architect that plans the work and the tests, then a "+
-			"developer that builds from that plan")
+		"run the plan arm: an architect plans the work and the tests, a test author writes "+
+			"the tests red with placeholder stubs, and a developer makes them pass")
 	flag.Parse()
 
 	if err := run(*repoDir, *task, *only, *dryRun, *single, *plan); err != nil {
@@ -265,6 +265,8 @@ func stage(c agents.Creator, name string, files map[string]string) (*agents.Agen
 		return c.Baseline(files), nil
 	case agents.StagePlanArchitect:
 		return c.PlanningArchitect(files), nil
+	case agents.StagePlanTest:
+		return c.PlanTester(files), nil
 	case agents.StagePlanDev:
 		return c.PlanFollowingDev(files), nil
 	}

@@ -23,11 +23,13 @@ const (
 	// log line, a -roles argument and a result table all say which arrangement
 	// produced them — the whole point is comparing the two.
 	StagePlanArchitect = "plan-architect"
+	StagePlanTest      = "plan-test"
 	StagePlanDev       = "plan-dev"
 )
 
-// PlanStages are the two-stage experiment, in order.
-func PlanStages() []string { return []string{StagePlanArchitect, StagePlanDev} }
+// PlanStages are the plan arm's stages, in order: plan the work and the tests,
+// write the tests red, make them green.
+func PlanStages() []string { return []string{StagePlanArchitect, StagePlanTest, StagePlanDev} }
 
 // Stages are the roles in the order they run.
 //
@@ -146,20 +148,74 @@ func (c Creator) PlanningArchitect(files map[string]string) *Agent {
 	})
 }
 
-// PlanFollowingDev builds what PlanningArchitect planned, tests included.
+// rootSpecCheck is the expected-red check for a module at the repository ROOT:
+// green when the stubs build, the tests typecheck, and the tests FAIL. The
+// same three pieces as specCheck, for the same three reasons.
+const rootSpecCheck = "go build ./... && go vet ./... && ! go test ./..."
+
+// PlanTester turns the plan's named cases into failing tests, plus the stubs
+// they need to compile.
+//
+// THE STAGE RUN 3 PROVED NECESSARY. The plan named its test cases one by one
+// and the developer skipped every one of them, finished in 2m41s, and passed —
+// a plan nobody enforces is advice. Making the tests EXIST before the developer
+// starts changes what "done" means for it: the tree it inherits is already red,
+// and its own check cannot go green without answering the cases.
+//
+// The stubs are the "fail but not error" half: placeholder types and functions
+// with zero-value bodies, so the tests COMPILE and fail on assertions. A suite
+// that does not compile is a broken spec, not the expected red, and go vet in
+// the check is what tells those apart.
+func (c Creator) PlanTester(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  StagePlanTest,
+		Class: model.ClassLarge,
+		Prompt: "You are a test author and you work test-first. PLAN.md in this repository names " +
+			"the test cases, one by one; an architect wrote it and a developer will make your " +
+			"tests pass. READ IT FIRST, then write Go unit tests for EVERY case it names — a " +
+			"case you skip is a case nobody will ever check.\n\n" +
+			"Also write the placeholder declarations the tests need in order to COMPILE: the " +
+			"types with their fields, and the functions with zero-value bodies — return nil, " +
+			"zero, false, or an empty struct. The placeholders exist so your tests FAIL on " +
+			"assertions rather than fail to build; do not implement any real behaviour, because " +
+			"a test that passes before the developer starts has been told nothing. Put go.mod " +
+			"and the packages at the repository ROOT.\n\n" +
+			"You are done when the tree compiles and the tests FAIL — that is what your check " +
+			"verifies, and it is the only green this stage has.",
+		Guard:         tools.OnlyExt(".go"),
+		Tools:         writing(tools.RunCommand),
+		Check:         rootSpecCheck,
+		OwnCheck:      true,
+		MaxIterations: 60,
+		Temperature:   0.2,
+		MaxTokens:     12000,
+	})
+}
+
+// PlanFollowingDev makes the tests pass.
+//
+// IT MAY STILL EDIT THE TESTS, deliberately, and this is the experiment's
+// difference from the department's load-bearing rule: the department forbids
+// the developer the spec because a developer that can edit the tests can always
+// go green without making the code work. Here the operator chose the softer
+// arrangement — the tests exist first, which anchors what "done" means, but a
+// wrong test can be fixed by the developer in place rather than by a hand-back.
+// Whether that softness costs correctness is exactly what running this arm
+// against the department measures.
 func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 	return c.New(files, Options{
 		Name:  StagePlanDev,
 		Class: model.ClassLarge,
-		Prompt: "You are a Go developer. The markdown files already in this repository are your " +
-			"plan: an architect wrote them for you. READ THEM FIRST, then build what they " +
-			"describe.\n\n" +
-			"Write the tests the plan names, including every edge case it lists — those cases " +
-			"are the part of the plan most easily skipped and the part most worth having. Put " +
-			"the Go module at the repository root. Run the check as you go and fix what it " +
-			"reports; do not finish on a tree that does not compile or whose tests fail.\n\n" +
-			"If the plan is wrong or cannot be built as written, say so plainly and build the " +
-			"nearest thing that works, rather than following it off a cliff.",
+		Prompt: "You are a Go developer. This repository holds a plan (the markdown files, " +
+			"written by an architect) and FAILING TESTS with placeholder stubs (written by a " +
+			"test author from that plan). READ THEM FIRST. Your job is to replace the " +
+			"placeholder bodies with real implementations until the tests pass.\n\n" +
+			"The tests are the contract. If one is wrong — it contradicts the plan, or another " +
+			"test — you may fix it, but say what you changed and why in the edit summary; " +
+			"weakening a test to get past it is the one way to fail this stage while going " +
+			"green. Add tests where the plan names a case the author missed. Run the check as " +
+			"you go and fix what it reports; do not finish on a tree that does not compile or " +
+			"whose tests fail.",
 		// NO NoTests GUARD. This developer writes the tests, because nothing else
 		// in this two-stage arrangement does.
 		Guard:         tools.OnlyExt(".go"),

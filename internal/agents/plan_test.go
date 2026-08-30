@@ -79,8 +79,8 @@ func TestTheTwoStageDeveloperGatesOnTheSameCheckAsTheBaseline(t *testing.T) {
 
 // Both stages must be buildable by name, or -plan cannot run them.
 func TestThePlanStagesBuildByName(t *testing.T) {
-	if got := PlanStages(); len(got) != 2 {
-		t.Fatalf("PlanStages() = %v, want two stages", got)
+	if got := PlanStages(); len(got) != 3 {
+		t.Fatalf("PlanStages() = %v, want three stages", got)
 	}
 	for _, name := range PlanStages() {
 		if name == "" {
