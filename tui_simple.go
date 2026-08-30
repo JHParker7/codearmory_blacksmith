@@ -371,26 +371,12 @@ func runTUI(base string) error {
 	if base == "" {
 		return fmt.Errorf("-repo is required: it is the workspace root the runs build under")
 	}
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return err
-	}
 
 	config.LoadOperatorEnv()
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
-
-	// THE LOG LEAVES THE TERMINAL. slog shares the screen with the UI and a
-	// line of it through the alternate buffer corrupts the display; the file
-	// keeps the full record the 12-line tail cannot.
-	logf, err := os.OpenFile(filepath.Join(base, "tui.log"),
-		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer logf.Close()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logf, nil)))
 
 	stages := agents.PlanStages()
 	events := make(chan uiEvent, 256)
@@ -415,6 +401,23 @@ func runTUI(base string) error {
 			return fmt.Errorf("this host does not serve class %q, which %s needs", a.Class(), a.Name())
 		}
 	}
+
+	// THE WORKSPACE IS CREATED ONLY ONCE THE PREFLIGHT PASSES. An unconfigured
+	// host must explain itself and leave no trace, not grow a directory for a
+	// UI that never opened.
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return err
+	}
+	// THE LOG LEAVES THE TERMINAL. slog shares the screen with the UI and a
+	// line of it through the alternate buffer corrupts the display; the file
+	// keeps the full record the 12-line tail cannot.
+	logf, err := os.OpenFile(filepath.Join(base, "tui.log"),
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer logf.Close()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logf, nil)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

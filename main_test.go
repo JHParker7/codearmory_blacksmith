@@ -71,21 +71,28 @@ func TestTheBinaryExplainsItselfWithoutConfiguration(t *testing.T) {
 		}
 	}
 
-	// BARE `blacksmith` OPENS THE WINDOW, so with no board configured it says
-	// which variables it needs rather than printing usage. A usage screen would
-	// tell a reader whose config is merely incomplete that they typed the command
-	// wrong.
+	// BARE `blacksmith` OPENS THE TUI, so with no model class configured it says
+	// which stage needs which class rather than printing usage. The contract is
+	// the same one the window held before the TUI took the name: an incomplete
+	// config is explained, never mistaken for a mistyped command. It must also
+	// fail BEFORE creating its default workspace — an unconfigured host should
+	// not grow a directory for a UI that never opened.
+	bareDir := t.TempDir()
 	bare := exec.Command(bin)
+	bare.Dir = bareDir
 	bare.Env = []string{"HOME=" + t.TempDir()}
 	var bareOut bytes.Buffer
 	bare.Stdout, bare.Stderr = &bareOut, &bareOut
 	if err := bare.Run(); err == nil {
-		t.Errorf("the window opened with no board configured:\n%s", bareOut.String())
+		t.Errorf("the TUI opened with no model configured:\n%s", bareOut.String())
 	}
-	for _, want := range []string{"no board to read", "CODEARMORY_URL"} {
+	for _, want := range []string{"no model classes configured", "AGENTS_LARGE_ENDPOINT"} {
 		if !strings.Contains(bareOut.String(), want) {
-			t.Errorf("the window does not say what it needs (%q):\n%s", want, bareOut.String())
+			t.Errorf("the TUI does not say what it needs (%q):\n%s", want, bareOut.String())
 		}
+	}
+	if _, err := os.Stat(bareDir + "/workshop"); !os.IsNotExist(err) {
+		t.Error("an unconfigured bare run still created its workspace directory")
 	}
 
 	// AN UNKNOWN COMMAND FAILS rather than silently doing nothing — a typo in a

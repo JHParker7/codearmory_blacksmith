@@ -12,13 +12,11 @@ make race           # -race -count=2 — dispatch and the queue are concurrent
 make vet fmt        # go vet ./... and gofmt
 go test -run TestName ./...
 
-# The simple shape: run the roles in order over a directory.
-go run ./cmd/simple -repo ./scratch -task "build a task tracker" -dry-run
-go run ./cmd/simple -repo ./scratch -task "..." -roles architect,spec,dev
-
-# The human front end: type requests, watch them run, browse results.
-# -repo is the workspace root; each request builds under its own directory.
-go run ./cmd/simple -tui -repo ./workshop
+# The binary. Bare, it opens the TUI: type requests, watch them run.
+go run .                          # or, installed: blacksmith
+go run . -repo ./scratch -task "build a task tracker" -plan -dry-run
+go run . service                  # the department daemon (what systemd runs)
+go run . window                   # the department board view
 ```
 
 `-dry-run` prints the wiring — forge URL, image, and each role's class and check
@@ -71,9 +69,11 @@ under `internal/`. There are TWO SHAPES in the tree at once, deliberately:
 
 - **the department** — board-driven, several hosts, one package per stage. This
   is what `main.go` runs and what has the operating history.
-- **the simple shape** — `internal/tools` and `internal/agents`, driven by
-  `cmd/simple`, which runs the roles in order over a directory with no board and
-  no claiming. This is the rebuild, and it is where new work starts.
+- **the simple shape** — `internal/tools` and `internal/agents`, driven from
+  the root binary (`cli.go`, `tui_simple.go`): the TUI on the bare command, a
+  batch CLI behind flags, no board and no claiming. This is the rebuild, it is
+  where new work starts, and it owns the front door; the department stays
+  reachable as `blacksmith service` and `blacksmith window`.
 
 They share the parts that were expensive to get right — `internal/edit`,
 `internal/forge`, `internal/model` — and nothing else. The simple shape is not
@@ -84,7 +84,7 @@ have to share a board.
 |---|---|
 | `internal/tools` | the tool set and the sandbox they run in: the in-memory workspace, the write guards, the forge-backed runner |
 | `internal/agents` | the only model calls in the rebuild: a `Creator` that builds a wired agent, one loop, and one constructor per stage |
-| `cmd/simple` | runs the roles in order over a directory |
+| `cli.go`, `tui_simple.go` | the front door: the TUI, the batch CLI, the reroll |
 | `internal/agent/*` | the department's stages, one package each; `agent/dev` is the largest |
 | `internal/dispatch`, `internal/workflow`, `internal/department` | claiming, columns, per-project scheduling |
 | `internal/platform`, `internal/forge`, `internal/transport` | platform, forge and lease clients |

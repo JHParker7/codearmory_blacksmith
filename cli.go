@@ -1,17 +1,20 @@
-// Command simple runs the rebuilt pipeline over a directory, one stage at a
-// time.
+// blacksmith. Bare, it opens the terminal UI: type a request, watch it run.
 //
-// THE SIMPLE SHAPE, next to the full department in the root main.go rather than
-// replacing it. A stage's input here is the tree the previous stage left behind,
-// there is no board and no claiming, and the whole run is one process working
-// one task. That is enough to exercise internal/agents and internal/tools end to
-// end, which is what the rebuild needed first; internal/dispatch is what this
+// THE SIMPLE SHAPE TOOK THE NAME once it was measured reliable. The department
+// still lives in this binary — `blacksmith service` runs it exactly as the
+// systemd unit always has, and `blacksmith window` opens its board view — but
+// the front door is the rebuilt pipeline: plan, tests-first, locked suite,
+// reroll. A stage's input is the tree the previous stage left behind; there is
+// no board and no claiming on this path, and internal/dispatch is what it
 // grows back into once several hosts have to share a board.
 //
 // Usage:
 //
-//	simple -repo ./test_repo -task "build a task tracker"
-//	simple -repo ./test_repo -task "..." -roles architect,spec,dev
+//	blacksmith                     open the TUI (workspace ./workshop)
+//	blacksmith -tui -repo DIR      the TUI over a chosen workspace
+//	blacksmith -repo D -task "…"   one batch run, no screen
+//	blacksmith service             the department daemon (systemd)
+//	blacksmith window              the department board view
 package main
 
 import (
@@ -35,8 +38,29 @@ import (
 )
 
 func main() {
-	repoDir := flag.String("repo", "", "directory the agents read and write (required)")
-	task := flag.String("task", "", "what to build (required)")
+	// SUBCOMMANDS FIRST, because the department predates the flags and its
+	// systemd unit says `blacksmith service` — replacing the binary must not
+	// brick the daemon it replaces.
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		departmentDispatch(os.Args[1])
+		return
+	}
+	// -h and --help get the binary's own story, then the flags. flag.Parse's
+	// default usage lists options and never says what the program IS, which is
+	// exactly the reader who typed --help.
+	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
+		usage(os.Stdout)
+		fmt.Fprintln(os.Stdout, "batch flags:")
+		flag.CommandLine.SetOutput(os.Stdout)
+	}
+	flag.Usage = func() {
+		usage(os.Stderr)
+		fmt.Fprintln(os.Stderr, "batch flags:")
+		flag.PrintDefaults()
+	}
+
+	repoDir := flag.String("repo", "", "directory the agents read and write")
+	task := flag.String("task", "", "what to build; empty opens the TUI")
 	only := flag.String("roles", "", "comma-separated stages to run; default is the whole pipeline")
 	dryRun := flag.Bool("dry-run", false, "print the plan and the wiring, then stop")
 	single := flag.Bool("single", false,
@@ -49,21 +73,28 @@ func main() {
 			"-repo is the workspace root; each request builds in its own directory under it")
 	flag.Parse()
 
-	if *tui {
-		if err := runTUI(*repoDir); err != nil {
+	// BARE MEANS THE TUI. A human typing the binary's name gets the front
+	// door, not a usage dump; the workspace defaults to ./workshop and is
+	// printed in the UI's own header.
+	if *tui || (*task == "" && !*dryRun) {
+		base := *repoDir
+		if base == "" {
+			base = "workshop"
+		}
+		if err := runTUI(base); err != nil {
 			fmt.Fprintln(os.Stderr, "error: "+err.Error())
 			os.Exit(1)
 		}
 		return
 	}
 
-	if err := run(*repoDir, *task, *only, *dryRun, *single, *plan); err != nil {
+	if err := runBatch(*repoDir, *task, *only, *dryRun, *single, *plan); err != nil {
 		fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
 }
 
-func run(repoDir, task, only string, dryRun, single, plan bool) error {
+func runBatch(repoDir, task, only string, dryRun, single, plan bool) error {
 	if repoDir == "" || task == "" {
 		return fmt.Errorf("-repo and -task are both required")
 	}

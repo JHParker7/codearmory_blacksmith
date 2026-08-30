@@ -37,50 +37,48 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/workflow"
 )
 
-func main() {
+// departmentDispatch is the department's old front door, kept word for word
+// behind subcommands: `service` is what the systemd unit runs and must keep
+// meaning the daemon, and `window` is the board view that used to be the bare
+// command before the TUI took the name.
+func departmentDispatch(cmd string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	args := os.Args[1:]
-	switch {
-	case len(args) == 0:
+	switch cmd {
+	case "window":
 		if err := runWindow(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			// TO A FILE AS WELL AS THE SCREEN.
-			//
-			// The window draws on an ALTERNATE screen, and leaving it restores
-			// whatever was underneath — which can take this message with it. That
-			// is how the same failure was reported four times with nothing to go
-			// on: the cause was printed each time and never survived long enough
-			// to be read.
-			//
-			// A file outlives the terminal, and it is the difference between
-			// "it broke again" and knowing which of two paths it took.
+			// TO A FILE AS WELL AS THE SCREEN. The window draws on an ALTERNATE
+			// screen, and leaving it restores whatever was underneath — which can
+			// take this message with it. A file outlives the terminal.
 			noteWindowFailure(err)
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-	case args[0] == "service":
+	case "service":
 		if err := runService(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("the department stopped", "error", err)
 			os.Exit(1)
 		}
-	case args[0] == "-h", args[0] == "--help", args[0] == "help":
+	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", args[0])
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
 		usage(os.Stderr)
 		os.Exit(2)
 	}
 }
 
 func usage(w *os.File) {
-	fmt.Fprint(w, `blacksmith — the agent department
+	fmt.Fprint(w, `blacksmith
 
-  blacksmith            open the window onto a running department
-  blacksmith service    run the department (this is what the systemd unit starts)
+  blacksmith                    open the TUI: type requests, watch them run
+  blacksmith -repo D -task "…"  one batch run of the pipeline, no screen
+  blacksmith service            run the agent department (the systemd unit)
+  blacksmith window             open the window onto a running department
 
 Configuration is read from ~/.config/codearmory-agents/env, the same file the
-unit uses, so both work from any shell without exporting anything.
+unit uses, so everything works from any shell without exporting anything.
 `)
 }
 
