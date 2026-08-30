@@ -87,6 +87,82 @@ func shortID(id string) string {
 	return id
 }
 
+// diffOfHead returns the diff of the fix commit — the tip against its parent
+// — for the reviewer to read. A clone of the fix branch has the fix as HEAD,
+// so HEAD~1..HEAD is exactly the change under review.
+func diffOfHead(ctx context.Context, dir string) (string, error) {
+	out, err := gitCmd(ctx, dir, "diff", "HEAD~1", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("diff: %s", firstLineOf(out))
+	}
+	return out, nil
+}
+
+// mergeFixToDev merges a pushed fix branch into the project's dev branch and
+// pushes dev — the review agent's approval made real. A CLIENT-SIDE MERGE,
+// because the plane's git server is a bare git-daemon with no server-side
+// merge; blacksmith clones, merges, and pushes dev back.
+//
+// The first approved fix CREATES dev at the fix tip (the fix branch already
+// carries the run's whole tree plus the fix). Later ones merge onto it. A
+// merge that conflicts is aborted and reported — two fixes touching one file
+// are a human's call, not a machine's — and the fix stays on its branch.
+func mergeFixToDev(ctx context.Context, base string, repo findingRepo, f finding) (string, error) {
+	baseURL := os.Getenv(gitEnvURL)
+	if baseURL == "" {
+		return "", fmt.Errorf("no workshop git url configured")
+	}
+	url := strings.TrimRight(baseURL, "/") + "/" + repo.project + ".git"
+	fixBranch := "fix/" + shortID(f.id)
+
+	dir := filepath.Join(base, "merge-"+repo.project+"-"+shortID(f.id))
+	_ = os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if out, err := gitCmd(ctx, dir, "init", "-q"); err != nil {
+		return "", fmt.Errorf("init: %s", out)
+	}
+	if out, err := gitCmd(ctx, dir, "remote", "add", "origin", url); err != nil {
+		return "", fmt.Errorf("remote: %s", out)
+	}
+	if out, err := gitCmd(ctx, dir, "fetch", "-q", "origin", fixBranch); err != nil {
+		return "", fmt.Errorf("fetch %s: %s", fixBranch, out)
+	}
+	fixSHA, err := gitCmd(ctx, dir, "rev-parse", "FETCH_HEAD")
+	if err != nil {
+		return "", fmt.Errorf("rev-parse: %s", fixSHA)
+	}
+
+	// Does dev already exist on the server?
+	devExists := false
+	if out, _ := gitCmd(ctx, dir, "ls-remote", "--heads", "origin", "dev"); strings.Contains(out, "refs/heads/dev") {
+		devExists = true
+	}
+	if devExists {
+		if out, err := gitCmd(ctx, dir, "fetch", "-q", "origin", "dev"); err != nil {
+			return "", fmt.Errorf("fetch dev: %s", out)
+		}
+		if out, err := gitCmd(ctx, dir, "checkout", "-q", "-B", "dev", "origin/dev"); err != nil {
+			return "", fmt.Errorf("checkout dev: %s", out)
+		}
+		msg := "merge: " + strings.TrimPrefix(strings.TrimPrefix(f.title, "security: "), "quality: ")
+		if out, err := gitCmd(ctx, dir, "merge", "--no-ff", "-m", msg, fixSHA); err != nil {
+			_, _ = gitCmd(ctx, dir, "merge", "--abort")
+			return "", fmt.Errorf("the fix conflicts with dev and needs a person: %s", firstLineOf(out))
+		}
+	} else {
+		// dev starts at the fix tip.
+		if out, err := gitCmd(ctx, dir, "checkout", "-q", "-B", "dev", fixSHA); err != nil {
+			return "", fmt.Errorf("create dev: %s", out)
+		}
+	}
+	if out, err := gitCmd(ctx, dir, "push", "-q", "origin", "HEAD:refs/heads/dev"); err != nil {
+		return "", fmt.Errorf("push dev: %s", out)
+	}
+	return fixBranch + " → dev", nil
+}
+
 // autoIdleDelay is how long auto-mode waits after draining the board before
 // looking again — long, because findings arrive only when a request runs, and
 // a tight poll against the board is noise.

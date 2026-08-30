@@ -29,8 +29,10 @@ const (
 	StagePlanSec       = "plan-sec"
 	StagePlanReview    = "plan-review"
 
-	// The auto-mode fix stage, run against a project cloned from the board.
-	StageFix = "fix"
+	// The auto-mode fix stage, run against a project cloned from the board, and
+	// the review stage that merges its approved work.
+	StageFix    = "fix"
+	StageReview = "review"
 )
 
 // PlanStages are the plan arm's stages, in order: plan the work and the tests,
@@ -399,6 +401,37 @@ func (c Creator) FixFinding(files map[string]string) *Agent {
 		MaxIterations:  150,
 		Temperature:    0.2,
 		MaxTokens:      12000,
+	})
+}
+
+// MergeReviewer is the gate on auto-mode's fixes: it reads the FIX DIFF against
+// the finding it claims to resolve and either APPROVES — merging into dev via
+// merge_fix — or rejects in prose. Nothing merges to dev without passing here,
+// because an auto-fix is a machine's proposal and dev is the line humans and
+// the next request build on.
+//
+// It reviews, it does not rewrite: no write tools, no check. The fix already
+// passed its own tests; this stage judges whether the change is the RIGHT one
+// — does it resolve the finding, does it keep the tests meaningful rather than
+// gaming them, is it safe — the judgement a person makes at a pull request,
+// made here so the merge can be autonomous and still trustworthy.
+func (c Creator) MergeReviewer(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  StageReview,
+		Class: model.ClassLarge,
+		Prompt: "You are reviewing a proposed fix before it merges to dev. Your task gives the " +
+			"finding and the DIFF of the fix. Read the diff against the current code and judge " +
+			"it: does it actually resolve the finding, does it keep the tests meaningful rather " +
+			"than weakening them to pass, does it introduce a new problem, is it safe to ship.\n\n" +
+			"If it is right, call merge_fix with a one-line reason and it merges to dev. If it is " +
+			"wrong, incomplete, or you are unsure — do NOT merge; say plainly what is wrong, and " +
+			"the fix waits on its branch for a person. Approve only what you would merge " +
+			"yourself; a bad merge to dev costs more than a fix left waiting.",
+		Guard:         tools.DenyAll,
+		Tools:         append(append([]string{}, readOnly...), tools.MergeFix),
+		MaxIterations: 15,
+		Temperature:   0.2,
+		MaxTokens:     6000,
 	})
 }
 

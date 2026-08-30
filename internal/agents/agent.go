@@ -61,6 +61,9 @@ type Creator struct {
 
 	// FileTicket files a finding on the board, for the stages offered the tool.
 	FileTicket func(kind, title, body, severity string) (string, error)
+
+	// MergeFix merges an approved fix into dev, for the review stage.
+	MergeFix func(reason string) (string, error)
 }
 
 // Options is what makes one stage different from another.
@@ -168,6 +171,7 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			OnWrite:    c.OnWrite,
 			FileTicket: c.FileTicket,
 			TicketKind: o.TicketKind,
+			MergeFix:   c.MergeFix,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,
@@ -477,7 +481,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 // counting the attempt would hide it.
 func progressed(name, result string) bool {
 	switch name {
-	case tools.WriteFile, tools.UndoEdit, tools.FileTicket:
+	case tools.WriteFile, tools.UndoEdit, tools.FileTicket, tools.MergeFix:
 		return !strings.HasPrefix(result, "Error:")
 	case tools.RunCommand:
 		return true

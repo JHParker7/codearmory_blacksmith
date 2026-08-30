@@ -24,6 +24,7 @@ const (
 	SearchFiles = "search_files"
 	RunCommand  = "run_command"
 	FileTicket  = "file_ticket"
+	MergeFix    = "merge_fix"
 )
 
 // Limits on what one call may carry.
@@ -89,6 +90,12 @@ type Set struct {
 	// TicketKind labels every finding this stage files. Empty for stages that
 	// file none.
 	TicketKind string
+
+	// MergeFix is the review agent's APPROVAL: it merges the fix under review
+	// into the integration branch and returns what happened. Called at most
+	// once, only when the reviewer approves; a rejection is prose, not a call.
+	// Nil means no merge sink is wired, and the tool says so.
+	MergeFix func(reason string) (string, error)
 
 	// OnWrite hears every edit that actually landed: the path, its content
 	// after the edit (empty with deleted=true when an undo removed it), and the
@@ -235,6 +242,20 @@ func (s *Set) Definitions() []model.Tool {
 					"type": "string", "enum": []string{"critical", "high", "medium", "low"},
 				},
 			}, "title", "body", "severity"),
+		},
+		MergeFix: {
+			Name: MergeFix,
+			Description: "APPROVE this fix and merge it into the dev branch. Call this ONLY if the " +
+				"change correctly resolves the finding, keeps the tests meaningful, and is safe to " +
+				"ship. If it does not, do NOT call this — say why in your answer and the fix waits " +
+				"for a person. Merging is irreversible from here, so approve only what you would " +
+				"merge yourself.",
+			Parameters: object(map[string]any{
+				"reason": map[string]any{
+					"type":        "string",
+					"description": "One line on why this fix is correct and safe to merge.",
+				},
+			}, "reason"),
 		},
 		RunCommand: {
 			Name: RunCommand,
@@ -419,6 +440,24 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 				". Put the finding in your final answer instead.", nil
 		}
 		return fmt.Sprintf("Filed %s [%s]: %s", id, a.Severity, a.Title), nil
+
+	case MergeFix:
+		var a struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(args), &a); err != nil {
+			return badArgs(name, err), nil
+		}
+		if s.MergeFix == nil {
+			return "Error: no merge is wired at this stage. Give your verdict in your final " +
+				"answer instead — do not try to merge by any other means.", nil
+		}
+		out, err := s.MergeFix(a.Reason)
+		if err != nil {
+			return "Error: the merge could not be completed: " + err.Error() +
+				". The fix stays on its branch for a person.", nil
+		}
+		return "Approved and merged to dev: " + out, nil
 
 	case RunCommand:
 		if s.Sandbox == nil {

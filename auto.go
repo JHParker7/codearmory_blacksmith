@@ -185,11 +185,48 @@ func autoNext(ctx context.Context, maker agents.Creator, base string, attempted 
 		return true, nil
 	}
 
-	pushErr := pushFixBranch(ctx, tree, dir, repo, f)
-	note := "auto mode fixed this and the tests still pass."
-	if pushErr != nil {
-		note += " (the fix is local; pushing it failed: " + pushErr.Error() + ")"
+	if pushErr := pushFixBranch(ctx, tree, dir, repo, f); pushErr != nil {
+		resolveFinding(f.id, false, "auto mode fixed this locally but could not push the fix branch: "+pushErr.Error())
+		return true, nil
 	}
-	resolveFinding(f.id, true, note)
+
+	// THE REVIEW GATE. The fix passed its own tests; now a reviewer reads the
+	// diff and decides whether it merges to dev. Nothing reaches dev without
+	// passing here — an auto-fix is a proposal, and dev is what the next
+	// request and every human build on.
+	diff, diffErr := diffOfHead(ctx, dir)
+	if diffErr != nil {
+		resolveFinding(f.id, false, "the fix is on its branch, but its diff could not be read for review: "+diffErr.Error())
+		return true, nil
+	}
+
+	merged := ""
+	m := maker
+	m.MergeFix = func(reason string) (string, error) {
+		res, err := mergeFixToDev(ctx, base, repo, f)
+		if err != nil {
+			return "", err
+		}
+		merged = reason
+		return res, nil
+	}
+	reviewTask := "Review this proposed fix.\n\nThe finding:\n" + f.title + "\n\n" + f.body +
+		"\n\nThe diff of the fix:\n" + truncate(diff, 8000)
+	reviewAgent := m.MergeReviewer(files)
+	rout, _, rerr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return reviewAgent, nil }, files, reviewTask)
+	if rerr != nil {
+		resolveFinding(f.id, false, "the fix is on its branch; the review stage errored: "+firstLineOf(rerr.Error()))
+		return true, nil
+	}
+
+	if merged != "" {
+		resolveFinding(f.id, true, "auto mode fixed this, review approved it, and it merged to dev: "+merged)
+	} else {
+		// The reviewer did not merge — its verdict is why, and the fix waits
+		// on its branch for a person. Left OPEN, and in the session skip-set.
+		resolveFinding(f.id, false,
+			"auto mode fixed this and pushed a fix branch, but review did NOT approve the merge:\n"+
+				truncate(rout.Answer, 600)+"\n\nThe fix waits on its branch for a person.")
+	}
 	return true, nil
 }
