@@ -153,6 +153,27 @@ func (c Creator) PlanningArchitect(files map[string]string) *Agent {
 // same three pieces as specCheck, for the same three reasons.
 const rootSpecCheck = "go build ./... && go vet ./... && ! go test ./..."
 
+// routeGate refuses a suite that never touches the HTTP layer the tree serves.
+//
+// THE GAP THE FIRST LOCKED-SUITE RUN SHIPPED THROUGH: the test author wrote 349
+// lines of store tests and not one handler test, the developer implemented
+// exactly what the locked suite forced and nothing more, and a green 4-minute
+// run produced an API answering 501 to every request. With the tests locked,
+// the test author's coverage IS the product specification — so the author's own
+// gate has to see the layer it skipped, or the whole arm inherits the gap.
+//
+// CONDITIONAL, so a task with no HTTP in it cannot be dead-ended by a gate
+// about routes: it bites only when some non-test source imports net/http.
+// httptest presence is a proxy for "the routes are exercised" — a mechanical,
+// checkable one, in the spirit of every other gate here — and the prompt still
+// carries the real demand of one case per route and status code.
+const routeGate = `{ ! grep -rq --include='*.go' --exclude='*_test.go' '"net/http"' . || ` +
+	`grep -rq --include='*_test.go' 'httptest\.' . || ` +
+	`{ echo 'the tree serves HTTP but the suite never touches it: no test uses ` +
+	`net/http/httptest. The routes are part of the specification - add handler tests ` +
+	`that call each route through the mux and assert the status codes the plan names.'; ` +
+	`exit 1; }; }`
+
 // PlanTester turns the plan's named cases into failing tests, plus the stubs
 // they need to compile.
 //
@@ -181,10 +202,14 @@ func (c Creator) PlanTester(files map[string]string) *Agent {
 			"a test that passes before the developer starts has been told nothing. Put go.mod " +
 			"and the packages at the repository ROOT.\n\n" +
 			"You are done when the tree compiles and the tests FAIL — that is what your check " +
-			"verifies, and it is the only green this stage has.",
+			"verifies, and it is the only green this stage has. If the plan serves HTTP, the " +
+			"check also refuses a suite that never exercises the routes: write handler tests " +
+			"with net/http/httptest that call each route through the mux, one case per status " +
+			"code the plan names. A store tested to perfection behind untested routes is a " +
+			"product that does not exist.",
 		Guard:         tools.OnlyExt(".go"),
 		Tools:         writing(tools.RunCommand),
-		Check:         rootSpecCheck,
+		Check:         rootSpecCheck + " && " + routeGate,
 		OwnCheck:      true,
 		MaxIterations: 60,
 		Temperature:   0.2,
