@@ -51,7 +51,14 @@ func cloneRunBranch(ctx context.Context, base string, repo findingRepo) (string,
 // because the run's history is a record that must not be rewritten and the
 // fix is a proposal a person reviews and merges.
 func pushFixBranch(ctx context.Context, files map[string]string, dir string, repo findingRepo, f finding) error {
-	if err := writeTree(dir, files); err != nil {
+	// RESET TO THE RUN TIP FIRST, so each push is ONE commit of the whole fix
+	// against the base — not a delta on the previous attempt. The review loop
+	// re-pushes a revised fix each cycle, and the reviewer must see the entire
+	// change every time, not just what the latest revision moved.
+	if out, err := gitCmd(ctx, dir, "reset", "-q", "--hard", "origin/run/"+repo.run); err != nil {
+		return fmt.Errorf("reset to run tip: %s", out)
+	}
+	if err := replaceTree(dir, files); err != nil {
 		return err
 	}
 	if out, err := gitCmd(ctx, dir, "add", "-A"); err != nil {
@@ -85,6 +92,37 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// replaceTree makes the working tree exactly `files`: it removes tracked files
+// the fix dropped, then writes what it kept. writeTree alone only adds and
+// overwrites, so a deletion would silently survive and the review diff would
+// lie about what the fix does.
+func replaceTree(dir string, files map[string]string) error {
+	entries, err := gitLsFiles(dir)
+	if err != nil {
+		return err
+	}
+	for _, rel := range entries {
+		if _, keep := files[rel]; !keep {
+			_ = os.Remove(filepath.Join(dir, filepath.FromSlash(rel)))
+		}
+	}
+	return writeTree(dir, files)
+}
+
+func gitLsFiles(dir string) ([]string, error) {
+	out, err := exec.Command("git", "-C", dir, "ls-files").Output()
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if l != "" {
+			files = append(files, l)
+		}
+	}
+	return files, nil
 }
 
 // diffOfHead returns the diff of the fix commit — the tip against its parent
