@@ -285,7 +285,11 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 				// refusal it would keep retrying.
 				return out, fmt.Errorf("%s: %s: %w", a.opts.Name, call.Name, err)
 			}
-			a.logf("%s: %s -> %s", a.opts.Name, call.Name, firstLine(result))
+			// The ARGUMENTS ride in the log line, head first, because the head of a
+			// write's JSON is its path. A stage refusing the same edit for fifteen
+			// minutes was undiagnosable from the log alone: it showed the refusal
+			// and never what was being refused.
+			a.logf("%s: %s(%s) -> %s", a.opts.Name, call.Name, argHead(call.Arguments), firstLine(result))
 			out.Trail = append(out.Trail, Step{
 				Tool:   call.Name,
 				Args:   trim(call.Arguments, 300),
@@ -593,6 +597,18 @@ func trim(s string, max int) string {
 	// the summary and the first real error at the end; keeping the head keeps the
 	// banner and throws away the diagnosis.
 	return fmt.Sprintf("… %d characters omitted …\n%s", len(s)-max, s[len(s)-max:])
+}
+
+// argHead is the head of a tool call's arguments, for the log. The HEAD, unlike
+// trim, because a write's path comes first in its JSON.
+func argHead(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 110 {
+		s = s[:110] + "…"
+	}
+	return s
 }
 
 func firstLine(s string) string {

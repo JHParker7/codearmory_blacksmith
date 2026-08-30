@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/code-armory-app/blacksmith/internal/edit"
+	"github.com/code-armory-app/blacksmith/internal/model"
 )
 
 // Workspace is the file tree the agent edits, held in memory.
@@ -233,18 +234,38 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 	// the plan passed the whole-rewrite threshold it could not replace it either.
 	// Boxed in from both sides, it spent its budget circling, and every diagnosis
 	// of that stall until now had been of a symptom.
+	var defenced bool
 	if isSource(e.Path) {
+		// A CODE FENCE AROUND THE REPLACEMENT IS REPAIRED, NOT REFUSED. The model
+		// wraps code in ```go fences because that is how code is written
+		// everywhere it learned from, and backticks are not Go — so the gate
+		// refused the edit and the model resent it, identically, every 24 seconds
+		// until the stall bound fired. The old developer loop unfences every
+		// reply for exactly this reason (see model.Unfence and the note in
+		// model/object.go); this package had dropped that on the floor.
+		//
+		// REPAIRED ONLY WHEN THE REPAIR PARSES, because ``` inside a quoted Go
+		// string is legal Go: content that already passes the gate is never
+		// touched, so a legitimate backtick cannot be mangled.
 		if isWholeFile(e) {
 			if !parsesAsFile(e.Replace) {
-				return "", fmt.Errorf(
-					"%s: the content does not parse as a Go file. A whole-file write must be "+
-						"complete — a package clause, then the imports, then the declarations", e.Path)
+				if fixed := model.Unfence(e.Replace); fixed != "" && parsesAsFile(fixed) {
+					e.Replace, defenced = fixed, true
+				} else {
+					return "", fmt.Errorf(
+						"%s: the content does not parse as a Go file. A whole-file write must be "+
+							"complete — a package clause, then the imports, then the declarations", e.Path)
+				}
 			}
 		} else if edit.ReplacementIsMalformed(e.Replace) {
-			return "", fmt.Errorf(
-				"%s: the replacement is not valid in any position — it does not parse as "+
-					"declarations or as statements. Check the braces and quotes in what you sent",
-				e.Path)
+			if fixed := model.Unfence(e.Replace); fixed != "" && !edit.ReplacementIsMalformed(fixed) {
+				e.Replace, defenced = fixed, true
+			} else {
+				return "", fmt.Errorf(
+					"%s: the replacement is not valid in any position — it does not parse as "+
+						"declarations or as statements. Check the braces and quotes in what you sent",
+					e.Path)
+			}
 		}
 	}
 
@@ -293,7 +314,13 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 	case !existed:
 		where = "created"
 	}
-	return fmt.Sprintf("Edited: %s %s (%d lines now).", where, e.Path, lineCount(w.files[e.Path])), nil
+	line := fmt.Sprintf("Edited: %s %s (%d lines now).", where, e.Path, lineCount(w.files[e.Path]))
+	if defenced {
+		// Said out loud so the transcript shows the repair, and so the model
+		// learns the fence was never needed rather than concluding it worked.
+		line += " (The ``` fence around your replacement was removed — send code bare.)"
+	}
+	return line, nil
 }
 
 // Undo reverts the last write, and reports which path it restored.
