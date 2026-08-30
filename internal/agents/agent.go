@@ -229,7 +229,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 
 		res, err := a.gateway.Chat(ctx, a.opts.Class, model.ChatRequest{
 			Messages:    a.messages(task, out.Trail, out.LastCheck),
-			Temperature: a.opts.Temperature,
+			Temperature: stuckTemperature(a.opts.Temperature, idle),
 			MaxTokens:   a.opts.MaxTokens,
 			Tools:       a.tools.Definitions(),
 		})
@@ -658,6 +658,18 @@ func trim(s string, max int) string {
 	// the summary and the first real error at the end; keeping the head keeps the
 	// banner and throws away the diagnosis.
 	return fmt.Sprintf("… %d characters omitted …\n%s", len(s)-max, s[len(s)-max:])
+}
+
+// stuckTemperature raises sampling as idle turns accumulate, mirroring the
+// department's dev.Temperature and for its reason: a model repeating the exact
+// same unproductive move at temperature 0.2 will repeat it forever, because the
+// most probable continuation is the one it just tried. Heat is the mechanical
+// way to break the tie when the class runs with reasoning off — measured here
+// on a test author that re-read its own broken file through fifteen idle turns
+// with the vet error naming the line in front of it. Progress resets idle,
+// which resets this.
+func stuckTemperature(base float64, idle int) float64 {
+	return min(max(base, 0.15*float64(idle)), 1.0)
 }
 
 // reasoningLine flattens a reasoning trace to one log line: the head and the
