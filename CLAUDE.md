@@ -17,7 +17,24 @@ go run .                          # or, installed: blacksmith
 go run . -repo ./scratch -task "build a task tracker" -plan -dry-run
 go run . service                  # the department daemon (what systemd runs)
 go run . window                   # the department board view
+go run . -auto                    # idle mode: work the board, security findings first
 ```
+
+The plan arm is five stages: `plan-architect` writes PLAN.md (impl + tests),
+`plan-test` writes the tests RED with compiling stubs (expected-red gate),
+`plan-dev` makes them pass (tests locked, whole-file rewrites allowed),
+`plan-sec` reviews for security, `plan-review` reviews for quality. The two
+reviewers write NO code — they file findings as tickets on the plane's board,
+kinded `security:` / `quality:`, deduped by exact title. SAST/SCA (gosec,
+govulncheck) run before `plan-sec` and lint (staticcheck) before `plan-review`,
+dropping reports under `scan/` as leads to verify — never committed. Every run
+is itself a board ticket, opened in_progress and resolved on the verdict.
+
+`-auto` is the board's consumer: with no request to run it pulls the
+highest-priority open finding (all security before all quality, then by
+severity), clones the finding's project run branch, runs the `fix` stage
+(a locked-suite developer whose task is the finding), and pushes a `fix/<id>`
+branch — best-effort, bounded, a stuck fix left open with a comment.
 
 Every run journals to git: one commit per landed write (the type and summary
 each edit already declares), a mark per stage and draw, and a push to the
