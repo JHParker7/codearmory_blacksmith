@@ -151,32 +151,28 @@ func run(repoDir, task, only string, dryRun, single, plan bool) error {
 	}
 
 	for _, name := range stages {
-		agent, err := stage(maker, name, files)
-		if err != nil {
-			return err
+		build := func(tree map[string]string) (*agents.Agent, error) {
+			return stage(maker, name, tree)
 		}
-		slog.Info("stage starting",
-			"stage", agent.Name(), "class", string(agent.Class()), "files", len(files))
-
-		outcome, runErr := agent.Run(ctx, task)
+		outcome, tree, runErr := runStage(ctx, build, files, task)
 
 		// THE TREE IS CARRIED FORWARD EVEN WHEN THE STAGE FAILED, and written out
 		// before anything is reported. What a failed developer wrote is most of the
 		// answer, and throwing it away means the next attempt starts from nothing —
 		// which is how a run that was nearly finished becomes one that never
 		// finishes.
-		files = agent.Files()
+		files = tree
 		if err := writeTree(repoDir, files); err != nil {
 			return fmt.Errorf("writing %s: %w", repoDir, err)
 		}
 		if runErr != nil {
-			return fmt.Errorf("stage %s: %w", agent.Name(), runErr)
+			return fmt.Errorf("stage %s: %w", name, runErr)
 		}
 
 		slog.Info("stage finished",
-			"stage", agent.Name(), "passed", outcome.Passed, "turns", outcome.Iterations)
+			"stage", name, "passed", outcome.Passed, "turns", outcome.Iterations)
 		if outcome.Answer != "" {
-			fmt.Printf("\n--- %s ---\n%s\n", agent.Name(), outcome.Answer)
+			fmt.Printf("\n--- %s ---\n%s\n", name, outcome.Answer)
 		}
 		if !outcome.Passed {
 			// TOLD APART, because they need opposite responses: a stage that spent
@@ -188,7 +184,7 @@ func run(repoDir, task, only string, dryRun, single, plan bool) error {
 					outcome.Iterations, agents.MaxIdleTurns)
 			}
 			return fmt.Errorf("stage %s %s and its check never passed. What it last said:\n%s",
-				agent.Name(), why, orNone(outcome.LastCheck))
+				name, why, orNone(outcome.LastCheck))
 		}
 	}
 
@@ -251,6 +247,59 @@ func acquireSandbox(ctx context.Context, cfg config.Config) (tools.Sandbox, func
 	// a substitute for a run that finished. WithoutCancel because the release must
 	// still go out when the run ended on an interrupt.
 	return tools.ForgeSandbox{Sandbox: sb}, func() { sb.Release(context.WithoutCancel(ctx)) }, nil
+}
+
+// runStage runs one stage to completion, RESPINNING it on a wall-clock
+// timeout: the wedged attempt is cancelled, its TREE is kept, its TRAIL is
+// thrown away, and a fresh agent of the same stage takes over the files.
+//
+// The trail is discarded on purpose — it is where the wedge lives. A context
+// full of identical failed checks makes the next identical check the most
+// probable continuation, while the tree holds all of the actual work. Measured
+// on the run that bought this: a dev re-ran an unchanging check for ten
+// minutes, immune to the stall bound (test timings kept the output from ever
+// being byte-identical) and to the heat (each check reset idle).
+//
+// A stage with no AttemptTimeout runs exactly once, unbounded, as before.
+func runStage(
+	ctx context.Context,
+	build func(files map[string]string) (*agents.Agent, error),
+	files map[string]string, task string,
+) (agents.Outcome, map[string]string, error) {
+	agent, err := build(files)
+	if err != nil {
+		return agents.Outcome{}, files, err
+	}
+	attempts := 1 + agent.Respins()
+
+	for attempt := 1; ; attempt++ {
+		slog.Info("stage starting", "stage", agent.Name(), "class", string(agent.Class()),
+			"files", len(files), "attempt", attempt)
+
+		actx, cancel := ctx, context.CancelFunc(func() {})
+		if t := agent.AttemptTimeout(); t > 0 {
+			actx, cancel = context.WithTimeout(ctx, t)
+		}
+		outcome, runErr := agent.Run(actx, task)
+		cancel()
+
+		// The tree survives every exit, including the timeout: what the killed
+		// attempt wrote is most of the answer.
+		files = agent.Files()
+
+		timedOut := runErr != nil && actx.Err() == context.DeadlineExceeded && ctx.Err() == nil
+		if !timedOut || attempt >= attempts {
+			return outcome, files, runErr
+		}
+
+		slog.Warn("stage attempt timed out; a fresh agent takes over the tree",
+			"stage", agent.Name(), "attempt", attempt, "of", attempts,
+			"timeout", agent.AttemptTimeout().String())
+		agent, err = build(files)
+		if err != nil {
+			return outcome, files, err
+		}
+	}
 }
 
 // stageBaseline names the unrestricted single agent. Not in agents.Stages(),

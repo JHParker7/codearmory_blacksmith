@@ -3,6 +3,7 @@ package agents
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/code-armory-app/blacksmith/internal/model"
 	"github.com/code-armory-app/blacksmith/internal/tools"
@@ -250,13 +251,20 @@ func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 			"asks — say so plainly and stop, naming the test; that is a real answer, and quietly " +
 			"working around it is not. Do not finish on a tree that does not compile or whose " +
 			"tests fail.",
-		Guard:         tools.Both(tools.NoTests, tools.OnlyExt(".go")),
-		Tools:         writing(tools.RunCommand),
-		Check:         rootCheck,
-		RewriteWhole:  true,
-		MaxIterations: 150,
-		Temperature:   0.2,
-		MaxTokens:     12000,
+		Guard:        tools.Both(tools.NoTests, tools.OnlyExt(".go")),
+		Tools:        writing(tools.RunCommand),
+		Check:        rootCheck,
+		RewriteWhole: true,
+		// EIGHT MINUTES, THEN A FRESH DEV TAKES THE TREE. Both healthy devs on
+		// this arrangement finished in under three; the one that did not spent
+		// ten minutes re-running an unchanging check, immune to every bound. The
+		// respin keeps the files and discards the trail, because the trail is
+		// where the wedge lives.
+		AttemptTimeout: 8 * time.Minute,
+		Respins:        2,
+		MaxIterations:  150,
+		Temperature:    0.2,
+		MaxTokens:      12000,
 	})
 }
 

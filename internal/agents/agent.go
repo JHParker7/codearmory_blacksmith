@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/code-armory-app/blacksmith/internal/model"
 	"github.com/code-armory-app/blacksmith/internal/tools"
@@ -91,6 +92,21 @@ type Options struct {
 	// function fails the next check by name instead of vanishing silently.
 	RewriteWhole bool
 
+	// AttemptTimeout bounds ONE ATTEMPT at this stage in wall-clock time, and
+	// Respins is how many fresh starts follow a timeout. Zero timeout means
+	// unbounded; zero respins means a timeout simply fails the stage.
+	//
+	// THE RESPIN THROWS AWAY THE TRAIL AND KEEPS THE TREE. A wedged agent's
+	// accumulated context is part of the wedge — the trail full of identical
+	// checks is what makes the next identical check the most probable move —
+	// while the tree holds all the actual work. A fresh agent inheriting the
+	// files sees a red suite with clean eyes. Measured on the run that bought
+	// this: ten minutes of a dev re-running an unchanging check, each run
+	// resetting the stall counter (its output never byte-identical thanks to
+	// test timings), no bound anywhere that could fire.
+	AttemptTimeout time.Duration
+	Respins        int
+
 	// OwnCheck exempts this stage from the Creator's check override.
 	//
 	// The override is the operator saying what "the tests pass" means in their
@@ -157,6 +173,12 @@ func (c Creator) checkFor(o Options) string {
 
 // Name is the stage this agent runs.
 func (a *Agent) Name() string { return a.opts.Name }
+
+// AttemptTimeout and Respins expose the stage's wall-clock bound, for the
+// driver that enforces it — the loop itself cannot, because killing an attempt
+// and building its successor is the caller's business.
+func (a *Agent) AttemptTimeout() time.Duration { return a.opts.AttemptTimeout }
+func (a *Agent) Respins() int                  { return a.opts.Respins }
 
 // Class is the serving class this agent will ask for.
 func (a *Agent) Class() model.Class { return a.opts.Class }
