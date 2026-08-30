@@ -255,12 +255,18 @@ func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 		Tools:        writing(tools.RunCommand),
 		Check:        rootCheck,
 		RewriteWhole: true,
-		// EIGHT MINUTES, THEN A FRESH DEV TAKES THE TREE. Both healthy devs on
-		// this arrangement finished in under three; the one that did not spent
-		// ten minutes re-running an unchanging check, immune to every bound. The
-		// respin keeps the files and discards the trail, because the trail is
-		// where the wedge lives.
-		AttemptTimeout: 8 * time.Minute,
+		// FIFTEEN MINUTES, THEN A FRESH DEV TAKES THE TREE. Eight was tried
+		// first, calibrated on this arrangement's fastest devs (under three
+		// minutes), and it killed an honest slow one three attempts running —
+		// the last of them one failing subtest from green. The operator's
+		// calibration is the right one: in the arm before this, a healthy dev
+		// was seventy percent of the whole run, five to six minutes, and a
+		// struggling honest dev legitimately needs more. The bound exists to
+		// stop the wedge that evades every other bound — a check-loop burning
+		// fifteen minutes before its respin is still bounded — not to race the
+		// median. The respin keeps the files and discards the trail, because
+		// the trail is where the wedge lives.
+		AttemptTimeout: 15 * time.Minute,
 		Respins:        2,
 		MaxIterations:  150,
 		Temperature:    0.2,
