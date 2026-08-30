@@ -71,7 +71,22 @@ type Set struct {
 
 	// staleReads counts consecutive reads that told the agent nothing.
 	staleReads int
+
+	// lastCall is the last (tool, arguments, result) triple, and repeats counts
+	// how many times in a row it has come back unchanged.
+	lastCall string
+	repeats  int
 }
+
+// MaxRepeatedCalls is how many identical calls in a row may pass before the
+// agent is told it is repeating itself.
+//
+// READ_FILES WAS THE ONLY TOOL THAT SAID SO, and the loop simply moved. Measured
+// on the third two-stage attempt: an architect called list_files fifteen times
+// against an empty repository, one second apart, and wrote nothing — every reply
+// identical, and nothing anywhere told it so. A signal on one tool is not a
+// signal, it is a hole in the shape of every other tool.
+const MaxRepeatedCalls = 3
 
 // MaxStaleReads is how many times in a row a read may return what the agent
 // already had before the notice stops being gentle.
@@ -206,6 +221,52 @@ func (s *Set) offers(name string) bool {
 // opposite of what a refusal is for. Genuine transport failures — a sandbox that
 // cannot be reached — come back as the error return, and those do end the turn.
 func (s *Set) Invoke(ctx context.Context, name, args string) (string, error) {
+	result, err := s.invoke(ctx, name, args)
+	if err != nil {
+		return "", err
+	}
+	return s.noteRepetition(name, args, result), nil
+}
+
+// noteRepetition appends a warning when a call returns exactly what the last one
+// did.
+//
+// THE CONTENTS ARE STILL SERVED — the agent may have a good reason to look
+// again, and withholding the answer would break the edit format, which requires
+// quoting text exactly as it stands. What is added is the one thing the bytes
+// cannot say: that they are the same bytes.
+func (s *Set) noteRepetition(name, args, result string) string {
+	key := name + "\x00" + args + "\x00" + result
+	if key != s.lastCall {
+		s.lastCall, s.repeats = key, 0
+		return result
+	}
+	s.repeats++
+	if s.repeats < MaxRepeatedCalls {
+		return result
+	}
+	// read_files already explains itself in content-aware terms; a second notice
+	// saying the same thing less precisely is noise.
+	if strings.Contains(result, "NOTE: you already had") {
+		return result
+	}
+
+	next := "Change something before asking again."
+	switch {
+	case s.offers(WriteFile) && s.offers(RunCommand):
+		next = "Call " + WriteFile + " to change something, or " + RunCommand +
+			" to find out whether what you have already written works."
+	case s.offers(WriteFile):
+		next = "Call " + WriteFile + " to write what you were asked for. Nothing else will " +
+			"move this on."
+	}
+	return result + fmt.Sprintf(
+		"\n\nNOTE: that is %d times in a row that %s has returned exactly this, and it will keep "+
+			"returning it. Repeating the call cannot tell you anything new. %s",
+		s.repeats+1, name, next)
+}
+
+func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 	if !s.offers(name) {
 		return fmt.Sprintf(
 			"Error: there is no tool called %q at this stage. The tools you have are listed in "+
