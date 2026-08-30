@@ -82,9 +82,28 @@ type session struct {
 	// ready flips once the sandbox is booted. Submissions queue against it:
 	// a run started before the box exists dies on its first check, which is a
 	// worse experience than a visible "booting" line.
-	ready    bool
-	bootErr  string
-	bootFrom time.Time
+	//
+	// THE BOOT STARTS WITH THE FIRST REQUEST, not with the screen. The sandbox
+	// serves checks, and the first check is minutes of architect and test
+	// author away — while forge reaps an idle lease at 300 seconds, so a box
+	// booted at startup for an operator who pauses to think is dead before it
+	// is ever used, and the first run re-boots one anyway. Eager acquisition
+	// bought a held lease and nothing else.
+	ready       bool
+	bootStarted bool
+	bootErr     string
+	bootFrom    time.Time
+	boot        func()
+}
+
+// ensureBoot kicks the sandbox acquisition exactly once, on demand.
+func (s *session) ensureBoot() {
+	if s.bootStarted || s.boot == nil {
+		return
+	}
+	s.bootStarted = true
+	s.bootFrom = time.Now()
+	go s.boot()
 }
 
 // startRun launches one request in its own directory under the root.
@@ -168,6 +187,7 @@ func (m tuiModel) submit() (tuiModel, tea.Cmd) {
 	}
 	m.input = ""
 	m.queue = append(m.queue, task)
+	m.sess.ensureBoot()
 	return m.maybeStart()
 }
 
@@ -324,7 +344,7 @@ func (m tuiModel) View() string {
 	switch {
 	case m.sess.bootErr != "":
 		b.WriteString("\n" + failStyle.Render("sandbox failed: "+m.sess.bootErr))
-	case !m.sess.ready:
+	case m.sess.bootStarted && !m.sess.ready:
 		b.WriteString("\n" + runStyle.Render(fmt.Sprintf("booting the sandbox… %s",
 			time.Since(m.sess.bootFrom).Round(time.Second))))
 	}
@@ -450,15 +470,13 @@ func runTUI(base string) error {
 	}
 	defer func() { announce = func(string, string, int) {} }()
 
-	sess := &session{maker: maker, stages: stages, base: base, events: events, bootFrom: time.Now()}
+	sess := &session{maker: maker, stages: stages, base: base, events: events}
 	m := tuiModel{sess: sess, ctx: ctx}
 
-	// THE SCREEN OPENS BEFORE THE SANDBOX BOOTS. The lease is a container boot
-	// and a clone — seconds to tens of them — and spending that before the
-	// first frame reads as a hung binary. It boots on screen instead, with a
-	// timer; submissions queue against it and start the moment it is ready.
+	// The boot is DEFINED here and STARTED by the first submission — see
+	// session.ensureBoot for why eager acquisition was wrong twice over.
 	var release func()
-	go func() {
+	sess.boot = func() {
 		box, rel, err := acquireSandbox(ctx, cfg)
 		if err != nil {
 			events <- uiEvent{kind: "sandbox-fail", line: err.Error()}
@@ -467,7 +485,7 @@ func runTUI(base string) error {
 		sess.maker.Sandbox = box
 		release = rel
 		events <- uiEvent{kind: "sandbox-ready"}
-	}()
+	}
 	defer func() {
 		if release != nil {
 			release()
