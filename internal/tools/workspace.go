@@ -8,7 +8,9 @@ package tools
 
 import (
 	"fmt"
+	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"sort"
 	"strings"
@@ -261,10 +263,17 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 			if fixed := model.Unfence(e.Replace); fixed != "" && !edit.ReplacementIsMalformed(fixed) {
 				e.Replace, defenced = fixed, true
 			} else {
+				// WITH THE POSITION, because the parser knows it and the model does
+				// not. "Check the braces and quotes" survived eight consecutive
+				// refusals in one measured stage — the model rewrote the wrong part
+				// of the replacement every time, which is exactly what a refusal
+				// naming the symptom and not the place produces.
 				return "", fmt.Errorf(
 					"%s: the replacement is not valid in any position — it does not parse as "+
-						"declarations or as statements. Check the braces and quotes in what you sent",
-					e.Path)
+						"declarations (%s) or as statements (%s). The line numbers count from the "+
+						"start of what you sent in \"replace\"",
+					e.Path, parseFailure("package p\n"+e.Replace, 1),
+					parseFailure("package p\nfunc _wrap() {\n"+e.Replace+"\n}\n", 2))
 			}
 		}
 	}
@@ -296,6 +305,19 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 					"probably adding a declaration the file already has — read it, then replace the "+
 					"existing one by naming it in \"decl\"",
 				e.Path, strings.Join(dups, ", "))
+		}
+		// ACROSS FILES TOO, because a package redeclaration is invisible to a
+		// per-file check and the whole tree is right here. Measured: a developer
+		// declared four test functions in both store_test.go and handlers_test.go,
+		// the compiler reported it a full check round later, and the repair edits
+		// then stalled the stage. The gate exists to catch the damage on the turn
+		// it happens; a duplicate one file over is the same damage.
+		if sym, other := w.duplicateAcrossFiles(e.Path, after); sym != "" {
+			return "", fmt.Errorf(
+				"%s: this edit declares %s, which %s in the same package already declares — that "+
+					"does not compile. Read %s first; either the declaration belongs there, or "+
+					"yours needs a different name",
+				e.Path, sym, other, other)
 		}
 		if err := edit.VetLike(e.Path, after); err != nil {
 			return "", fmt.Errorf("%s: %w", e.Path, err)
@@ -361,6 +383,87 @@ func (w *Workspace) Undo() (string, bool) {
 // regeneration per edit, and at 363 lines that was 60 seconds a turn against 10
 // for a read. Set where a rewrite is still a second or two of generation.
 const MaxWholeRewriteLines = 150
+
+// duplicateAcrossFiles reports a top-level name the edited content declares
+// that another file in the same directory and package already declares, and
+// which file that is. Empty strings mean no collision.
+//
+// Methods are skipped — a method's name lives under its receiver — and so are
+// blank and init, which Go allows repeated. A sibling that does not parse is
+// skipped too: reporting its contents is the syntax gate's business, not this
+// check's.
+func (w *Workspace) duplicateAcrossFiles(edited, content string) (symbol, otherFile string) {
+	names, pkg := topLevelNames(content)
+	if len(names) == 0 {
+		return "", ""
+	}
+	dir := parentDir(edited)
+	for p, src := range w.files {
+		if p == edited || !strings.HasSuffix(p, ".go") || parentDir(p) != dir {
+			continue
+		}
+		theirs, theirPkg := topLevelNames(src)
+		// _test files share the package; "package p" and "package p_test" do not.
+		if theirPkg != pkg {
+			continue
+		}
+		for n := range theirs {
+			if names[n] {
+				return n, p
+			}
+		}
+	}
+	return "", ""
+}
+
+// parseFailure renders the first parse error of a wrapped fragment, with its
+// line number shifted so it counts from the fragment's own first line rather
+// than the wrapper's.
+func parseFailure(wrapped string, wrapperLines int) string {
+	_, err := parser.ParseFile(token.NewFileSet(), "x.go", wrapped, parser.SkipObjectResolution)
+	if err == nil {
+		return "parses"
+	}
+	if list, ok := err.(scanner.ErrorList); ok && len(list) > 0 {
+		first := list[0]
+		return fmt.Sprintf("line %d: %s", first.Pos.Line-wrapperLines, first.Msg)
+	}
+	return err.Error()
+}
+
+// topLevelNames parses one file's top-level declaration names and its package.
+func topLevelNames(src string) (map[string]bool, string) {
+	f, err := parser.ParseFile(token.NewFileSet(), "x.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, ""
+	}
+	names := map[string]bool{}
+	add := func(n string) {
+		if n != "" && n != "_" && n != "init" {
+			names[n] = true
+		}
+	}
+	for _, d := range f.Decls {
+		switch d := d.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil {
+				add(d.Name.Name)
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					add(s.Name.Name)
+				case *ast.ValueSpec:
+					for _, n := range s.Names {
+						add(n.Name)
+					}
+				}
+			}
+		}
+	}
+	return names, f.Name.Name
+}
 
 // isSource reports whether a path holds code, as opposed to prose.
 //
