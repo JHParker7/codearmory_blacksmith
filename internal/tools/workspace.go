@@ -187,24 +187,53 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 
 	before, existed := w.files[e.Path]
 
-	// A whole-file write over a file that already has content is the silent
-	// deletion this addressing scheme exists to prevent: whatever the model did
-	// not carry forward is simply gone, and nothing in the reply says so.
+	// A whole-file write over a file that already has content used to be refused
+	// outright for source, because it is the silent-deletion shape: whatever the
+	// model did not carry forward is simply gone, and nothing in the reply says
+	// so. But the danger IS the dropped declaration — that is the thing that
+	// surfaces a verification round later as a compile error somewhere else — so
+	// the rule now checks for exactly that and nothing broader: a rewrite that
+	// KEEPS every top-level name the file already declares loses nothing that
+	// fails silently, and one that drops a name is refused with the casualty
+	// named.
 	//
-	// SOURCE ONLY. The asymmetry that justifies the refusal is a property of
-	// code: a declaration dropped in a rewrite does not announce itself, it
-	// surfaces a whole verification round later as a compile error somewhere
-	// else. Prose has no such delay — a plan missing a section is missing it
-	// visibly, to the next reader, and revising a document by rewriting it is the
-	// normal way to revise one. Measured: an architect that had written a
-	// 424-line plan tried to restructure it, was told to "quote a short snippet"
-	// instead, and spent the rest of its budget circling.
+	// What forced the narrowing: the test-first arm hands the developer files of
+	// PLACEHOLDER stubs, whose whole purpose is to be replaced wholesale. The
+	// blanket refusal sent six consecutive 37-second whole-file rewrites of
+	// main.go to their death with advice to quote a snippet of code that was
+	// never meant to survive. The model's instinct was right and the guard was
+	// wrong.
+	var defenced bool
 	if mode, _ := e.Address(); mode == "whole file" && existed && strings.TrimSpace(before) != "" {
 		if isSource(e.Path) {
-			return "", fmt.Errorf(
-				"%s already exists, so a whole-file write would discard whatever you did not carry "+
-					"forward. Address the change instead: quote a short snippet in \"old_str\", or name "+
-					"the declaration in \"decl\"", e.Path)
+			// Parse first (repairing a fence if that is what is wrong), because
+			// the name comparison needs a tree on both sides.
+			if !parsesAsFile(e.Replace) {
+				if fixed := model.Unfence(e.Replace); fixed != "" && parsesAsFile(fixed) {
+					e.Replace, defenced = fixed, true
+				} else {
+					return "", fmt.Errorf(
+						"%s: the content does not parse as a Go file. A whole-file write must be "+
+							"complete — a package clause, then the imports, then the declarations", e.Path)
+				}
+			}
+			oldNames, _ := topLevelNames(before)
+			newNames, _ := topLevelNames(e.Replace)
+			var dropped []string
+			for n := range oldNames {
+				if !newNames[n] {
+					dropped = append(dropped, n)
+				}
+			}
+			if len(dropped) > 0 {
+				sort.Strings(dropped)
+				return "", fmt.Errorf(
+					"%s: this rewrite DROPS %s, which the file currently declares — whatever calls "+
+						"them breaks a whole check round from now. Carry every existing declaration "+
+						"forward, or address the change instead: quote a short snippet in \"old_str\", "+
+						"or name the declaration in \"decl\"",
+					e.Path, strings.Join(dropped, ", "))
+			}
 		}
 		// A LONG DOCUMENT IS REFUSED FOR COST, NOT FOR SAFETY, and that is why the
 		// message says something different. Rewriting prose whole is legitimate —
@@ -236,7 +265,6 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 	// the plan passed the whole-rewrite threshold it could not replace it either.
 	// Boxed in from both sides, it spent its budget circling, and every diagnosis
 	// of that stall until now had been of a symptom.
-	var defenced bool
 	if isSource(e.Path) {
 		// A CODE FENCE AROUND THE REPLACEMENT IS REPAIRED, NOT REFUSED. The model
 		// wraps code in ```go fences because that is how code is written
