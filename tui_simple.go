@@ -432,6 +432,7 @@ func runTUI(base string) error {
 
 	gw := model.NewGateway(cfg.Host, cfg.Classes)
 	wireTickets(cfg)
+	wireScanners(cfg)
 	maker := agents.Creator{
 		Gateway: gw,
 		Check:   cfg.Repo.TestCommand,

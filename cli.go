@@ -138,6 +138,7 @@ func runBatch(repoDir, task, only string, dryRun, single, plan bool) error {
 	// wants, and acquiring a lease to answer that would be backwards.
 	gw := model.NewGateway(cfg.Host, cfg.Classes)
 	wireTickets(cfg)
+	wireScanners(cfg)
 	maker := agents.Creator{
 		Gateway: gw,
 		Check:   cfg.Repo.TestCommand,
@@ -305,6 +306,11 @@ func executeRun(
 	files map[string]string, repoDir, task string,
 ) (map[string]string, error) {
 	for _, name := range stages {
+		// THE SCANNERS RUN BETWEEN THE DEVELOPER AND THE REVIEWER: their
+		// reports join the tree just before the one stage built to read them.
+		if name == agents.StagePlanSec {
+			files = runScanners(ctx, maker.Sandbox, files)
+		}
 		build := func(tree map[string]string) (*agents.Agent, error) {
 			return stage(maker, name, tree)
 		}

@@ -45,6 +45,16 @@ RUN go install golang.org/x/tools/cmd/goimports@v0.28.0
 # AGENTS_DEV_ENGINE=qwen-code. Pinned to the version the working image carried.
 RUN npm install -g --silent @qwen-code/qwen-code@0.21.13
 
+# THE SECURITY SCANNERS, pinned like everything else. gosec is the SAST pass
+# and govulncheck the SCA pass; both run in the sandbox between the developer
+# and the security reviewer, and their output lands under scan/ as LEADS the
+# reviewer verifies. Installed here rather than fetched per run, because the
+# goimports lesson above is exactly what `go run tool@latest` on every scan
+# would repeat.
+RUN go install github.com/securego/gosec/v2/cmd/gosec@v2.21.4
+RUN go install golang.org/x/vuln/cmd/govulncheck@v1.1.3
+
 # Fail the build rather than ship an image missing what the pipeline asks for.
 # The whole reason this file exists is that a missing tool degraded quietly.
-RUN command -v goimports && command -v qwen && command -v git && command -v node
+RUN command -v goimports && command -v qwen && command -v git && command -v node \
+    && command -v gosec && command -v govulncheck
