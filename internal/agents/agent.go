@@ -345,6 +345,19 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 		}
 	}
 
+	// A CHECKLESS STAGE IS JUDGED THE SAME AT EVERY EXIT. The stall path already
+	// takes a written deliverable as completion; the budget path fell through to
+	// failure, so an architect that wrote its plan in one shot and then spent its
+	// remaining turns re-reading it was reported failed WITH ITS DELIVERABLE ON
+	// DISK — same situation as a stall, opposite verdict, and which one a run got
+	// depended on nothing but whether the loop noticed the idleness first.
+	if a.opts.Check == "" && a.space.Writes() > 0 {
+		out.Passed = true
+		a.logf("%s: budget spent after %d turns; taking the tree as its answer",
+			a.opts.Name, out.Iterations)
+		return out, nil
+	}
+
 	a.logf("%s: out of budget after %d turns", a.opts.Name, out.Iterations)
 	return out, nil
 }
