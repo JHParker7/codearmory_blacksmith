@@ -55,7 +55,15 @@ type ForgeSandbox struct {
 // about that tree fine. Source gzips at 4-5x, which puts any tree the prompt
 // budget admits well under the cap.
 func (f ForgeSandbox) Run(ctx context.Context, files map[string]string, command string) (Output, error) {
-	script := WriteTreeScript(files) + "\n" + command + "\n"
+	// A FRESH DIRECTORY, EVERY TIME, because the lease boots on a CLONE and the
+	// tree used to be laid on top of it. Whatever the clone holds then leaks
+	// into the check: measured, a leftover main.go from an earlier experiment
+	// provided `func main` for an agent tree that had none, and the stage went
+	// green on a program that does not build. The check's directory must contain
+	// exactly what the agent sees — an overlay is a different tree wearing the
+	// same name.
+	script := "rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws\n" +
+		WriteTreeScript(files) + "\n" + command + "\n"
 	if len(script) > PackThreshold {
 		script = packed(script)
 	}
