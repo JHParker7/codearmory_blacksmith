@@ -196,12 +196,30 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 	// normal way to revise one. Measured: an architect that had written a
 	// 424-line plan tried to restructure it, was told to "quote a short snippet"
 	// instead, and spent the rest of its budget circling.
-	if mode, _ := e.Address(); mode == "whole file" && existed &&
-		strings.TrimSpace(before) != "" && isSource(e.Path) {
-		return "", fmt.Errorf(
-			"%s already exists, so a whole-file write would discard whatever you did not carry "+
-				"forward. Address the change instead: quote a short snippet in \"old_str\", or name "+
-				"the declaration in \"decl\"", e.Path)
+	if mode, _ := e.Address(); mode == "whole file" && existed && strings.TrimSpace(before) != "" {
+		if isSource(e.Path) {
+			return "", fmt.Errorf(
+				"%s already exists, so a whole-file write would discard whatever you did not carry "+
+					"forward. Address the change instead: quote a short snippet in \"old_str\", or name "+
+					"the declaration in \"decl\"", e.Path)
+		}
+		// A LONG DOCUMENT IS REFUSED FOR COST, NOT FOR SAFETY, and that is why the
+		// message says something different. Rewriting prose whole is legitimate —
+		// it is how documents are revised — but it regenerates the entire file on
+		// every edit. Measured: an architect made eleven whole-file writes to a
+		// 363-line plan at a median of 60 seconds each, 705 of the run's 831
+		// seconds, and the last of them reproduced the file byte for byte and was
+		// refused as a no-op. Reads on the same prompt took ten seconds, so this is
+		// output, not context.
+		if n := lineCount(before); n > MaxWholeRewriteLines {
+			return "", fmt.Errorf(
+				"%s is %d lines, and rewriting it whole means generating all %d again for one "+
+					"change — which is most of what this stage's time is spent on. Change the part "+
+					"you mean: quote the heading or the line you are replacing in \"old_str\", or "+
+					"give \"start_line\"/\"end_line\" for a range. A file of %d lines or fewer may "+
+					"still be written whole",
+				e.Path, n, n, MaxWholeRewriteLines)
+		}
 	}
 
 	// A WHOLE FILE IS A THIRD POSITION, and it needs its own parse. The two-parse
@@ -209,16 +227,25 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 	// already opens with its own package clause gives two of them and fails —
 	// which refuses every valid new-file write. The same fix was needed in the
 	// python rebuild for the same reason.
-	if isWholeFile(e) {
-		if strings.HasSuffix(e.Path, ".go") && !parsesAsFile(e.Replace) {
+	// THE SYNTAX GATES ARE FOR GO AND ONLY FOR GO. Running them on everything
+	// meant a heading in a markdown file was rejected as "not valid Go in any
+	// position" — so an architect could not edit its own plan in place, and once
+	// the plan passed the whole-rewrite threshold it could not replace it either.
+	// Boxed in from both sides, it spent its budget circling, and every diagnosis
+	// of that stall until now had been of a symptom.
+	if isSource(e.Path) {
+		if isWholeFile(e) {
+			if !parsesAsFile(e.Replace) {
+				return "", fmt.Errorf(
+					"%s: the content does not parse as a Go file. A whole-file write must be "+
+						"complete — a package clause, then the imports, then the declarations", e.Path)
+			}
+		} else if edit.ReplacementIsMalformed(e.Replace) {
 			return "", fmt.Errorf(
-				"%s: the content does not parse as a Go file. A whole-file write must be complete — "+
-					"a package clause, then the imports, then the declarations", e.Path)
+				"%s: the replacement is not valid in any position — it does not parse as "+
+					"declarations or as statements. Check the braces and quotes in what you sent",
+				e.Path)
 		}
-	} else if edit.ReplacementIsMalformed(e.Replace) {
-		return "", fmt.Errorf(
-			"%s: the replacement is not valid in any position — it does not parse as declarations "+
-				"or as statements. Check the braces and quotes in what you sent", e.Path)
 	}
 
 	span, err := edit.Resolve(before, e)
@@ -290,6 +317,15 @@ func (w *Workspace) Undo() (string, bool) {
 	w.files[u.path] = u.before
 	return u.path, true
 }
+
+// MaxWholeRewriteLines is the largest existing prose file that may be replaced
+// wholesale rather than edited in place.
+//
+// The trade-off flips with size. A short document is cheaper to regenerate than
+// to address, and refusing that would be pedantry; a long one costs a full
+// regeneration per edit, and at 363 lines that was 60 seconds a turn against 10
+// for a read. Set where a rewrite is still a second or two of generation.
+const MaxWholeRewriteLines = 150
 
 // isSource reports whether a path holds code, as opposed to prose.
 //
