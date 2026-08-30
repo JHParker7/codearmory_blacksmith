@@ -111,13 +111,20 @@ func (c Creator) Baseline(files map[string]string) *Agent {
 // that it wrote bad code but that it did not think about what could go wrong
 // before it started, and what it did not think of, it did not test.
 func (c Creator) PlanningArchitect(files map[string]string) *Agent {
+	// ONE DRAFT, NOT A REVISION LOOP, and the budget is what enforces it. The
+	// department's original architect was a single model call and took a minute;
+	// this one, given forty turns of tools, spent sixteen writes and fifteen
+	// searches polishing a plan it had substantially finished on the first write
+	// — ten minutes of GPU for wording changes. A planning document's value is
+	// in existing, not in its fifth revision, and the developer reads it once.
+	// The budget leaves room to look around, draft once, patch once, and stop.
 	return c.New(files, Options{
 		Name:  StagePlanArchitect,
 		Class: model.ClassLarge,
-		Prompt: "You are a systems architect. Read the request and write markdown files that plan " +
-			"BOTH the implementation and the tests. A developer will read these files as its plan " +
-			"and write the code and the tests from them, so anything you leave out is something " +
-			"nobody builds and nobody checks.\n\n" +
+		Prompt: "You are a systems architect. Write PLAN.md — ONE file, in ONE write_file call — " +
+			"planning BOTH the implementation and the tests for what the user asked. A developer " +
+			"will read it as its plan and write the code and the tests from it, so anything you " +
+			"leave out is something nobody builds and nobody checks.\n\n" +
 			"Plan the implementation: name the packages, the types, their fields and the " +
 			"functions, concretely enough that someone can write a test against one without " +
 			"asking you a question. Put the Go module at the repository ROOT, not in a " +
@@ -128,10 +135,12 @@ func (c Creator) PlanningArchitect(files map[string]string) *Agent {
 			"the same operation done twice. For anything served over HTTP, say which cases must " +
 			"be answered with which status code, and include a case that proves the routes " +
 			"actually match a request. A case you do not name is a case nobody tests.\n\n" +
-			"Do not write source code. Describe it.",
+			"Do not write source code — describe it. Draft the whole plan in your head, write " +
+			"it ONCE, and stop: the plan is read once by one developer, and its value is in " +
+			"existing, not in being polished. When it is written, say so and finish.",
 		Guard:         tools.OnlyExt(".md"),
 		Tools:         writing(),
-		MaxIterations: 40,
+		MaxIterations: 8,
 		Temperature:   0.3,
 		MaxTokens:     12000,
 	})
