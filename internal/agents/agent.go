@@ -256,6 +256,14 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 	out := Outcome{}
 	idle := 0
 
+	// produced counts everything this stage delivered — accepted writes AND
+	// filed tickets. The security reviewer writes nothing to the tree; its
+	// deliverable is tickets on the board, so gating completion on tree writes
+	// alone reported a reviewer that filed seven findings as having done
+	// nothing, failed the run, and rerolled it three times over a stage that
+	// succeeded every time.
+	produced := 0
+
 	for i := 0; i < a.opts.MaxIterations; i++ {
 		out.Iterations = i + 1
 
@@ -297,7 +305,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 		// unbounded.
 		if len(res.Calls) == 0 {
 			truncated := res.Truncated(a.opts.MaxTokens)
-			owesFiles := a.offersTool(tools.WriteFile) && a.space.Writes() == 0
+			owesFiles := a.offersTool(tools.WriteFile) && produced == 0
 
 			if a.opts.Check == "" && !truncated && !owesFiles {
 				out.Answer = res.Content
@@ -350,8 +358,18 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 
 			if progressed(call.Name, result) {
 				idle = 0
-				if call.Name != tools.RunCommand {
+				switch call.Name {
+				case tools.WriteFile, tools.FileTicket:
 					wrote = true
+					produced++
+				case tools.UndoEdit:
+					// An undo is progress — it is not a stuck loop — but it is the
+					// opposite of production: write-then-undo nets to nothing, and a
+					// stage that ends there has delivered nothing.
+					wrote = true
+					if produced > 0 {
+						produced--
+					}
 				}
 			}
 
@@ -412,9 +430,9 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			// does not exist. Measured: an architect called list_files fifteen times
 			// against an empty repository, wrote nothing, was reported as passed,
 			// and the developer then started from nothing and stalled the same way.
-			if a.opts.Check == "" && a.space.Writes() > 0 {
+			if a.opts.Check == "" && produced > 0 {
 				out.Passed = true
-				a.logf("%s: stopped changing anything after %d turns; taking the tree as its answer",
+				a.logf("%s: stopped after %d turns having delivered; taking that as its answer",
 					a.opts.Name, out.Iterations)
 				return out, nil
 			}
@@ -431,9 +449,9 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 	// remaining turns re-reading it was reported failed WITH ITS DELIVERABLE ON
 	// DISK — same situation as a stall, opposite verdict, and which one a run got
 	// depended on nothing but whether the loop noticed the idleness first.
-	if a.opts.Check == "" && a.space.Writes() > 0 {
+	if a.opts.Check == "" && produced > 0 {
 		out.Passed = true
-		a.logf("%s: budget spent after %d turns; taking the tree as its answer",
+		a.logf("%s: budget spent after %d turns having delivered; taking that as its answer",
 			a.opts.Name, out.Iterations)
 		return out, nil
 	}

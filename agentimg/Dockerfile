@@ -54,7 +54,13 @@ RUN npm install -g --silent @qwen-code/qwen-code@0.21.13
 RUN go install github.com/securego/gosec/v2/cmd/gosec@v2.21.4
 RUN go install golang.org/x/vuln/cmd/govulncheck@v1.1.3
 
+# staticcheck is the LINT pass, feeding the CODE reviewer the way gosec and
+# govulncheck feed the security one. Advisory by the same rule the department
+# wrote on LintCommand: a linter can produce findings a change cannot resolve,
+# and behind a gate each of those traps the agent.
+RUN go install honnef.co/go/tools/cmd/staticcheck@2025.1
+
 # Fail the build rather than ship an image missing what the pipeline asks for.
 # The whole reason this file exists is that a missing tool degraded quietly.
 RUN command -v goimports && command -v qwen && command -v git && command -v node \
-    && command -v gosec && command -v govulncheck
+    && command -v gosec && command -v govulncheck && command -v staticcheck
