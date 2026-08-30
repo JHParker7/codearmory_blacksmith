@@ -237,6 +237,16 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			return out, fmt.Errorf("%s: turn %d: %w", a.opts.Name, out.Iterations, err)
 		}
 
+		// THE REASONING GOES IN THE LOG, and only in the log. The lesson is
+		// written on ChatResult.Reasoning and was relearned here watching a live
+		// run re-read one file five times: a stuck run can only be diagnosed from
+		// what the agent DID, and that is not enough — the loop is visible and its
+		// cause is not. Never into the trail or the prompt: replaying a thinking
+		// model's scratchpad to it is how it talks itself into a loop.
+		if r := res.Reasoning; r != "" {
+			a.logf("%s: thinking: %s", a.opts.Name, reasoningLine(r))
+		}
+
 		// NO TOOL CALL MEANS IT ANSWERED — but an answer only finishes a stage
 		// that has nothing else outstanding, and there are three ways to owe more:
 		//
@@ -648,6 +658,17 @@ func trim(s string, max int) string {
 	// the summary and the first real error at the end; keeping the head keeps the
 	// banner and throws away the diagnosis.
 	return fmt.Sprintf("… %d characters omitted …\n%s", len(s)-max, s[len(s)-max:])
+}
+
+// reasoningLine flattens a reasoning trace to one log line: the head and the
+// tail, because the head says what the model is worried about and the tail is
+// where the decision lands, and a diagnosis usually needs both.
+func reasoningLine(r string) string {
+	flat := strings.Join(strings.Fields(r), " ")
+	if len(flat) <= 300 {
+		return flat
+	}
+	return flat[:180] + " … " + flat[len(flat)-100:]
 }
 
 // argHead is the head of a tool call's arguments, for the log. The HEAD, unlike
