@@ -216,6 +216,15 @@ func runWithReroll(
 	// curGit is what the write hook reaches; one run holds the GPU at a time.
 	curGit = newGitLog(repoDir, task)
 	defer func() { curGit = nil }()
+	// THE SEED GOES TO DISK BEFORE THE SNAPSHOT. The tree lives in memory and
+	// used to reach disk only at stage ends, so the snapshot here committed an
+	// empty directory and the first agent write's add -A silently swept the
+	// whole project in under that write's message — measured on the first real
+	// project run: "feat: Add TaskCount method", carrying 2,044 seed lines.
+	// The story a history tells is only as honest as its first commit.
+	if err := writeTree(repoDir, files); err != nil {
+		return fmt.Errorf("writing %s: %w", repoDir, err)
+	}
 	curGit.snapshot("chore: the tree as the request found it")
 
 	var lastErr error
