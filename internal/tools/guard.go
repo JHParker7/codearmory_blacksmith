@@ -86,29 +86,6 @@ func OnlyExt(exts ...string) Guard {
 	}
 }
 
-// OnlyPaths permits writes to exactly the named paths.
-//
-// The security reviewer's guard: its REPORT is its deliverable, so it must be
-// able to write that one file — and a reviewer that can write anything else
-// stops reviewing and starts rewriting, which is the failure the read-only
-// guard exists to prevent. An extension guard cannot say this: ".md" would
-// hand it the PLAN too.
-func OnlyPaths(paths ...string) Guard {
-	allowed := make(map[string]bool, len(paths))
-	for _, p := range paths {
-		allowed[p] = true
-	}
-	names := strings.Join(paths, ", ")
-	return func(p string) error {
-		if allowed[p] {
-			return nil
-		}
-		return fmt.Errorf(
-			"%s cannot be written at this stage, which owns only %s. Report what is wrong there "+
-				"and name the file and line; the stage that owns the code fixes it", p, names)
-	}
-}
-
 // Both applies two guards, reporting the first refusal.
 func Both(a, b Guard) Guard {
 	return func(p string) error {

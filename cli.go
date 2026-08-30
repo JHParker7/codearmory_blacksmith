@@ -33,6 +33,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/config"
 	"github.com/code-armory-app/blacksmith/internal/forge"
 	"github.com/code-armory-app/blacksmith/internal/model"
+	"github.com/code-armory-app/blacksmith/internal/platform"
 	"github.com/code-armory-app/blacksmith/internal/tools"
 	"github.com/code-armory-app/blacksmith/internal/transport"
 )
@@ -136,6 +137,7 @@ func runBatch(repoDir, task, only string, dryRun, single, plan bool) error {
 	// exists is deliberate: the preflight below needs to ask each stage what it
 	// wants, and acquiring a lease to answer that would be backwards.
 	gw := model.NewGateway(cfg.Host, cfg.Classes)
+	wireTickets(cfg)
 	maker := agents.Creator{
 		Gateway: gw,
 		Check:   cfg.Repo.TestCommand,
@@ -143,6 +145,7 @@ func runBatch(repoDir, task, only string, dryRun, single, plan bool) error {
 		OnWrite: func(path, content string, deleted bool, message string) {
 			curGit.write(path, content, deleted, message)
 		},
+		FileTicket: fileFinding,
 	}
 
 	// EVERY STAGE IS INSPECTED BEFORE ANY OF THEM RUNS. A pipeline that gets four
@@ -216,6 +219,7 @@ func runWithReroll(
 	// curGit is what the write hook reaches; one run holds the GPU at a time.
 	curGit = newGitLog(repoDir, task)
 	defer func() { curGit = nil }()
+	openRequestTicket(task, repoDir)
 	// THE SEED GOES TO DISK BEFORE THE SNAPSHOT. The tree lives in memory and
 	// used to reach disk only at stage ends, so the snapshot here committed an
 	// empty directory and the first agent write's add -A silently swept the
@@ -243,6 +247,7 @@ func runWithReroll(
 		if lastErr == nil {
 			curGit.mark("run: passed")
 			curGit.pushRun(os.Getenv(gitEnvURL), os.Getenv(gitEnvMkrepo), repoDir)
+			closeRequestTicket(true, fmt.Sprintf("passed on draw %d", attempt))
 			return nil
 		}
 		// An operator's ctrl-C is not a bad seed.
@@ -255,6 +260,7 @@ func runWithReroll(
 	// reroll's revert would otherwise silently destroy.
 	curGit.mark(fmt.Sprintf("run: failed after %d attempts: %s", MaxRunAttempts, firstLineOf(lastErr.Error())))
 	curGit.pushRun(os.Getenv(gitEnvURL), os.Getenv(gitEnvMkrepo), repoDir)
+	closeRequestTicket(false, fmt.Sprintf("failed after %d attempts: %s", MaxRunAttempts, firstLineOf(lastErr.Error())))
 	return fmt.Errorf("after %d attempts: %w", MaxRunAttempts, lastErr)
 }
 
@@ -263,6 +269,21 @@ func firstLineOf(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// wireTickets connects the plane's ticket store when one is configured.
+// Best-effort: a workshop without a board still works, it just is not
+// tracked, and the security reviewer's tool says so instead of failing.
+func wireTickets(cfg config.Config) {
+	if cfg.TicketsURL == "" || tickets != nil {
+		return
+	}
+	store, err := platform.Local(cfg.TicketsURL, planeCredential(cfg))
+	if err != nil {
+		slog.Warn("ticket store unavailable; runs will not be tracked", "error", err)
+		return
+	}
+	tickets = store
 }
 
 // MaxRunAttempts bounds the whole-run reroll.

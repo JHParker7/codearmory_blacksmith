@@ -431,6 +431,7 @@ func runTUI(base string) error {
 	events := make(chan uiEvent, 256)
 
 	gw := model.NewGateway(cfg.Host, cfg.Classes)
+	wireTickets(cfg)
 	maker := agents.Creator{
 		Gateway: gw,
 		Check:   cfg.Repo.TestCommand,
@@ -443,6 +444,7 @@ func runTUI(base string) error {
 		OnWrite: func(path, content string, deleted bool, message string) {
 			curGit.write(path, content, deleted, message)
 		},
+		FileTicket: fileFinding,
 	}
 	for _, name := range stages {
 		a, err := stage(maker, name, nil)

@@ -58,6 +58,9 @@ type Creator struct {
 	// commits. Shared by every stage a creator builds, because the history is a
 	// property of the RUN, not of any one stage.
 	OnWrite func(path, content string, deleted bool, message string)
+
+	// FileTicket files a finding on the board, for the stages offered the tool.
+	FileTicket func(title, body, severity string) (string, error)
 }
 
 // Options is what makes one stage different from another.
@@ -154,11 +157,12 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 		opts:  o,
 		space: space,
 		tools: &tools.Set{
-			Workspace: space,
-			Sandbox:   c.Sandbox,
-			Check:     c.checkFor(o),
-			Names:     o.Tools,
-			OnWrite:   c.OnWrite,
+			Workspace:  space,
+			Sandbox:    c.Sandbox,
+			Check:      c.checkFor(o),
+			Names:      o.Tools,
+			OnWrite:    c.OnWrite,
+			FileTicket: c.FileTicket,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,
@@ -450,7 +454,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 // counting the attempt would hide it.
 func progressed(name, result string) bool {
 	switch name {
-	case tools.WriteFile, tools.UndoEdit:
+	case tools.WriteFile, tools.UndoEdit, tools.FileTicket:
 		return !strings.HasPrefix(result, "Error:")
 	case tools.RunCommand:
 		return true

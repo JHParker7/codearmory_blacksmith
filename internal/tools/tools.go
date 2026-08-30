@@ -23,6 +23,7 @@ const (
 	ListFiles   = "list_files"
 	SearchFiles = "search_files"
 	RunCommand  = "run_command"
+	FileTicket  = "file_ticket"
 )
 
 // Limits on what one call may carry.
@@ -72,6 +73,13 @@ type Set struct {
 	// and the accepted ones cannot drift apart — a tool offered but not accepted
 	// is a trap.
 	Names []string
+
+	// FileTicket files one finding on the ticket board, returning the ticket's
+	// id. THE BOARD, NOT THE TREE, because a findings file committed to the
+	// repository is a curated vulnerability list handed to anyone with clone
+	// access — the board lives behind the gatekeeper. Nil means no store is
+	// wired, and the tool says so instead of pretending.
+	FileTicket func(title, body, severity string) (string, error)
 
 	// OnWrite hears every edit that actually landed: the path, its content
 	// after the edit (empty with deleted=true when an undo removed it), and the
@@ -198,6 +206,26 @@ func (s *Set) Definitions() []model.Tool {
 					"description": `Optional filename filter: a glob like "*.go", or a bare suffix like ".go". Empty searches everything.`,
 				},
 			}, "pattern"),
+		},
+		FileTicket: {
+			Name: FileTicket,
+			Description: "File ONE finding as a ticket on the board. Call once per real finding — " +
+				"a ticket is work for a person, so no duplicates and nothing you have not " +
+				"verified against the code.",
+			Parameters: object(map[string]any{
+				"title": map[string]any{
+					"type": "string", "maxLength": 120,
+					"description": "One line naming the vulnerability and where it lives.",
+				},
+				"body": map[string]any{
+					"type": "string",
+					"description": "The finding: file and line, what an attacker concretely gets, " +
+						"and the fix to make. Everything a person needs without asking you.",
+				},
+				"severity": map[string]any{
+					"type": "string", "enum": []string{"critical", "high", "medium", "low"},
+				},
+			}, "title", "body", "severity"),
 		},
 		RunCommand: {
 			Name: RunCommand,
@@ -358,6 +386,30 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 			return badArgs(name, err), nil
 		}
 		return s.search(a.Pattern, a.Glob), nil
+
+	case FileTicket:
+		var a struct {
+			Title    string `json:"title"`
+			Body     string `json:"body"`
+			Severity string `json:"severity"`
+		}
+		if err := json.Unmarshal([]byte(args), &a); err != nil {
+			return badArgs(name, err), nil
+		}
+		if s.FileTicket == nil {
+			return "Error: no ticket store is wired at this stage. Put the finding in your " +
+				"final answer instead — do NOT write it into the repository.", nil
+		}
+		if strings.TrimSpace(a.Title) == "" || strings.TrimSpace(a.Body) == "" {
+			return "Error: a ticket needs both a title and a body — it is work for a person, " +
+				"and a person cannot act on an empty one.", nil
+		}
+		id, err := s.FileTicket(a.Title, a.Body, a.Severity)
+		if err != nil {
+			return "Error: the board refused the ticket: " + err.Error() +
+				". Put the finding in your final answer instead.", nil
+		}
+		return fmt.Sprintf("Filed %s [%s]: %s", id, a.Severity, a.Title), nil
 
 	case RunCommand:
 		if s.Sandbox == nil {

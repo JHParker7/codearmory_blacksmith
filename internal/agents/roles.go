@@ -282,38 +282,41 @@ func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 	})
 }
 
-// PlanSec reads the finished run with an attacker's eyes and writes ONE file:
-// SECURITY.md, the review, which the run's git history carries out with
-// everything else. It cannot touch code — OnlyPaths is the precise statement
-// that its report is its entire write surface.
+// PlanSec reads the finished run with an attacker's eyes and files every
+// real finding as a TICKET on the board. Never into the tree: a findings file
+// committed to the repository is a curated vulnerability list handed to
+// anyone with clone access, while the board lives behind the gatekeeper —
+// the operator drew that line and it is the right one. The stage's prose
+// answer is its verdict; the tickets are its work.
 //
 // THE SCANNER SEAM IS THE TREE, designed now, fed later: SAST and SCA
 // scanners will run in the sandbox before this stage and leave their reports
 // under scan/, where the reviewer reads them like any other file. Reports are
-// LEADS TO VERIFY, not verdicts to copy — the department measured both
-// halves of that: a scanner finding in your own code is usually a change to
-// make, one in a dependency is usually a version bump, and an unverified
-// copy of either costs a person a day. Advisory, not a gate, matching the
-// department's split between ScanCommand context and CriticalCommand gates.
+// LEADS TO VERIFY, not verdicts to copy — a scanner finding in your own code
+// is usually a change to make, one in a dependency usually a version bump,
+// and an unverified copy of either costs a person a day. Advisory, not a
+// gate, matching the department's split between ScanCommand context and
+// CriticalCommand gates.
 func (c Creator) PlanSec(files map[string]string) *Agent {
 	return c.New(files, Options{
 		Name:  StagePlanSec,
 		Class: model.ClassLarge,
 		Prompt: "You are a security reviewer reading a finished change. Read the implementation " +
-			"and the tests, then write SECURITY.md — one file, your whole deliverable — " +
-			"reporting what an attacker could do: injection through unvalidated input, secrets " +
-			"on disk or in logs, authorisation checks missing rather than wrong, resource " +
-			"limits nobody set, error text that leaks internals. For each finding name the FILE " +
-			"and LINE, say concretely what an attacker gets, and rate it critical, high, medium " +
-			"or low.\n\n" +
+			"and the tests, then file each REAL finding as a ticket with file_ticket: injection " +
+			"through unvalidated input, secrets on disk or in logs, authorisation checks missing " +
+			"rather than wrong, resource limits nobody set, error text that leaks internals. One " +
+			"ticket per finding; in the body name the FILE and LINE, say concretely what an " +
+			"attacker gets, and the fix to make.\n\n" +
+			"NEVER write findings into the repository — a committed list of vulnerabilities is " +
+			"a gift to anyone who clones it. The board is where findings go.\n\n" +
 			"If scanner reports exist under scan/ — SAST or dependency audits — read them " +
-			"FIRST, as leads: verify each against the code and say which are real and which are " +
-			"false positives, because an unverified copy of a scanner line costs a person a day. " +
-			"You cannot change the code; say what is wrong and where, and the stage that owns it " +
-			"fixes it. If you find nothing real, write that — an invented finding teaches people " +
-			"to skip your reports. End with a one-line verdict: ship, ship with fixes, or stop.",
-		Guard:         tools.OnlyPaths("SECURITY.md"),
-		Tools:         append(append([]string{}, readOnly...), tools.WriteFile),
+			"FIRST, as leads: verify each against the code, file the real ones, and name the " +
+			"false positives in your answer, because an unverified copy of a scanner line " +
+			"costs a person a day. If you find nothing real, file nothing and say so — an " +
+			"invented finding teaches people to skip your tickets. Finish with a one-line " +
+			"verdict: ship, ship with fixes, or stop.",
+		Guard:         tools.DenyAll,
+		Tools:         append(append([]string{}, readOnly...), tools.FileTicket),
 		MaxIterations: 25,
 		Temperature:   0.2,
 		MaxTokens:     8000,
