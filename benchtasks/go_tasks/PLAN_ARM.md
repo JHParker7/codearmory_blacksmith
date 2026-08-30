@@ -6,66 +6,88 @@ a developer builds from it, tests included. Run with:
 
     go run ./cmd/simple -plan -repo ./scratch -task "$(cat benchtasks/go_tasks/REQUEST.md)"
 
-**Status: one valid run of three.** Runs 2 and 3 are still to be done, so every
-comparison below is provisional. The single run is valid in a way the earlier
-attempts were not: it is the first on the clean-checkdir harness, where the
-check judges exactly the agent's tree (see the harness history below).
+**Complete: three runs of three**, all on one build (commit be798f9+, the
+clean-checkdir harness), model qwen3.8:27b, 2026-08-30. Every number below was
+verified independently on the written-back tree — build, vet, coverage, and a
+live probe request — because one earlier "pass" turned out to be an artifact of
+the check running on clone-plus-overlay.
 
-## Run 1 (2026-08-30, commit d2500c0+), against the baseline's three
+## The three runs
 
-|                        | plan run 1 | baseline best (r3) | baseline median |
-|------------------------|------------|--------------------|-----------------|
-| wall clock             | **6m 24s** | 5m 46s             | ~1m 30s         |
-| turns (arch + dev)     | 8 + 8      | 19                 | 7               |
-| impl lines             | 516        | 429                | ~430            |
-| test lines             | **995**    | 544                | 112             |
-| coverage               | 91-92.5%   | 89.7%              | 40.3%           |
-| `go vet`               | clean      | clean              | 1-5 findings    |
-| **builds AND runs**    | **yes**    | yes                | **no — 404s**   |
-| layout                 | store/ + handler/ + main | flat     | flat            |
+|                     | run 1        | run 2        | run 3          |
+|---------------------|--------------|--------------|----------------|
+| wall clock          | 6m 24s       | 6m 25s       | **2m 41s**     |
+| turns (arch + dev)  | 8 + 8        | 8 + 9        | 7 + 8          |
+| impl lines          | 516          | 473          | 518            |
+| test lines          | 995          | 699          | **0**          |
+| statement coverage  | 91-92.5%     | 83.4%        | **0%**         |
+| `go vet`            | clean        | clean        | clean          |
+| routes answer       | yes          | yes          | yes            |
+| create works        | yes          | yes          | only RFC3339 dates, error says "invalid JSON body" |
+| layout              | store/ handler/ | flat      | model/ store/ server/ |
 
-Verified independently on the written-back tree, not taken from the stage's own
-check: `go build` links, vet is clean, coverage measured per package (handler
-92.5%, store 91.0%), and a probe request answered — create 201, list 200, an
-unknown id 404, and a malformed due date refused with a message naming the
-expected format. The old pipeline's whole-run bar on this host was 9-11
-minutes; this lands at 6.5 while writing its tests in-stage.
+And against the single unrestricted agent (BASELINE.md; its three runs were on
+the pre-review harness — none of the interim fixes would have changed its
+outcomes, checked against its logs):
 
-What the plan visibly bought, on one run's evidence:
+|                          | baseline (3 runs)   | plan arm (3 runs)  |
+|--------------------------|---------------------|--------------------|
+| wall clock               | 1m25s / 1m10s / 5m46s | 6m24s / 6m25s / 2m41s |
+| test lines               | 112 / 0 / 544       | 995 / 699 / 0      |
+| coverage                 | 40% / 0% / 90%      | 92% / 83% / 0%     |
+| `go vet` findings        | 1 / 5 / 0           | 0 / 0 / 0          |
+| **APIs that answer**     | **1 of 3**          | **3 of 3**         |
+| main package present     | 3 of 3              | 3 of 3             |
 
-- **995 test lines against the baseline median's 112**, written per the plan's
-  own case list ("all 17 plan cases", says the dev's commit summary).
-- **main.go written early and unprompted** — its absence was a baseline failure
-  and an earlier plan-arm failure both.
-- **Path-prefix routing with manual method dispatch** — the Go-1.21-safe style,
-  sidestepping the version trap that broke two baseline runs. Coincidence or
-  plan, undecidable from one run.
-- Validation errors that name the field and the expected format.
+## What the plan bought, on three runs' evidence
 
-What it cost: ~2 minutes of architect ahead of the dev, and the whole
-arrangement only became runnable after the harness fixes below — none of which
-are properties of the arrangement itself.
+**Every plan-arm API answers requests, and every tree is vet-clean.** The
+baseline shipped two dead APIs out of three — Go 1.22 route patterns under a
+go 1.21 directive — and 1-5 vet findings in two of three trees. The plan arm
+went three for three on both axes: two runs declared go 1.22 and used wildcard
+routes legally, one used path-prefix routing that works everywhere. The
+architect's plan names the module layout and the routes before the developer
+touches them, and the difference shows exactly there.
+
+**The median improved; the floor did not move.** Test lines 995/699/0 against
+the baseline's 544/112/0: the plan more than doubles the middle of the
+distribution, and run 3 still skipped tests WHOLESALE — a 200-line plan with
+the cases named one by one, and the developer wrote none of them, finished in
+2m41s, and passed, because `go test ./...` exits 0 on a tree with no tests.
+A plan nobody enforces is advice. The floor belongs to the CHECK, and this was
+known before the arm ran (see BASELINE.md's closing section); the arm confirms
+it survives an explicit plan.
+
+**What is tested is what works — six runs, no exceptions.** The one plan run
+without tests is the one whose create path rejects plain dates with a message
+("invalid JSON body") that names neither the field nor the format; runs 1 and
+2, whose handler tests exercise the routes, both answer probes cleanly with
+field-naming errors. Same correlation as the baseline's three.
+
+**Cost:** ~1-2.5 minutes of architect ahead of the dev, and total wall clock of
+2.5-6.5 minutes per run against the old department's 9-11 minutes for its full
+six-stage pipeline on this host — while writing tests in-stage, which the old
+pipeline's dev never did.
+
+## What follows
+
+The deferred check-policy change is now unblocked, and the arm's own data
+argues for it: put `go vet` in the check (turns two baseline greens red for the
+right reason, costs the plan arm nothing — it is already clean), and make a
+tree with no test files fail the checked stages whose prompt demands tests
+(turns run 3 red for the right reason). After that, the interesting experiment
+is whether the plan arm keeps its 3-of-3 liveness with the floor enforced —
+and whether run-3-shaped runs then spend their saved minutes writing the tests
+they skipped.
 
 ## The harness history, honestly
 
-Getting ONE valid run took eleven attempts across two days. Every failure was a
-harness defect, found by the run that died on it, fixed with a test, committed
-separately. In order: sandbox credential (static token vs session), stall
-detection missing, prompt context truncated (declarations invisible), LRU
-recency, checkless stages unable to finish, empty trees passing, repeat-signal
-on one tool only, whole-file rewrite economics, Go syntax gates judging
-markdown, forge's body cap killing large trees, fenced replacements refused
-instead of repaired, budget-exit inconsistency, cross-file duplicate
-declarations invisible at the write, and the check running on clone+overlay
-rather than the agent's tree — the last of which had turned one earlier "pass"
-false, which is why independent re-verification outside the sandbox is part of
-the method.
-
-## Still to do
-
-- Plan runs 2 and 3, same build, then the real three-vs-three comparison.
-- The deferred check-policy change (vet in the check; a no-test tree is not a
-  pass) — after the comparison, because it changes what "passed" means.
-- The write_files-batch question: the old pipeline's speed came from few large
-  generations; if runs 2-3 settle slower than the old bar, letting one call
-  carry several files is the fix to try first.
+Getting the first valid run took eleven attempts across two days, every failure
+a harness defect, each fixed with a regression test in its own commit: sandbox
+credential, stall detection, context truncation, LRU recency, checkless
+completion (three variants), repeat signals on one tool only, whole-file
+rewrite economics, Go syntax gates judging markdown, forge's execution body
+cap, fenced replacements refused instead of repaired, cross-file duplicate
+declarations, and the clone-overlay check. Runs 2 and 3 then completed first
+try, back to back, in under 10 minutes combined — which is what the fixes were
+for.
