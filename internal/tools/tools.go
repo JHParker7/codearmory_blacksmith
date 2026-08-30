@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/code-armory-app/blacksmith/internal/edit"
 	"github.com/code-armory-app/blacksmith/internal/model"
@@ -38,10 +40,16 @@ const (
 	MaxSearchHits   = 200
 )
 
-// ConventionalTypes is the commit type an edit must declare. The same list the
-// commit-msg hook enforces, so an agent cannot author a commit its own
-// repository will reject.
-var ConventionalTypes = []string{"feat", "fix", "docs", "style", "refactor", "test", "chore"}
+// ConventionalTypes is the commit type an edit must declare — the same list
+// hooks/commit-msg enforces, so an agent can neither author a commit its own
+// repository would reject nor be refused for one it would accept. It had
+// drifted to seven entries against the hook's eleven, so "perf" and "ci" —
+// types the hook takes — were refused here with a message claiming to speak
+// for the hook. The binding test in hook_test.go is what keeps a hand copy of
+// this list honest; internal/agent/dev learned the same lesson the same way.
+var ConventionalTypes = []string{
+	"feat", "fix", "chore", "docs", "refactor", "test", "perf", "build", "ci", "style", "revert",
+}
 
 // A Set is the tools one stage may call, bound to the workspace and sandbox they
 // act on.
@@ -178,7 +186,7 @@ func (s *Set) Definitions() []model.Tool {
 				"pattern": map[string]any{"type": "string", "description": "A regular expression."},
 				"glob": map[string]any{
 					"type":        "string",
-					"description": `Optional path suffix filter, e.g. ".go". Empty searches everything.`,
+					"description": `Optional filename filter: a glob like "*.go", or a bare suffix like ".go". Empty searches everything.`,
 				},
 			}, "pattern"),
 		},
@@ -296,9 +304,13 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 		if !validType(meta.Type) {
 			return fmt.Sprintf("Error: \"type\" must be one of %s.", strings.Join(ConventionalTypes, ", ")), nil
 		}
-		if len(meta.Summary) > MaxSummaryChars {
+		// COUNTED IN RUNES, because the schema's maxLength and this refusal both
+		// speak in characters. Counting bytes refused accented or CJK summaries
+		// that were inside the declared limit, with numbers the model could not
+		// reconcile against what it sent — a refusal that is not actionable.
+		if utf8.RuneCountInString(meta.Summary) > MaxSummaryChars {
 			return fmt.Sprintf("Error: \"summary\" is %d characters, and the limit is %d. One line.",
-				len(meta.Summary), MaxSummaryChars), nil
+				utf8.RuneCountInString(meta.Summary), MaxSummaryChars), nil
 		}
 		line, err := s.Workspace.ApplyEdit(e)
 		if err != nil {
@@ -438,9 +450,31 @@ func (s *Set) search(pattern, glob string) string {
 	if err != nil {
 		return fmt.Sprintf("Error: %q is not a valid regular expression: %v", pattern, err)
 	}
+	// THE PARAMETER IS CALLED GLOB AND IT HAS TO BEHAVE LIKE ONE. It was a
+	// literal suffix match, so the natural input "*.go" — a glob — matched no
+	// path ever and every such search reported "No matches found" for symbols
+	// that existed. A tool that answers a mistaken filter with a confident
+	// absence sends the agent off to write a duplicate of something it owns.
+	// A bare suffix like ".go" still works: it has no metacharacters and suffix
+	// is what it means.
+	match := func(string) bool { return true }
+	if glob != "" {
+		if strings.ContainsAny(glob, "*?[") {
+			if _, err := path.Match(glob, "probe"); err != nil {
+				return fmt.Sprintf("Error: %q is not a valid glob: %v", glob, err)
+			}
+			match = func(p string) bool {
+				ok, _ := path.Match(glob, path.Base(p))
+				return ok
+			}
+		} else {
+			match = func(p string) bool { return strings.HasSuffix(p, glob) }
+		}
+	}
+
 	var hits []string
 	for _, p := range s.Workspace.Paths() {
-		if glob != "" && !strings.HasSuffix(p, glob) {
+		if !match(p) {
 			continue
 		}
 		content, _ := s.Workspace.Read(p)

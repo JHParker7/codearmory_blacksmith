@@ -310,6 +310,14 @@ func (w *Workspace) Undo() (string, bool) {
 	}
 	u := w.last
 	w.last = nil
+	// The write being reverted was counted when it was applied, and a stage's
+	// "produced something" gate reads this count. A write that was fully undone
+	// is not a deliverable: without the decrement, write-then-undo-then-stall
+	// reported a checkless stage as finished over an empty tree — the exact case
+	// the gate was built for.
+	if w.writes > 0 {
+		w.writes--
+	}
 	if !u.existed {
 		delete(w.files, u.path)
 		return u.path, true

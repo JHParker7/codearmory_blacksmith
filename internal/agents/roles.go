@@ -182,6 +182,27 @@ func writing(extra ...string) []string {
 // otherwise sets Creator.Check and this is never consulted.
 const goCheck = "cd src && go build ./... && go test ./..."
 
+// specCheck is the EXPECTED-RED check: green when the tree compiles and the
+// tests FAIL.
+//
+// The specification stage's success is the opposite of everyone else's, and its
+// check was goCheck — green on passing tests — so a correct specification
+// (failing tests, per its own prompt) could never pass, and a tautological or
+// self-implemented one always did. The stage's contract was inverted by its own
+// gate.
+//
+// The pieces, in order, because each rules out a different wrong kind of red:
+//   - `go build` — the non-test tree compiles; a spec whose stubs do not build
+//     is a broken spec, not the expected red;
+//   - `go vet` — this is what TYPECHECKS THE TEST FILES, which `go build` does
+//     not touch. Without it, a test file full of syntax errors makes `go test`
+//     exit non-zero and reads as the expected red;
+//   - `! go test` — the tests, which now provably compile, fail.
+//
+// internal/gate solves this properly (SpecScript knows a compile failure from a
+// red suite); this is the simple shape's honest approximation of it.
+const specCheck = "cd src && go build ./... && go vet ./... && ! go test ./..."
+
 // rootCheck is the same check for a module at the repository ROOT.
 //
 // Used by the arrangements whose instructions put it there — the baseline and
@@ -274,7 +295,8 @@ func (c Creator) Spec(files map[string]string) *Agent {
 			"reason you intended.",
 		Guard:         tools.OnlyExt(".go"),
 		Tools:         writing(tools.RunCommand),
-		Check:         goCheck,
+		Check:         specCheck,
+		OwnCheck:      true,
 		MaxIterations: 60,
 		Temperature:   0.2,
 		MaxTokens:     12000,

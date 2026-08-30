@@ -85,6 +85,14 @@ type Options struct {
 	// product is prose, wrong for every stage that writes code.
 	Check string
 
+	// OwnCheck exempts this stage from the Creator's check override.
+	//
+	// The override is the operator saying what "the tests pass" means in their
+	// repository — and the specification stage's check means the OPPOSITE: green
+	// when the tests fail. Substituting the operator's command there would
+	// quietly re-invert the one stage whose gate points the other way.
+	OwnCheck bool
+
 	MaxIterations int
 	Temperature   float64
 	MaxTokens     int
@@ -129,8 +137,8 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 // checkFor resolves the command a stage gates on, preferring what the operator
 // configured for this repository over the stage's own default.
 func (c Creator) checkFor(o Options) string {
-	if o.Check == "" {
-		return ""
+	if o.Check == "" || o.OwnCheck {
+		return o.Check
 	}
 	if c.Check != "" {
 		return c.Check
@@ -220,24 +228,53 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			return out, fmt.Errorf("%s: turn %d: %w", a.opts.Name, out.Iterations, err)
 		}
 
-		// NO TOOL CALL MEANS IT ANSWERED. For a stage with a check that is
-		// premature — the check is what decides — so it gets told so and the turn
-		// is spent. For a stage without one, the answer IS the deliverable.
+		// NO TOOL CALL MEANS IT ANSWERED — but an answer only finishes a stage
+		// that has nothing else outstanding, and there are three ways to owe more:
+		//
+		//   - the stage has a CHECK, and the check is what decides;
+		//   - the reply was TRUNCATED, so this is half an answer that stopped at a
+		//     ceiling, not a finished one — accepting it ships half a plan;
+		//   - the stage's deliverable is FILES (it was given write_file) and it has
+		//     not written any. An architect whose plan exists only as prose printed
+		//     to stdout hands the next stage an empty tree, which is the same
+		//     empty-tree pass the stall path already refuses.
+		//
+		// Every refusal names the cause, and NONE of them dodges the idle counter:
+		// answering in prose changes nothing, and a model that does it every turn
+		// is exactly as stuck as one re-reading a file. The `continue` that used to
+		// live here skipped the stall bound, so that model burned its whole budget
+		// unbounded.
 		if len(res.Calls) == 0 {
-			if a.opts.Check == "" {
+			truncated := res.Truncated(a.opts.MaxTokens)
+			owesFiles := a.offersTool(tools.WriteFile) && a.space.Writes() == 0
+
+			if a.opts.Check == "" && !truncated && !owesFiles {
 				out.Answer = res.Content
 				out.Passed = true
 				a.logf("%s: finished after %d turns", a.opts.Name, out.Iterations)
 				return out, nil
 			}
-			out.Trail = append(out.Trail, Step{
-				Tool: "(no tool call)",
-				Args: trim(res.Content, 400),
-				Result: "You answered in prose, but this stage ends when its check passes, not " +
+
+			var notice string
+			switch {
+			case truncated:
+				notice = "Your reply was CUT OFF at the token limit — it is not finished, it " +
+					"ran out of room. Do not retry it at the same length: say less, or do the " +
+					"work through tool calls instead of prose."
+			case a.opts.Check != "":
+				notice = "You answered in prose, but this stage ends when its check passes, not " +
 					"when you say it is done. Call " + tools.RunCommand + " to run the check, or " +
-					tools.WriteFile + " to change something first.",
+					tools.WriteFile + " to change something first."
+			default:
+				notice = "You answered in prose, but this stage's deliverable is FILES and you " +
+					"have not written any. Whatever you just said exists nowhere the next stage " +
+					"can read it. Put it in a file with " + tools.WriteFile + "."
+			}
+			out.Trail = append(out.Trail, Step{
+				Tool:   "(no tool call)",
+				Args:   trim(res.Content, 400),
+				Result: notice,
 			})
-			continue
 		}
 
 		for _, call := range res.Calls {
@@ -324,6 +361,18 @@ func progressed(name, result string) bool {
 		return !strings.HasPrefix(result, "Error:")
 	case tools.RunCommand:
 		return true
+	}
+	return false
+}
+
+// offersTool reports whether this agent's set includes a tool, which is how the
+// loop tells a stage whose deliverable is files (it can write them) from one
+// whose deliverable is its answer (it cannot).
+func (a *Agent) offersTool(name string) bool {
+	for _, t := range a.tools.Definitions() {
+		if t.Name == name {
+			return true
+		}
 	}
 	return false
 }
@@ -418,6 +467,17 @@ func (a *Agent) renderKnown(known []string) string {
 			continue
 		}
 		block := fmt.Sprintf("=== %s ===\n%s\n\n", p, numbered(content))
+
+		// A FILE TOO BIG FOR THE WHOLE BUDGET cannot be handled by omission.
+		// "Read it if you need it" is the omission remedy, and for this file it is
+		// a trap: reading changes nothing, because the next render omits it again
+		// — measured shape: an unbreakable loop of read, omit, stale-notice. So an
+		// oversized file is shown head and tail with the ELIDED RANGE NAMED, which
+		// is not the silent half-file this package refuses to serve elsewhere: the
+		// agent is told exactly which lines it cannot see and how to address them.
+		if len(block) > MaxKnownChars {
+			block = fmt.Sprintf("=== %s ===\n%s\n\n", p, elided(content))
+		}
 		if spent+len(block) > MaxKnownChars {
 			omitted = append(omitted, p)
 			continue
@@ -434,6 +494,37 @@ func (a *Agent) renderKnown(known []string) string {
 			strings.Join(omitted, ", "))
 	}
 	return b.String()
+}
+
+// ElidedHeadLines and ElidedTailLines shape the view of a file too large to
+// show whole. The head carries the declarations and the tail the most recent
+// growth; what is lost is the middle, and the elision names it.
+const (
+	ElidedHeadLines = 250
+	ElidedTailLines = 120
+)
+
+// elided renders a file's head and tail with the missing range named.
+func elided(content string) string {
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	head, tail := ElidedHeadLines, ElidedTailLines
+	if len(lines) <= head+tail {
+		return numbered(content)
+	}
+	width := len(fmt.Sprint(len(lines)))
+	var b strings.Builder
+	for i := 0; i < head; i++ {
+		fmt.Fprintf(&b, "%*d\t%s\n", width, i+1, lines[i])
+	}
+	fmt.Fprintf(&b,
+		"… lines %d-%d NOT SHOWN (%d lines): this file is too large to show whole. Address "+
+			"edits in this range by \"start_line\"/\"end_line\" or \"decl\"; the numbering above "+
+			"and below is real …\n",
+		head+1, len(lines)-tail, len(lines)-head-tail)
+	for i := len(lines) - tail; i < len(lines); i++ {
+		fmt.Fprintf(&b, "%*d\t%s\n", width, i+1, lines[i])
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // numbered prefixes each line with its number, matching what read_files serves.
