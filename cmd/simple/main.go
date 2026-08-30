@@ -150,6 +150,53 @@ func run(repoDir, task, only string, dryRun, single, plan bool) error {
 		maker.Sandbox = box
 	}
 
+	// THE WHOLE RUN RETRIES ON FAILURE, from the ORIGINAL tree. The seeds vary
+	// wildly on the same input — measured on this arrangement, roughly one run
+	// in six draws a suite its developer cannot converge on — so rerolling the
+	// whole run converts a ~15% per-run failure into (0.15)^3 at the cost of
+	// time on the bad seeds only. The revert matters as much as the retry: the
+	// failed attempt's tree is the thing the next attempt must NOT inherit,
+	// because the reroll's whole value is a fresh draw.
+	return runWithReroll(ctx, maker, stages, files, repoDir, task)
+}
+
+// runWithReroll gives the whole run MaxRunAttempts fresh draws.
+func runWithReroll(
+	ctx context.Context, maker agents.Creator, stages []string,
+	files map[string]string, repoDir, task string,
+) error {
+	original := copyTree(files)
+	var lastErr error
+	for attempt := 1; attempt <= MaxRunAttempts; attempt++ {
+		if attempt > 1 {
+			slog.Warn("the run failed; reverting to the original tree for a fresh attempt",
+				"attempt", attempt, "of", MaxRunAttempts, "error", lastErr.Error())
+			if err := revertTree(repoDir, original, files); err != nil {
+				return fmt.Errorf("reverting %s: %w", repoDir, err)
+			}
+			files = copyTree(original)
+		}
+		files, lastErr = executeRun(ctx, maker, stages, files, repoDir, task)
+		if lastErr == nil {
+			return nil
+		}
+		// An operator's ctrl-C is not a bad seed.
+		if ctx.Err() != nil {
+			return lastErr
+		}
+	}
+	return fmt.Errorf("after %d attempts: %w", MaxRunAttempts, lastErr)
+}
+
+// MaxRunAttempts bounds the whole-run reroll.
+const MaxRunAttempts = 3
+
+// executeRun works the stages in order over the tree and returns the tree as
+// the last stage left it, finished or not.
+func executeRun(
+	ctx context.Context, maker agents.Creator, stages []string,
+	files map[string]string, repoDir, task string,
+) (map[string]string, error) {
 	for _, name := range stages {
 		build := func(tree map[string]string) (*agents.Agent, error) {
 			return stage(maker, name, tree)
@@ -163,10 +210,10 @@ func run(repoDir, task, only string, dryRun, single, plan bool) error {
 		// finishes.
 		files = tree
 		if err := writeTree(repoDir, files); err != nil {
-			return fmt.Errorf("writing %s: %w", repoDir, err)
+			return files, fmt.Errorf("writing %s: %w", repoDir, err)
 		}
 		if runErr != nil {
-			return fmt.Errorf("stage %s: %w", name, runErr)
+			return files, fmt.Errorf("stage %s: %w", name, runErr)
 		}
 
 		slog.Info("stage finished",
@@ -183,13 +230,37 @@ func run(repoDir, task, only string, dryRun, single, plan bool) error {
 				why = fmt.Sprintf("stopped after %d turns having changed nothing in the last %d",
 					outcome.Iterations, agents.MaxIdleTurns)
 			}
-			return fmt.Errorf("stage %s %s and its check never passed. What it last said:\n%s",
+			return files, fmt.Errorf("stage %s %s and its check never passed. What it last said:\n%s",
 				name, why, orNone(outcome.LastCheck))
 		}
 	}
 
 	slog.Info("pipeline finished", "repo", repoDir, "files", len(files))
-	return nil
+	return files, nil
+}
+
+func copyTree(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// revertTree puts the directory back to the original snapshot: files the
+// failed attempt created are removed, files it changed are rewritten. Only
+// paths the attempt is known to have produced are touched — this must never
+// become a general rm -rf over a directory that can be a real checkout.
+func revertTree(dir string, original, dirty map[string]string) error {
+	for rel := range dirty {
+		if _, kept := original[rel]; kept {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, filepath.FromSlash(rel))); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return writeTree(dir, original)
 }
 
 // planeCredential is how this host authenticates to its own sandbox plane.
