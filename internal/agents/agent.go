@@ -60,7 +60,7 @@ type Creator struct {
 	OnWrite func(path, content string, deleted bool, message string)
 
 	// FileTicket files a finding on the board, for the stages offered the tool.
-	FileTicket func(title, body, severity string) (string, error)
+	FileTicket func(kind, title, body, severity string) (string, error)
 }
 
 // Options is what makes one stage different from another.
@@ -88,6 +88,10 @@ type Options struct {
 	// Tools limits what is offered. Empty offers everything, which is almost
 	// never what a stage wants.
 	Tools []string
+
+	// TicketKind labels the findings a reviewing stage files: "security" or
+	// "quality". Empty for stages that file none.
+	TicketKind string
 
 	// Check is the command that decides whether this stage succeeded. Empty means
 	// the stage ends when the model stops calling tools — right for a stage whose
@@ -163,6 +167,7 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			Names:      o.Tools,
 			OnWrite:    c.OnWrite,
 			FileTicket: c.FileTicket,
+			TicketKind: o.TicketKind,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,

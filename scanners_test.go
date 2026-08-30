@@ -29,7 +29,7 @@ func TestScannerReportsJoinTheTreeUnderScan(t *testing.T) {
 	defer func() { scanSpecs = nil }()
 
 	box := &scanBox{}
-	files := runScanners(context.Background(), box, map[string]string{"main.go": "package main\n"})
+	files := runScanners(context.Background(), box, map[string]string{"main.go": "package main\n"}, "plan-sec")
 
 	for _, want := range []string{"scan/sast.txt", "scan/sca.txt"} {
 		report, ok := files[want]
@@ -59,7 +59,7 @@ func TestTheOperatorsScannersWin(t *testing.T) {
 	defer func() { scanSpecs = nil }()
 
 	box := &scanBox{}
-	runScanners(context.Background(), box, map[string]string{})
+	runScanners(context.Background(), box, map[string]string{}, "plan-sec")
 	if box.commands[0] != "semgrep scan" || box.commands[1] != "osv-scanner ." {
 		t.Fatalf("the operator's scanners were ignored: %v", box.commands)
 	}
@@ -72,7 +72,7 @@ func TestNoSandboxMeansNoScanNotAFailure(t *testing.T) {
 	wireScanners(config.Config{})
 	defer func() { scanSpecs = nil }()
 
-	files := runScanners(context.Background(), nil, map[string]string{"a.md": "x\n"})
+	files := runScanners(context.Background(), nil, map[string]string{"a.md": "x\n"}, "plan-sec")
 	if _, ok := files["scan/sast.txt"]; ok {
 		t.Fatal("a scan report appeared without a sandbox to have run it")
 	}

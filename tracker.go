@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/code-armory-app/blacksmith/internal/platform"
 	"github.com/code-armory-app/blacksmith/internal/ticket"
@@ -73,14 +74,27 @@ func closeRequestTicket(passed bool, note string) {
 	curRequest = ""
 }
 
-// fileFinding is what the security reviewer's file_ticket tool lands on: one
-// finding, one child ticket of the request that produced it.
-func fileFinding(title, body, severity string) (string, error) {
+// fileFinding is what a reviewer's file_ticket tool lands on: one finding, one
+// child ticket of the request that produced it, KIND-labelled so auto-mode can
+// work security before quality. Both reviewers file through here; the kind is
+// bound by the stage, not chosen by the model.
+//
+// DEDUP IS SERVER-SIDE, because the model cannot be trusted to check first —
+// the first scanner-fed run filed the same "no authentication on any endpoint"
+// three times, once as a ticket ABOUT the duplication. An open finding whose
+// title already exists on the board is not filed again; its id is returned as
+// if it were, so the reviewer sees success and moves on.
+func fileFinding(kind, title, body, severity string) (string, error) {
 	if tickets == nil {
 		return "", fmt.Errorf("no ticket store configured")
 	}
+	full := kind + ": " + title
+	if id := existingFindingID(full); id != "" {
+		slog.Info("finding already on the board; not refiled", "ticket", id, "title", full)
+		return id, nil
+	}
 	t := ticket.Ticket{
-		Title:       "security: " + title,
+		Title:       full,
 		Description: body,
 		Status:      ticket.StatusOpen,
 		Priority:    severity,
@@ -94,4 +108,45 @@ func fileFinding(title, body, severity string) (string, error) {
 		return "", err
 	}
 	return created.ID, nil
+}
+
+// existingFindingID returns the id of an OPEN ticket with this exact title, or
+// empty. Exact-title only on purpose: fuzzy matching would silently swallow a
+// genuinely new finding whose wording merely resembled an old one, and a
+// missed finding is worse than a duplicate a person closes in a click.
+func existingFindingID(title string) string {
+	if tickets == nil {
+		return ""
+	}
+	open, err := tickets.List(context.Background(), ticket.ListOpts{Status: ticket.StatusOpen})
+	if err != nil {
+		slog.Warn("dedup: could not list open tickets; filing anyway", "error", err)
+		return ""
+	}
+	for _, t := range open {
+		if t.Title == title {
+			return t.ID
+		}
+	}
+	return ""
+}
+
+// openFindings renders the board's current open findings for a reviewer's
+// context, so it knows what is already filed before it starts and does not
+// spend turns re-deriving them. Empty when the board is unreachable or clean.
+func openFindings() string {
+	if tickets == nil {
+		return ""
+	}
+	open, err := tickets.List(context.Background(), ticket.ListOpts{Status: ticket.StatusOpen})
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, t := range open {
+		if strings.HasPrefix(t.Title, "security: ") || strings.HasPrefix(t.Title, "quality: ") {
+			fmt.Fprintf(&b, "- [%s] %s\n", t.Priority, t.Title)
+		}
+	}
+	return b.String()
 }

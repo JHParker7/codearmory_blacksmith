@@ -61,11 +61,22 @@ func TestTheSecurityReviewerPromptCarriesBothContracts(t *testing.T) {
 	}
 }
 
-// The review runs LAST: it reads the finished change.
-func TestTheSecurityReviewRunsLast(t *testing.T) {
+// Security review runs BEFORE the code review: security findings are higher
+// priority, and running the security reviewer first means its findings are on
+// the board (and deduped against) by the time the code reviewer files.
+func TestTheSecurityReviewRunsBeforeTheCodeReview(t *testing.T) {
 	got := PlanStages()
-	if got[len(got)-1] != StagePlanSec {
-		t.Fatalf("the security review is not the last stage: %v", got)
+	sec, rev := -1, -1
+	for i, n := range got {
+		if n == StagePlanSec {
+			sec = i
+		}
+		if n == StagePlanReview {
+			rev = i
+		}
+	}
+	if sec < 0 || rev < 0 || sec > rev {
+		t.Fatalf("security review does not precede code review: %v", got)
 	}
 }
 

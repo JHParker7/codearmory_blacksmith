@@ -25,7 +25,7 @@ func TestAReviewerThatFiledTicketsAndHitItsBudgetHasPassed(t *testing.T) {
 	filed := 0
 	a := Creator{
 		Gateway: gw,
-		FileTicket: func(string, string, string) (string, error) {
+		FileTicket: func(string, string, string, string) (string, error) {
 			filed++
 			return "tk", nil
 		},
@@ -52,7 +52,7 @@ func TestAReviewerThatFiledNothingAndStalledFails(t *testing.T) {
 	for i := 0; i < o.MaxIterations; i++ {
 		gw.replies = append(gw.replies, calls(tools.ReadFiles, `{"paths":["a.go"]}`))
 	}
-	a := Creator{Gateway: gw, FileTicket: func(string, string, string) (string, error) { return "tk", nil }}.
+	a := Creator{Gateway: gw, FileTicket: func(string, string, string, string) (string, error) { return "tk", nil }}.
 		New(map[string]string{"a.go": "package a\n"}, o)
 
 	out, err := a.Run(context.Background(), "review")
@@ -72,7 +72,7 @@ func TestAReviewerWithACleanBillPassesOnItsVerdict(t *testing.T) {
 	gw := &fakeGateway{replies: []model.ChatResult{
 		{Content: "No real findings. Verdict: ship."},
 	}}
-	a := Creator{Gateway: gw, FileTicket: func(string, string, string) (string, error) { return "tk", nil }}.
+	a := Creator{Gateway: gw, FileTicket: func(string, string, string, string) (string, error) { return "tk", nil }}.
 		New(map[string]string{"a.go": "package a\n"}, o)
 
 	out, err := a.Run(context.Background(), "review")

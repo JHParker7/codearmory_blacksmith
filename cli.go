@@ -306,15 +306,26 @@ func executeRun(
 	files map[string]string, repoDir, task string,
 ) (map[string]string, error) {
 	for _, name := range stages {
-		// THE SCANNERS RUN BETWEEN THE DEVELOPER AND THE REVIEWER: their
-		// reports join the tree just before the one stage built to read them.
-		if name == agents.StagePlanSec {
-			files = runScanners(ctx, maker.Sandbox, files)
+		// THE SCANNERS RUN BEFORE THE REVIEWER THAT CONSUMES THEM: SAST and
+		// SCA before the security review, lint before the code review, each
+		// report joining the tree just before its stage.
+		if name == agents.StagePlanSec || name == agents.StagePlanReview {
+			files = runScanners(ctx, maker.Sandbox, files, name)
 		}
 		build := func(tree map[string]string) (*agents.Agent, error) {
 			return stage(maker, name, tree)
 		}
-		outcome, tree, runErr := runStage(ctx, build, files, task)
+		// A REVIEWER IS TOLD WHAT IS ALREADY ON THE BOARD, so it does not spend
+		// turns re-deriving findings a past run filed. Belt to the server-side
+		// dedup's braces: the model reads what exists, and fileFinding refuses a
+		// re-file even if it tries.
+		stageTask := task
+		if name == agents.StagePlanSec || name == agents.StagePlanReview {
+			if existing := openFindings(); existing != "" {
+				stageTask = task + "\n\n--- findings already on the board (do NOT refile) ---\n" + existing
+			}
+		}
+		outcome, tree, runErr := runStage(ctx, build, files, stageTask)
 
 		// THE TREE IS CARRIED FORWARD EVEN WHEN THE STAGE FAILED, and written out
 		// before anything is reported. What a failed developer wrote is most of the
@@ -518,6 +529,8 @@ func stage(c agents.Creator, name string, files map[string]string) (*agents.Agen
 		return c.PlanFollowingDev(files), nil
 	case agents.StagePlanSec:
 		return c.PlanSec(files), nil
+	case agents.StagePlanReview:
+		return c.PlanReview(files), nil
 	}
 	return c.Stage(name, files)
 }

@@ -79,7 +79,16 @@ type Set struct {
 	// repository is a curated vulnerability list handed to anyone with clone
 	// access — the board lives behind the gatekeeper. Nil means no store is
 	// wired, and the tool says so instead of pretending.
-	FileTicket func(title, body, severity string) (string, error)
+	//
+	// KIND ("security" or "quality") is bound per
+	// stage in TicketKind, not chosen by the model — a stage knows what kind of
+	// review it is, and letting the reviewer label its own findings invites a
+	// quality nit filed as a security critical.
+	FileTicket func(kind, title, body, severity string) (string, error)
+
+	// TicketKind labels every finding this stage files. Empty for stages that
+	// file none.
+	TicketKind string
 
 	// OnWrite hears every edit that actually landed: the path, its content
 	// after the edit (empty with deleted=true when an undo removed it), and the
@@ -404,7 +413,7 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 			return "Error: a ticket needs both a title and a body — it is work for a person, " +
 				"and a person cannot act on an empty one.", nil
 		}
-		id, err := s.FileTicket(a.Title, a.Body, a.Severity)
+		id, err := s.FileTicket(s.TicketKind, a.Title, a.Body, a.Severity)
 		if err != nil {
 			return "Error: the board refused the ticket: " + err.Error() +
 				". Put the finding in your final answer instead.", nil

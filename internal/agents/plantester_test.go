@@ -47,7 +47,7 @@ func TestTheTestAuthorsCheckExpectsRed(t *testing.T) {
 // The order is the arrangement: plan, then red tests, then green.
 func TestThePlanArmRunsPlanThenTestsThenDev(t *testing.T) {
 	got := PlanStages()
-	want := []string{StagePlanArchitect, StagePlanTest, StagePlanDev, StagePlanSec}
+	want := []string{StagePlanArchitect, StagePlanTest, StagePlanDev, StagePlanSec, StagePlanReview}
 	if len(got) != len(want) {
 		t.Fatalf("PlanStages() = %v", got)
 	}

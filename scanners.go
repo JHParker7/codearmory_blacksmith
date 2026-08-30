@@ -23,9 +23,10 @@ import (
 
 // scanSpec is one scanner: where its report lands, and what runs.
 type scanSpec struct {
-	name string
-	file string
-	cmd  string
+	name   string
+	file   string
+	cmd    string
+	before string // the stage whose reports these are
 }
 
 // scanSpecs is wired at startup from the operator's config, with the Go
@@ -43,9 +44,14 @@ func wireScanners(cfg config.Config) {
 	if sca == "" {
 		sca = "govulncheck ./..."
 	}
+	lint := cfg.Repo.LintCommand
+	if lint == "" {
+		lint = "staticcheck ./..."
+	}
 	scanSpecs = []scanSpec{
-		{name: "sast", file: "scan/sast.txt", cmd: sast},
-		{name: "sca", file: "scan/sca.txt", cmd: sca},
+		{name: "sast", file: "scan/sast.txt", cmd: sast, before: "plan-sec"},
+		{name: "sca", file: "scan/sca.txt", cmd: sca, before: "plan-sec"},
+		{name: "lint", file: "scan/lint.txt", cmd: lint, before: "plan-review"},
 	}
 }
 
@@ -56,11 +62,14 @@ func wireScanners(cfg config.Config) {
 // could not run at all still produces a report saying so, because the
 // reviewer reading "command not found" knows to lean on its own eyes, while a
 // silently missing file reads as a clean bill.
-func runScanners(ctx context.Context, box tools.Sandbox, files map[string]string) map[string]string {
+func runScanners(ctx context.Context, box tools.Sandbox, files map[string]string, before string) map[string]string {
 	if box == nil || len(scanSpecs) == 0 {
 		return files
 	}
 	for _, spec := range scanSpecs {
+		if spec.before != before {
+			continue
+		}
 		out, err := box.Run(ctx, files, spec.cmd)
 		var b strings.Builder
 		fmt.Fprintf(&b, "$ %s\n", spec.cmd)

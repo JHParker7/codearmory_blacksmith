@@ -27,13 +27,14 @@ const (
 	StagePlanTest      = "plan-test"
 	StagePlanDev       = "plan-dev"
 	StagePlanSec       = "plan-sec"
+	StagePlanReview    = "plan-review"
 )
 
 // PlanStages are the plan arm's stages, in order: plan the work and the tests,
 // write the tests red, make them green, then read the result with an
 // attacker's eyes.
 func PlanStages() []string {
-	return []string{StagePlanArchitect, StagePlanTest, StagePlanDev, StagePlanSec}
+	return []string{StagePlanArchitect, StagePlanTest, StagePlanDev, StagePlanSec, StagePlanReview}
 }
 
 // Stages are the roles in the order they run.
@@ -317,6 +318,45 @@ func (c Creator) PlanSec(files map[string]string) *Agent {
 			"verdict: ship, ship with fixes, or stop.",
 		Guard:         tools.DenyAll,
 		Tools:         append(append([]string{}, readOnly...), tools.FileTicket),
+		TicketKind:    "security",
+		MaxIterations: 25,
+		Temperature:   0.2,
+		MaxTokens:     8000,
+	})
+}
+
+// PlanReview is the CODE reviewer: it reads the finished change for quality —
+// correctness bugs the tests missed, error handling that swallows failures,
+// duplication, dead code, unclear names, missing docs on exported symbols —
+// and files each as a QUALITY ticket. Same shape as the security reviewer and
+// for the same reasons: it writes nothing into the tree, findings go to the
+// board, and staticcheck's report under scan/ is a lead to verify, not a
+// verdict to copy.
+//
+// LOWER PRIORITY THAN SECURITY BY CONSTRUCTION: its tickets are kinded
+// "quality", and auto-mode works security kinds first. A quality nit is worth
+// filing and worth fixing when nothing more dangerous is waiting, which is
+// exactly the ordering the kind encodes.
+func (c Creator) PlanReview(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  StagePlanReview,
+		Class: model.ClassLarge,
+		Prompt: "You are a code reviewer reading a finished change for QUALITY, not security " +
+			"— a separate reviewer already covered security. File each real issue as a ticket " +
+			"with file_ticket: a correctness bug the tests do not catch, error handling that " +
+			"swallows or mislabels a failure, duplicated logic, dead code, a misleading name, a " +
+			"missing doc comment on an exported symbol, a resource left unclosed. One ticket per " +
+			"issue; in the body name the FILE and LINE, say what is wrong and the change to make, " +
+			"and rate it high, medium or low.\n\n" +
+			"NEVER write into the repository — you review, you do not fix; the tickets are the " +
+			"work. If staticcheck's report exists under scan/lint.txt, read it FIRST as leads: " +
+			"verify each against the code, file the real ones, name the false positives in your " +
+			"answer. Findings already on the board are listed in your task; do NOT refile them. " +
+			"If you find nothing worth a person's time, file nothing and say so. Finish with a " +
+			"one-line verdict on the change's quality.",
+		Guard:         tools.DenyAll,
+		Tools:         append(append([]string{}, readOnly...), tools.FileTicket),
+		TicketKind:    "quality",
 		MaxIterations: 25,
 		Temperature:   0.2,
 		MaxTokens:     8000,
