@@ -259,6 +259,10 @@ func firstLineOf(s string) string {
 // MaxRunAttempts bounds the whole-run reroll.
 const MaxRunAttempts = 3
 
+// inTUI is set for the screen's lifetime so nothing else writes to a terminal
+// the alternate buffer owns.
+var inTUI bool
+
 // announce is the seam the TUI listens through. A package variable rather
 // than a parameter because runStage and executeRun are load-bearing, tested
 // signatures and the batch CLI has no listener; the default is silence.
@@ -296,7 +300,15 @@ func executeRun(
 		slog.Info("stage finished",
 			"stage", name, "passed", outcome.Passed, "turns", outcome.Iterations)
 		if outcome.Answer != "" {
-			fmt.Printf("\n--- %s ---\n%s\n", name, outcome.Answer)
+			// NOT STDOUT UNDER THE TUI. The screen is an alternate buffer and a
+			// Printf lands underneath it, bleeding through the frame — seen live
+			// on the first real session, the architect's prose stamped across the
+			// footer. The log keeps it either way; batch keeps its stdout.
+			if inTUI {
+				slog.Info("stage answer", "stage", name, "answer", outcome.Answer)
+			} else {
+				fmt.Printf("\n--- %s ---\n%s\n", name, outcome.Answer)
+			}
 		}
 		if !outcome.Passed {
 			announce("stage-fail", name, 0)

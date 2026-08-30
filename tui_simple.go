@@ -486,6 +486,8 @@ func runTUI(base string) error {
 	if err != nil {
 		return fmt.Errorf("reading the workspace: %w", err)
 	}
+	inTUI = true
+	defer func() { inTUI = false }()
 	sess := &session{maker: maker, stages: stages, base: base, events: events, seed: seed}
 	m := tuiModel{sess: sess, ctx: ctx}
 
