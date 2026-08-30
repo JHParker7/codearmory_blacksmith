@@ -52,9 +52,12 @@ type finding struct {
 // pickFindings returns the open findings in the order auto-mode should work
 // them: all security before all quality, each block by severity. Tickets that
 // are not reviewer findings — requests, anything unkinded — are skipped.
-func pickFindings(open []ticket.Ticket) []finding {
+func pickFindings(open []ticket.Ticket, skip map[string]bool) []finding {
 	var out []finding
 	for _, t := range open {
+		if skip[t.ID] {
+			continue // already attempted this session; left open for a person
+		}
 		kind := ""
 		switch {
 		case strings.HasPrefix(t.Title, "security: "):
@@ -127,7 +130,7 @@ func resolveFinding(id string, fixed bool, note string) {
 // autoNext works ONE finding: pick, clone, fix, push, resolve. It returns
 // whether it found anything to do, so the caller's loop can stop when the
 // board is drained rather than spin.
-func autoNext(ctx context.Context, maker agents.Creator, base string) (worked bool, err error) {
+func autoNext(ctx context.Context, maker agents.Creator, base string, attempted map[string]bool) (worked bool, err error) {
 	if tickets == nil {
 		return false, fmt.Errorf("auto mode needs a ticket board; none is configured")
 	}
@@ -135,11 +138,17 @@ func autoNext(ctx context.Context, maker agents.Creator, base string) (worked bo
 	if err != nil {
 		return false, fmt.Errorf("reading the board: %w", err)
 	}
-	todo := pickFindings(open)
+	todo := pickFindings(open, attempted)
 	if len(todo) == 0 {
 		return false, nil
 	}
 	f := todo[0]
+	// ATTEMPTED ONCE PER SESSION, recorded BEFORE the work so that a finding
+	// left open for a person is not re-picked next cycle. A truly unfixable
+	// finding — auth the tests forbid, a design change no minimal edit makes —
+	// stays open, but auto-mode moves past it instead of grinding forever.
+	// Recorded before, not after, so a mid-fix crash cannot resurrect the loop.
+	attempted[f.id] = true
 	slog.Info("auto: working a finding", "kind", f.kind, "severity", f.severity, "title", f.title)
 
 	repo, ok := repoOfFinding(f)

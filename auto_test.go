@@ -21,7 +21,7 @@ func TestSecurityFindingsAreWorkedBeforeQuality(t *testing.T) {
 		tk("q2", "quality: unclear name", "critical"),
 		tk("s2", "security: SQL injection", "critical"),
 	}
-	got := pickFindings(open)
+	got := pickFindings(open, nil)
 
 	if len(got) != 4 {
 		t.Fatalf("picked %d findings, want 4 (the request skipped): %+v", len(got), got)
@@ -46,7 +46,7 @@ func TestNonFindingTicketsAreSkipped(t *testing.T) {
 		tk("r", "request: something", "high"),
 		tk("x", "a hand-written ticket", "high"),
 	}
-	if got := pickFindings(open); len(got) != 0 {
+	if got := pickFindings(open, nil); len(got) != 0 {
 		t.Fatalf("picked non-findings: %+v", got)
 	}
 }
@@ -58,7 +58,7 @@ func TestUnknownSeveritySortsLast(t *testing.T) {
 		tk("weird", "security: odd", "banana"),
 		tk("real", "security: real", "medium"),
 	}
-	got := pickFindings(open)
+	got := pickFindings(open, nil)
 	if got[0].id != "real" {
 		t.Fatalf("the unknown severity jumped the queue: %+v", got)
 	}

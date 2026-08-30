@@ -330,8 +330,12 @@ func runAuto(base string) error {
 	}
 
 	slog.Info("auto mode: working the board")
+	// One attempt per finding per session: an unfixable finding is left open
+	// for a person and not re-picked, so the loop drains the board rather than
+	// grinding on the hardest ticket.
+	attempted := map[string]bool{}
 	for ctx.Err() == nil {
-		worked, err := autoNext(ctx, maker, base)
+		worked, err := autoNext(ctx, maker, base, attempted)
 		if err != nil {
 			slog.Warn("auto: skipping a cycle", "error", err)
 		}
