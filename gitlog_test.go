@@ -56,12 +56,13 @@ func TestEveryWriteIsACommitUnderItsOwnMessage(t *testing.T) {
 	}
 }
 
-// The push lands the run as its NAMESPACED branch of the shared repository —
-// one repo, <project>/<run> branches, so a new project is a new prefix and
-// never a new repository on the plane.
-func TestTheRunPushesAsItsNamespacedBranch(t *testing.T) {
-	remote := t.TempDir()
-	gitOut(t, remote, "init", "--bare", "-q")
+// EACH PROJECT IS ITS OWN REPOSITORY — the operator's correction of the
+// shared-repo design, whose branches dragged every project's history into
+// every clone. The first push creates the repo through the operator's mkrepo
+// one-liner (here: a plain git init --bare, exactly the "mkdir x; git init"
+// the operator described) and lands the run as a run/<name> branch.
+func TestTheRunPushesToItsProjectsOwnRepository(t *testing.T) {
+	server := t.TempDir() // stands in for /srv/git on the plane
 
 	work := filepath.Join(t.TempDir(), "myproject", "003-build-api")
 	g := newGitLog(work, "build it")
@@ -70,18 +71,36 @@ func TestTheRunPushesAsItsNamespacedBranch(t *testing.T) {
 	}
 	g.write("main.go", "package main\n", false, "feat: the entry point")
 	g.mark("run: passed")
-	g.push(remote, branchFor(work))
+	g.pushRun(server, "git init --bare -q "+server+"/%s.git", work)
 
-	refs := gitOut(t, remote, "for-each-ref", "--format=%(refname:short)")
-	if refs != "myproject/003-build-api" {
-		t.Fatalf("the branch is %q, want myproject/003-build-api", refs)
+	refs := gitOut(t, filepath.Join(server, "myproject.git"),
+		"for-each-ref", "--format=%(refname:short)")
+	if refs != "run/003-build-api" {
+		t.Fatalf("the branch is %q, want run/003-build-api", refs)
+	}
+	// And a second project is a second repository, not a neighbouring branch.
+	work2 := filepath.Join(t.TempDir(), "otherproj", "001-thing")
+	g2 := newGitLog(work2, "other")
+	g2.write("a.md", "x\n", false, "docs: x")
+	g2.pushRun(server, "git init --bare -q "+server+"/%s.git", work2)
+	if _, err := os.Stat(filepath.Join(server, "otherproj.git")); err != nil {
+		t.Fatalf("the second project did not get its own repository: %v", err)
+	}
+	refs = gitOut(t, filepath.Join(server, "myproject.git"),
+		"for-each-ref", "--format=%(refname:short)")
+	if strings.Contains(refs, "otherproj") {
+		t.Fatalf("the second project leaked into the first repository: %q", refs)
 	}
 }
 
 // A rerun of the same run directory is the same branch's newer truth: the
 // forced push replaces it rather than failing on non-fast-forward.
 func TestARerunReplacesItsOwnBranch(t *testing.T) {
-	remote := t.TempDir()
+	base := t.TempDir()
+	remote := filepath.Join(base, "proj.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	gitOut(t, remote, "init", "--bare", "-q")
 
 	work := filepath.Join(t.TempDir(), "proj", "001-x")
@@ -90,14 +109,14 @@ func TestARerunReplacesItsOwnBranch(t *testing.T) {
 		t.Skip("no git on this host")
 	}
 	g.write("a.md", "one\n", false, "docs: one")
-	g.push(remote, branchFor(work))
+	g.pushRun(filepath.Dir(remote), "", work)
 
 	os.RemoveAll(work)
 	g2 := newGitLog(work, "second")
 	g2.write("a.md", "two\n", false, "docs: two")
-	g2.push(remote, branchFor(work))
+	g2.pushRun(filepath.Dir(remote), "", work)
 
-	subjects := gitOut(t, remote, "log", "proj/001-x", "--format=%s")
+	subjects := gitOut(t, remote, "log", "run/001-x", "--format=%s")
 	if !strings.Contains(subjects, "request: second") || strings.Contains(subjects, "request: first") {
 		t.Fatalf("the rerun did not replace the branch:\n%s", subjects)
 	}
@@ -110,7 +129,7 @@ func TestAMissingJournalNeverPanics(t *testing.T) {
 	g.write("a.go", "x", false, "feat: x")
 	g.mark("m")
 	g.snapshot("s")
-	g.push("url", "b")
+	g.pushRun("url", "", "/x/y")
 
 	dead := &gitLog{dir: "/nonexistent/nowhere"}
 	dead.write("a.go", "x", false, "feat: x")

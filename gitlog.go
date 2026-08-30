@@ -1,16 +1,17 @@
 package main
 
 // The run's git history: one commit per landed write, a mark per stage and
-// per draw, pushed as a NAMESPACED BRANCH of one shared repository on the
-// control plane.
+// per draw, pushed to the project's OWN repository on the control plane as a
+// run/<name> branch.
 //
-// One repository with <project>/<run> branches, rather than a repository per
-// project, because git daemon cannot create repositories over the wire — a
-// repo per project means plane surgery for every new project, which is
-// exactly the "reconfigure to use it elsewhere" this exists to remove. The
-// plane already carries ~120 tracker-*.git repos from the department era as
-// the cautionary listing. Branches are free, clone -b gets any run onto any
-// VM, and a new project is nothing but a new prefix.
+// A repository per project, because the operator was right and the shared
+// repo was wrong: branches share a clone, so pulling one project's run
+// dragged every project's history along. What made per-project repos look
+// hard was creation — git daemon cannot create one over the wire — and the
+// answer is a one-liner, not a product: the first push to a new project runs
+// the operator-configured mkrepo command, which on this plane is a kubectl
+// exec of `git init --bare /srv/git/<project>.git`. Idempotent, because git
+// init on an existing bare repo reinitialises harmlessly.
 //
 // EVERY FAILURE HERE IS A WARNING, NEVER A RUN FAILURE. The history is a
 // record of the work, not part of it: a run whose only defect is an
@@ -33,9 +34,16 @@ type gitLog struct {
 	ok  bool
 }
 
-// gitEnvURL names the shared workshop repository. Empty means local history
-// only: commits still land in the run directory's own .git, nothing pushes.
+// gitEnvURL is the git server's BASE url — git://host:port — under which
+// each project is its own <project>.git. Empty means local history only:
+// commits still land in the run directory's own .git, nothing pushes.
 const gitEnvURL = "AGENTS_WORKSHOP_GIT_URL"
+
+// gitEnvMkrepo is a command template run once per push to ensure the
+// project's repository exists, with %s replaced by the project name. On this
+// plane: kubectl exec of git init --bare. Empty skips the step, for servers
+// that auto-create or repos made by hand.
+const gitEnvMkrepo = "AGENTS_WORKSHOP_MKREPO"
 
 // newGitLog opens the run's history and anchors it with the request itself.
 func newGitLog(dir, task string) *gitLog {
@@ -125,35 +133,50 @@ func (g *gitLog) commitAll(message string) {
 	}
 }
 
-// push sends the run's history to the shared repository as its namespaced
-// branch. Forced, because a RERUN of the same run directory is the same
-// branch's newer truth, and the local history is always the authority.
-func (g *gitLog) push(url, branch string) {
-	if g == nil || !g.ok || url == "" {
+// pushRun sends the run's history to ITS PROJECT's repository as a
+// run/<name> branch, creating the repository first through the operator's
+// mkrepo command when one is configured. Forced, because a RERUN of the same
+// run directory is the same branch's newer truth.
+func (g *gitLog) pushRun(baseURL, mkrepo, dir string) {
+	if g == nil || !g.ok || baseURL == "" {
 		return
 	}
+	project, run := projectAndRun(dir)
+	if mkrepo != "" {
+		// The project name is a shell word in someone's command template, so
+		// only the slug alphabet may pass — slugOf guarantees [a-z0-9-] and
+		// this guard is what makes that a security property rather than a
+		// naming convention.
+		cmd := fmt.Sprintf(mkrepo, project)
+		if out, err := exec.Command("sh", "-c", cmd).CombinedOutput(); err != nil {
+			slog.Warn("run history: mkrepo failed — pushing anyway in case the repo exists",
+				"project", project, "error", err, "output", strings.TrimSpace(string(out)))
+		}
+	}
+	url := strings.TrimRight(baseURL, "/") + "/" + project + ".git"
+	branch := "run/" + run
 	if out, err := g.git("push", "-q", "--force", url, "HEAD:refs/heads/"+branch); err != nil {
 		slog.Warn("run history: push failed — the run itself is unaffected",
 			"url", url, "branch", branch, "error", err, "output", out)
 		return
 	}
-	slog.Info("run history pushed", "branch", branch)
+	slog.Info("run history pushed", "project", project, "branch", branch)
 }
 
-// branchFor names a run's branch <project>/<run> from its directory: the
-// workspace root is the project, the run directory is the run. A bare batch
-// -repo with no parent context is just its own name.
-func branchFor(dir string) string {
+// projectAndRun names a run from its directory: the workspace root is the
+// project, the run directory is the run. A bare batch -repo with no workshop
+// above it is its own project, with one rolling "run/latest" branch.
+func projectAndRun(dir string) (project, run string) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		abs = dir
 	}
-	run := slugOf(filepath.Base(abs))
-	project := slugOf(filepath.Base(filepath.Dir(abs)))
+	run = slugOf(filepath.Base(abs))
+	project = slugOf(filepath.Base(filepath.Dir(abs)))
 	if project == "" || project == "request" {
-		return run
+		return run, "latest"
 	}
-	return project + "/" + run
+	return project, run
 }
 
 // curGit is the run currently being journalled. A package variable for the

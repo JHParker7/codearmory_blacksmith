@@ -233,7 +233,7 @@ func runWithReroll(
 		files, lastErr = executeRun(ctx, maker, stages, files, repoDir, task)
 		if lastErr == nil {
 			curGit.mark("run: passed")
-			curGit.push(os.Getenv(gitEnvURL), branchFor(repoDir))
+			curGit.pushRun(os.Getenv(gitEnvURL), os.Getenv(gitEnvMkrepo), repoDir)
 			return nil
 		}
 		// An operator's ctrl-C is not a bad seed.
@@ -245,7 +245,7 @@ func runWithReroll(
 	// what a person debugging the seed wants on a VM, and it is the record the
 	// reroll's revert would otherwise silently destroy.
 	curGit.mark(fmt.Sprintf("run: failed after %d attempts: %s", MaxRunAttempts, firstLineOf(lastErr.Error())))
-	curGit.push(os.Getenv(gitEnvURL), branchFor(repoDir))
+	curGit.pushRun(os.Getenv(gitEnvURL), os.Getenv(gitEnvMkrepo), repoDir)
 	return fmt.Errorf("after %d attempts: %w", MaxRunAttempts, lastErr)
 }
 

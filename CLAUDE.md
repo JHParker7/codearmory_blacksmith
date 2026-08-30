@@ -21,10 +21,11 @@ go run . window                   # the department board view
 
 Every run journals to git: one commit per landed write (the type and summary
 each edit already declares), a mark per stage and draw, and a push to the
-plane's shared repo as branch `<project>/<run>` — `AGENTS_WORKSHOP_GIT_URL`,
-git://192.168.58.2:30918/workshop.git. One repo, namespaced branches: a new
-project is a new -repo flag and a new prefix, never a new repository or a
-redeploy. Clone any run anywhere: `git clone -b myproject/003-… <url>`.
+project's OWN repo on the plane as branch `run/<name>` — base URL in
+`AGENTS_WORKSHOP_GIT_URL`, repo auto-created on first push by the
+`AGENTS_WORKSHOP_MKREPO` one-liner. A new project is a new -repo flag; the
+server side is `git init --bare`, nothing more. Clone any run anywhere:
+`git clone -b run/003-… git://192.168.58.2:30918/myproject.git`.
 
 `-dry-run` prints the wiring — forge URL, image, and each role's class and check
 — without calling a model or acquiring a sandbox. It is the fastest way to find
