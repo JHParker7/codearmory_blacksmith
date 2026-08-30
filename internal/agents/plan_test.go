@@ -7,20 +7,52 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/tools"
 )
 
-// THE REASON THIS PAIR EXISTS. The pipeline's developer may not write tests,
-// because a specification author owns them. There is no specification author in
-// the two-stage arrangement, so a developer held to that guard could not write
-// the tests the architect just planned and the experiment would measure nothing.
-func TestThePlanFollowingDeveloperCanWriteTests(t *testing.T) {
+// THE RULE CAME BACK WITH THE TEST AUTHOR. In the two-stage arrangement the
+// developer had to write the tests because nothing else did; now PlanTester
+// owns them, and a developer that can edit the tests can always go green
+// without making the code work — the department's rule, restored the moment
+// its precondition existed.
+func TestThePlanFollowingDeveloperMayNotTouchTests(t *testing.T) {
 	c := maker()
 
-	if err := c.PlanFollowingDev(nil).opts.Guard("store_test.go"); err != nil {
-		t.Fatalf("the two-stage developer may not write tests: %v", err)
+	if err := c.PlanFollowingDev(nil).opts.Guard("store_test.go"); err == nil {
+		t.Fatal("the plan-arm developer may edit the tests it is judged by")
 	}
-	// And the pipeline's developer still may not, which is the rule this must
-	// not have quietly relaxed.
-	if err := c.Dev(nil).opts.Guard("store_test.go"); err == nil {
-		t.Fatal("the pipeline developer may now write tests")
+	if err := c.PlanFollowingDev(nil).opts.Guard("store.go"); err != nil {
+		t.Fatalf("the plan-arm developer may not write implementation: %v", err)
+	}
+}
+
+// The compensating freedom: with the suite locked against it, the developer may
+// rewrite implementation files WHOLE — a dropped function fails the next
+// auto-check by name, which is a better refusal than the write gate's.
+func TestThePlanFollowingDeveloperMayRewriteFilesWhole(t *testing.T) {
+	a := maker().PlanFollowingDev(map[string]string{
+		"store.go": "package main\n\nfunc NewStore() int { return 0 }\n\nfunc helper() {}\n",
+	})
+
+	// This rewrite DROPS helper — the strict rule would refuse it; here the
+	// tests are the guard and the write must land.
+	got, err := a.tools.Invoke(t.Context(), tools.WriteFile,
+		`{"path":"store.go","replace":"package main\n\nfunc NewStore() int { return 42 }\n","summary":"implement","type":"feat"}`)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if strings.Contains(got, "Error") {
+		t.Fatalf("a whole-file rewrite was refused for the locked-suite developer: %q", got)
+	}
+	// The baseline keeps the strict rule: its tests are its own to write, so
+	// nothing else would catch the drop.
+	b := maker().Baseline(map[string]string{
+		"store.go": "package main\n\nfunc NewStore() int { return 0 }\n\nfunc helper() {}\n",
+	})
+	got, err = b.tools.Invoke(t.Context(), tools.WriteFile,
+		`{"path":"store.go","replace":"package main\n\nfunc NewStore() int { return 42 }\n","summary":"implement","type":"feat"}`)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if !strings.Contains(got, "DROPS") {
+		t.Fatalf("the baseline lost its drop protection: %q", got)
 	}
 }
 

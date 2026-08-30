@@ -192,16 +192,23 @@ func (c Creator) PlanTester(files map[string]string) *Agent {
 	})
 }
 
-// PlanFollowingDev makes the tests pass.
+// PlanFollowingDev makes the tests pass, and may not touch them.
 //
-// IT MAY STILL EDIT THE TESTS, deliberately, and this is the experiment's
-// difference from the department's load-bearing rule: the department forbids
-// the developer the spec because a developer that can edit the tests can always
-// go green without making the code work. Here the operator chose the softer
-// arrangement — the tests exist first, which anchors what "done" means, but a
-// wrong test can be fixed by the developer in place rather than by a hand-back.
-// Whether that softness costs correctness is exactly what running this arm
-// against the department measures.
+// THE TESTS ARE LOCKED — the department's rule, restored here once the test
+// author existed to justify it. The softer version (dev may edit tests) was
+// tried first and belonged to the arrangement where the dev also WROTE the
+// tests; now they arrive written against the plan with compiling stubs and
+// proven red-not-broken by an expected-red gate, so "make them pass" is a
+// closed goal. Not a guarantee — a genuinely wrong test now dead-ends this
+// stage at its budget, and this arm has no referee — but that trade was taken
+// deliberately, after watching the softer version, and this comment is where
+// the decision lives.
+//
+// IN EXCHANGE IT MAY REWRITE IMPLEMENTATION FILES WHOLE, drop check and all.
+// That check exists for stages whose suite cannot speak for them; this one's
+// suite is locked against it, so a dropped function fails the very next
+// auto-check BY NAME — a better refusal than the write gate can compose,
+// because the compiler writes it against the real tree.
 func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 	return c.New(files, Options{
 		Name:  StagePlanDev,
@@ -210,17 +217,18 @@ func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 			"written by an architect) and FAILING TESTS with placeholder stubs (written by a " +
 			"test author from that plan). READ THEM FIRST. Your job is to replace the " +
 			"placeholder bodies with real implementations until the tests pass.\n\n" +
-			"The tests are the contract. If one is wrong — it contradicts the plan, or another " +
-			"test — you may fix it, but say what you changed and why in the edit summary; " +
-			"weakening a test to get past it is the one way to fail this stage while going " +
-			"green. Add tests where the plan names a case the author missed. Run the check as " +
-			"you go and fix what it reports; do not finish on a tree that does not compile or " +
-			"whose tests fail.",
-		// NO NoTests GUARD. This developer writes the tests, because nothing else
-		// in this two-stage arrangement does.
-		Guard:         tools.OnlyExt(".go"),
+			"The tests are the specification and they are NOT YOURS TO CHANGE — they were " +
+			"written to be passable, and the check runs them for you after every edit. You may " +
+			"rewrite an implementation file whole when that is simpler than editing it: if you " +
+			"drop something the code needed, the tests will name it. If a test truly cannot be " +
+			"satisfied — it contradicts another, or the declared types cannot express what it " +
+			"asks — say so plainly and stop, naming the test; that is a real answer, and quietly " +
+			"working around it is not. Do not finish on a tree that does not compile or whose " +
+			"tests fail.",
+		Guard:         tools.Both(tools.NoTests, tools.OnlyExt(".go")),
 		Tools:         writing(tools.RunCommand),
 		Check:         rootCheck,
+		RewriteWhole:  true,
 		MaxIterations: 150,
 		Temperature:   0.2,
 		MaxTokens:     12000,

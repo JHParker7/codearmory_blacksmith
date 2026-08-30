@@ -85,6 +85,12 @@ type Options struct {
 	// product is prose, wrong for every stage that writes code.
 	Check string
 
+	// RewriteWhole lets this stage replace implementation files wholesale, drop
+	// check and all. SOUND ONLY WITH A LOCKED SUITE: the stage's tests must be
+	// someone else's to write and not this stage's to touch, so that a dropped
+	// function fails the next check by name instead of vanishing silently.
+	RewriteWhole bool
+
 	// OwnCheck exempts this stage from the Creator's check override.
 	//
 	// The override is the operator saying what "the tests pass" means in their
@@ -120,6 +126,9 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 		o.Guard = tools.DenyAll
 	}
 	space := tools.NewWorkspace(files, o.Guard)
+	if o.RewriteWhole {
+		space.AllowWholeRewrites()
+	}
 	return &Agent{
 		opts:  o,
 		space: space,

@@ -60,7 +60,19 @@ type Workspace struct {
 	// writes counts edits that were actually applied. A stage that produced
 	// nothing has not finished, however tidily it stopped.
 	writes int
+
+	// looseRewrites drops the dropped-declaration refusal on whole-file source
+	// rewrites. FOR STAGES WITH A BINDING SUITE ONLY: when the tests are locked
+	// against the same agent, a dropped function fails the very next check by
+	// name, which is a better refusal than this package can write — it comes
+	// from the compiler, against the real tree. For a stage whose tests are its
+	// own to edit, the drop check stays, because nothing else would say a word.
+	looseRewrites bool
 }
+
+// AllowWholeRewrites lifts the dropped-declaration refusal. See looseRewrites
+// for when that is sound.
+func (w *Workspace) AllowWholeRewrites() { w.looseRewrites = true }
 
 // Writes is how many edits this workspace has accepted.
 func (w *Workspace) Writes() int { return w.writes }
@@ -217,22 +229,24 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 							"complete — a package clause, then the imports, then the declarations", e.Path)
 				}
 			}
-			oldNames, _ := topLevelNames(before)
-			newNames, _ := topLevelNames(e.Replace)
-			var dropped []string
-			for n := range oldNames {
-				if !newNames[n] {
-					dropped = append(dropped, n)
+			if !w.looseRewrites {
+				oldNames, _ := topLevelNames(before)
+				newNames, _ := topLevelNames(e.Replace)
+				var dropped []string
+				for n := range oldNames {
+					if !newNames[n] {
+						dropped = append(dropped, n)
+					}
 				}
-			}
-			if len(dropped) > 0 {
-				sort.Strings(dropped)
-				return "", fmt.Errorf(
-					"%s: this rewrite DROPS %s, which the file currently declares — whatever calls "+
-						"them breaks a whole check round from now. Carry every existing declaration "+
-						"forward, or address the change instead: quote a short snippet in \"old_str\", "+
-						"or name the declaration in \"decl\"",
-					e.Path, strings.Join(dropped, ", "))
+				if len(dropped) > 0 {
+					sort.Strings(dropped)
+					return "", fmt.Errorf(
+						"%s: this rewrite DROPS %s, which the file currently declares — whatever calls "+
+							"them breaks a whole check round from now. Carry every existing declaration "+
+							"forward, or address the change instead: quote a short snippet in \"old_str\", "+
+							"or name the declaration in \"decl\"",
+						e.Path, strings.Join(dropped, ", "))
+				}
 			}
 		}
 		// A LONG DOCUMENT IS REFUSED FOR COST, NOT FOR SAFETY, and that is why the

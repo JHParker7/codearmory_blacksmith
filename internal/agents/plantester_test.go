@@ -58,21 +58,22 @@ func TestThePlanArmRunsPlanThenTestsThenDev(t *testing.T) {
 	}
 }
 
-// The operator's choice, stated in the arrangement: the developer may still
-// edit tests here, unlike the department's developer. Both facts pinned so
-// neither drifts silently.
-func TestThePlanDevMayStillEditTestsAndIsToldTheyExist(t *testing.T) {
+// The developer is told the tests exist and that they are not its to change —
+// and both developers, plan-arm and pipeline, now hold the same locked-suite
+// rule.
+func TestThePlanDevIsToldTheTestsExistAndAreLocked(t *testing.T) {
 	dev := maker().PlanFollowingDev(nil)
 
-	if err := dev.opts.Guard("store_test.go"); err != nil {
-		t.Fatalf("the plan-arm developer may not edit tests: %v", err)
-	}
 	if !strings.Contains(dev.opts.Prompt, "FAILING TESTS") {
 		t.Error("the developer is not told the tests already exist")
 	}
-	// The department's developer keeps its harder rule.
-	if err := maker().Dev(nil).opts.Guard("store_test.go"); err == nil {
-		t.Fatal("the pipeline developer may now write tests")
+	if !strings.Contains(dev.opts.Prompt, "NOT YOURS TO CHANGE") {
+		t.Error("the developer is not told the tests are locked")
+	}
+	for _, a := range []*Agent{dev, maker().Dev(nil)} {
+		if err := a.opts.Guard("store_test.go"); err == nil {
+			t.Errorf("%s may write a test file", a.Name())
+		}
 	}
 }
 
