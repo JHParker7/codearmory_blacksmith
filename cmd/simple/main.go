@@ -44,7 +44,18 @@ func main() {
 	plan := flag.Bool("plan", false,
 		"run the plan arm: an architect plans the work and the tests, a test author writes "+
 			"the tests red with placeholder stubs, and a developer makes them pass")
+	tui := flag.Bool("tui", false,
+		"open the interactive terminal UI: type requests, watch them run, browse the results. "+
+			"-repo is the workspace root; each request builds in its own directory under it")
 	flag.Parse()
+
+	if *tui {
+		if err := runTUI(*repoDir); err != nil {
+			fmt.Fprintln(os.Stderr, "error: "+err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := run(*repoDir, *task, *only, *dryRun, *single, *plan); err != nil {
 		fmt.Fprintln(os.Stderr, "error: "+err.Error())
@@ -168,6 +179,7 @@ func runWithReroll(
 	original := copyTree(files)
 	var lastErr error
 	for attempt := 1; attempt <= MaxRunAttempts; attempt++ {
+		announce("draw", "", attempt)
 		if attempt > 1 {
 			slog.Warn("the run failed; reverting to the original tree for a fresh attempt",
 				"attempt", attempt, "of", MaxRunAttempts, "error", lastErr.Error())
@@ -191,6 +203,11 @@ func runWithReroll(
 // MaxRunAttempts bounds the whole-run reroll.
 const MaxRunAttempts = 3
 
+// announce is the seam the TUI listens through. A package variable rather
+// than a parameter because runStage and executeRun are load-bearing, tested
+// signatures and the batch CLI has no listener; the default is silence.
+var announce = func(kind, stage string, n int) {}
+
 // executeRun works the stages in order over the tree and returns the tree as
 // the last stage left it, finished or not.
 func executeRun(
@@ -213,15 +230,18 @@ func executeRun(
 			return files, fmt.Errorf("writing %s: %w", repoDir, err)
 		}
 		if runErr != nil {
+			announce("stage-fail", name, 0)
 			return files, fmt.Errorf("stage %s: %w", name, runErr)
 		}
 
+		announce("stage-pass", name, 0)
 		slog.Info("stage finished",
 			"stage", name, "passed", outcome.Passed, "turns", outcome.Iterations)
 		if outcome.Answer != "" {
 			fmt.Printf("\n--- %s ---\n%s\n", name, outcome.Answer)
 		}
 		if !outcome.Passed {
+			announce("stage-fail", name, 0)
 			// TOLD APART, because they need opposite responses: a stage that spent
 			// its budget working may deserve a larger one, while a stage that stopped
 			// moving would do the same thing with twice as many turns.
@@ -344,6 +364,7 @@ func runStage(
 	attempts := 1 + agent.Respins()
 
 	for attempt := 1; ; attempt++ {
+		announce("stage-start", agent.Name(), attempt)
 		slog.Info("stage starting", "stage", agent.Name(), "class", string(agent.Class()),
 			"files", len(files), "attempt", attempt)
 

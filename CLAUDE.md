@@ -15,6 +15,10 @@ go test -run TestName ./...
 # The simple shape: run the roles in order over a directory.
 go run ./cmd/simple -repo ./scratch -task "build a task tracker" -dry-run
 go run ./cmd/simple -repo ./scratch -task "..." -roles architect,spec,dev
+
+# The human front end: type requests, watch them run, browse results.
+# -repo is the workspace root; each request builds under its own directory.
+go run ./cmd/simple -tui -repo ./workshop
 ```
 
 `-dry-run` prints the wiring — forge URL, image, and each role's class and check
