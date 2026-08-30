@@ -18,6 +18,7 @@ func testModel() tuiModel {
 		stages: agents.PlanStages(),
 		base:   "/tmp/x",
 		events: make(chan uiEvent, 16),
+		ready:  true,
 	}
 	return tuiModel{sess: sess, ctx: context.Background()}
 }
@@ -155,3 +156,45 @@ func TestABlankRequestIsNotSubmitted(t *testing.T) {
 type contextError string
 
 func (e contextError) Error() string { return string(e) }
+
+// A request typed while the sandbox is still booting queues, and starts the
+// moment readiness lands — the boot happens ON the screen now, not before it.
+func TestARequestWaitsForTheSandboxAndStartsOnReady(t *testing.T) {
+	m := testModel()
+	m.sess.ready = false
+
+	m = typeIn(m, "early bird")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(tuiModel)
+	if cmd != nil || m.cur != nil {
+		t.Fatal("a run started before the sandbox existed")
+	}
+	if len(m.queue) != 1 {
+		t.Fatalf("the request did not queue: %v", m.queue)
+	}
+
+	next, cmd = m.Update(uiEvent{kind: "sandbox-ready"})
+	m = next.(tuiModel)
+	if !m.sess.ready || m.cur == nil || cmd == nil {
+		t.Fatal("readiness did not start the queued request")
+	}
+}
+
+// A failed boot is shown, and nothing ever starts against it.
+func TestAFailedBootHoldsTheQueueAndSaysWhy(t *testing.T) {
+	m := testModel()
+	m.sess.ready = false
+	m = typeIn(m, "doomed")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(tuiModel)
+
+	next, cmd := m.Update(uiEvent{kind: "sandbox-fail", line: "no route to host"})
+	m = next.(tuiModel)
+	if m.cur != nil {
+		t.Fatal("a run started against a failed sandbox")
+	}
+	if m.sess.bootErr != "no route to host" {
+		t.Fatalf("the failure is not held for the screen: %q", m.sess.bootErr)
+	}
+	_ = cmd
+}

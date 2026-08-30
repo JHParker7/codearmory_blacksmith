@@ -78,6 +78,13 @@ type session struct {
 	base   string
 	events chan uiEvent
 	seq    int
+
+	// ready flips once the sandbox is booted. Submissions queue against it:
+	// a run started before the box exists dies on its first check, which is a
+	// worse experience than a visible "booting" line.
+	ready    bool
+	bootErr  string
+	bootFrom time.Time
 }
 
 // startRun launches one request in its own directory under the root.
@@ -166,7 +173,7 @@ func (m tuiModel) submit() (tuiModel, tea.Cmd) {
 
 // maybeStart pulls the next queued request when nothing is running.
 func (m tuiModel) maybeStart() (tuiModel, tea.Cmd) {
-	if m.cur != nil || len(m.queue) == 0 {
+	if m.cur != nil || len(m.queue) == 0 || !m.sess.ready {
 		return m, nil
 	}
 	task := m.queue[0]
@@ -207,6 +214,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case uiEvent:
+		if msg.kind == "sandbox-ready" || msg.kind == "sandbox-fail" {
+			m.sess.ready = msg.kind == "sandbox-ready"
+			m.sess.bootErr = msg.line
+			next, cmd := m.maybeStart()
+			return next, tea.Batch(cmd, waitForEvent(m.sess.events))
+		}
 		m = m.apply(msg)
 		return m, waitForEvent(m.sess.events)
 
@@ -308,6 +321,13 @@ func (m tuiModel) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("blacksmith — the simple shape"))
 	b.WriteString(dimStyle.Render("   workspace " + m.sess.base))
+	switch {
+	case m.sess.bootErr != "":
+		b.WriteString("\n" + failStyle.Render("sandbox failed: "+m.sess.bootErr))
+	case !m.sess.ready:
+		b.WriteString("\n" + runStyle.Render(fmt.Sprintf("booting the sandbox… %s",
+			time.Since(m.sess.bootFrom).Round(time.Second))))
+	}
 	b.WriteString("\n\n")
 
 	if m.cur != nil {
@@ -421,12 +441,6 @@ func runTUI(base string) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	box, release, err := acquireSandbox(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer release()
-	maker.Sandbox = box
 
 	announce = func(kind, stage string, n int) {
 		select {
@@ -436,8 +450,29 @@ func runTUI(base string) error {
 	}
 	defer func() { announce = func(string, string, int) {} }()
 
-	sess := &session{maker: maker, stages: stages, base: base, events: events}
+	sess := &session{maker: maker, stages: stages, base: base, events: events, bootFrom: time.Now()}
 	m := tuiModel{sess: sess, ctx: ctx}
+
+	// THE SCREEN OPENS BEFORE THE SANDBOX BOOTS. The lease is a container boot
+	// and a clone — seconds to tens of them — and spending that before the
+	// first frame reads as a hung binary. It boots on screen instead, with a
+	// timer; submissions queue against it and start the moment it is ready.
+	var release func()
+	go func() {
+		box, rel, err := acquireSandbox(ctx, cfg)
+		if err != nil {
+			events <- uiEvent{kind: "sandbox-fail", line: err.Error()}
+			return
+		}
+		sess.maker.Sandbox = box
+		release = rel
+		events <- uiEvent{kind: "sandbox-ready"}
+	}()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
