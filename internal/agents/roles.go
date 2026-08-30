@@ -28,6 +28,9 @@ const (
 	StagePlanDev       = "plan-dev"
 	StagePlanSec       = "plan-sec"
 	StagePlanReview    = "plan-review"
+
+	// The auto-mode fix stage, run against a project cloned from the board.
+	StageFix = "fix"
 )
 
 // PlanStages are the plan arm's stages, in order: plan the work and the tests,
@@ -360,6 +363,42 @@ func (c Creator) PlanReview(files map[string]string) *Agent {
 		MaxIterations: 25,
 		Temperature:   0.2,
 		MaxTokens:     8000,
+	})
+}
+
+// FixFinding is auto-mode's developer: given a finding ticket and the code it
+// is about, it makes the change and keeps the tests green. It is the plan-arm
+// developer pointed at a different task — a filed finding rather than a fresh
+// suite — with the same rules that make a developer trustworthy: it MAY NOT
+// edit tests, because a fix that weakens the test proving the bug is not a
+// fix, and the existing suite is what proves the fix did not break anything
+// else. Whole-file rewrites stay allowed, for the same locked-suite reason.
+//
+// No respins, an 8-minute bound: a fix that has not converged in eight minutes
+// is one a person should see, and auto-mode moves on to the next finding
+// rather than grinding.
+func (c Creator) FixFinding(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  StageFix,
+		Class: model.ClassLarge,
+		Prompt: "You are a Go developer fixing ONE reported issue in an existing project. Your " +
+			"task names the finding — a security or quality problem, with the file and line and " +
+			"the change to make. READ the named code first, then make the smallest change that " +
+			"resolves the finding.\n\n" +
+			"You may not edit test files: a fix that weakens the test proving the bug is not a " +
+			"fix, and the suite is what proves your change broke nothing else. Run the check as " +
+			"you go; finish only on a tree that compiles and whose tests pass. If the finding is " +
+			"wrong or cannot be fixed without changing behaviour the tests require, say so " +
+			"plainly and stop — that is a real answer a person needs to see.",
+		Guard:          tools.Both(tools.NoTests, tools.OnlyExt(".go")),
+		Tools:          writing(tools.RunCommand),
+		Check:          rootCheck,
+		RewriteWhole:   true,
+		AttemptTimeout: 8 * time.Minute,
+		Respins:        0,
+		MaxIterations:  150,
+		Temperature:    0.2,
+		MaxTokens:      12000,
 	})
 }
 

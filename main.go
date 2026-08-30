@@ -76,6 +76,7 @@ func usage(w *os.File) {
   blacksmith -repo D -task "…"  one batch run of the pipeline, no screen
   blacksmith service            run the agent department (the systemd unit)
   blacksmith window             open the window onto a running department
+  blacksmith -auto              work the board: fix open findings, security first
 
 Configuration is read from ~/.config/codearmory-agents/env, the same file the
 unit uses, so everything works from any shell without exporting anything.

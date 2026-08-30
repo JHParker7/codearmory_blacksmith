@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/code-armory-app/blacksmith/internal/agents"
 	"github.com/code-armory-app/blacksmith/internal/config"
@@ -72,7 +73,22 @@ func main() {
 	tui := flag.Bool("tui", false,
 		"open the interactive terminal UI: type requests, watch them run, browse the results. "+
 			"-repo is the workspace root; each request builds in its own directory under it")
+	auto := flag.Bool("auto", false,
+		"work the board: with no request to run, pull open findings — security before quality "+
+			"— clone the project, fix, and resolve the ticket. Runs until interrupted")
 	flag.Parse()
+
+	if *auto {
+		base := *repoDir
+		if base == "" {
+			base = "workshop"
+		}
+		if err := runAuto(base); err != nil {
+			fmt.Fprintln(os.Stderr, "error: "+err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 
 	// BARE MEANS THE TUI. A human typing the binary's name gets the front
 	// door, not a usage dump; the workspace defaults to ./workshop and is
@@ -270,6 +286,64 @@ func firstLineOf(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// runAuto works the board until interrupted: pull the next finding, fix it,
+// resolve it, and when the board is drained wait a while and look again.
+//
+// ONE FINDING AT A TIME, because the model host serves one request at a time
+// and a finding fix IS a request; parallelism here would just hide the queue
+// on the GPU. The sandbox is acquired once and shared, like a batch run.
+func runAuto(base string) error {
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return err
+	}
+	config.LoadOperatorEnv()
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+	wireTickets(cfg)
+	if tickets == nil {
+		return fmt.Errorf("auto mode needs a ticket board; set AGENTS_TICKETS_URL")
+	}
+
+	gw := model.NewGateway(cfg.Host, cfg.Classes)
+	if a := (agents.Creator{Gateway: gw}).FixFinding(nil); a.Class() != model.ClassNone && !gw.Serves(a.Class()) {
+		return fmt.Errorf("this host does not serve class %q, which the fix stage needs", a.Class())
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	box, release, err := acquireSandbox(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	maker := agents.Creator{
+		Gateway: gw,
+		Sandbox: box,
+		Check:   cfg.Repo.TestCommand,
+		Log:     func(line string) { slog.Info(line) },
+	}
+
+	slog.Info("auto mode: working the board")
+	for ctx.Err() == nil {
+		worked, err := autoNext(ctx, maker, base)
+		if err != nil {
+			slog.Warn("auto: skipping a cycle", "error", err)
+		}
+		if !worked {
+			// Board drained: wait before looking again rather than spin.
+			select {
+			case <-ctx.Done():
+			case <-time.After(autoIdleDelay):
+			}
+		}
+	}
+	return nil
 }
 
 // wireTickets connects the plane's ticket store when one is configured.
