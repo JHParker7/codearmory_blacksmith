@@ -489,6 +489,8 @@ func stage(c agents.Creator, name string, files map[string]string) (*agents.Agen
 		return c.PlanTester(files), nil
 	case agents.StagePlanDev:
 		return c.PlanFollowingDev(files), nil
+	case agents.StagePlanSec:
+		return c.PlanSec(files), nil
 	}
 	return c.Stage(name, files)
 }

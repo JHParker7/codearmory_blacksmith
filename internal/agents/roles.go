@@ -26,11 +26,15 @@ const (
 	StagePlanArchitect = "plan-architect"
 	StagePlanTest      = "plan-test"
 	StagePlanDev       = "plan-dev"
+	StagePlanSec       = "plan-sec"
 )
 
 // PlanStages are the plan arm's stages, in order: plan the work and the tests,
-// write the tests red, make them green.
-func PlanStages() []string { return []string{StagePlanArchitect, StagePlanTest, StagePlanDev} }
+// write the tests red, make them green, then read the result with an
+// attacker's eyes.
+func PlanStages() []string {
+	return []string{StagePlanArchitect, StagePlanTest, StagePlanDev, StagePlanSec}
+}
 
 // Stages are the roles in the order they run.
 //
@@ -275,6 +279,44 @@ func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 		MaxIterations:  150,
 		Temperature:    0.2,
 		MaxTokens:      12000,
+	})
+}
+
+// PlanSec reads the finished run with an attacker's eyes and writes ONE file:
+// SECURITY.md, the review, which the run's git history carries out with
+// everything else. It cannot touch code — OnlyPaths is the precise statement
+// that its report is its entire write surface.
+//
+// THE SCANNER SEAM IS THE TREE, designed now, fed later: SAST and SCA
+// scanners will run in the sandbox before this stage and leave their reports
+// under scan/, where the reviewer reads them like any other file. Reports are
+// LEADS TO VERIFY, not verdicts to copy — the department measured both
+// halves of that: a scanner finding in your own code is usually a change to
+// make, one in a dependency is usually a version bump, and an unverified
+// copy of either costs a person a day. Advisory, not a gate, matching the
+// department's split between ScanCommand context and CriticalCommand gates.
+func (c Creator) PlanSec(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  StagePlanSec,
+		Class: model.ClassLarge,
+		Prompt: "You are a security reviewer reading a finished change. Read the implementation " +
+			"and the tests, then write SECURITY.md — one file, your whole deliverable — " +
+			"reporting what an attacker could do: injection through unvalidated input, secrets " +
+			"on disk or in logs, authorisation checks missing rather than wrong, resource " +
+			"limits nobody set, error text that leaks internals. For each finding name the FILE " +
+			"and LINE, say concretely what an attacker gets, and rate it critical, high, medium " +
+			"or low.\n\n" +
+			"If scanner reports exist under scan/ — SAST or dependency audits — read them " +
+			"FIRST, as leads: verify each against the code and say which are real and which are " +
+			"false positives, because an unverified copy of a scanner line costs a person a day. " +
+			"You cannot change the code; say what is wrong and where, and the stage that owns it " +
+			"fixes it. If you find nothing real, write that — an invented finding teaches people " +
+			"to skip your reports. End with a one-line verdict: ship, ship with fixes, or stop.",
+		Guard:         tools.OnlyPaths("SECURITY.md"),
+		Tools:         append(append([]string{}, readOnly...), tools.WriteFile),
+		MaxIterations: 25,
+		Temperature:   0.2,
+		MaxTokens:     8000,
 	})
 }
 
