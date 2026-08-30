@@ -156,3 +156,41 @@ the prompt — it was the gate: the route gate produced handler tests three for
 three where the prompt alone went one for three; the locked suite produced
 handler implementations where advice produced stubs. A plan nobody enforces is
 advice, and the corollary held at every stage it was tested.
+
+## Reliability: nine runs of the tests-first arm
+
+Six more runs (tdd4-tdd9) on the same build and input, verified the same way,
+to measure the arrangement's variance before building on it.
+
+| run | outcome | wall clock | dev turns | test lines | coverage |
+|-----|---------|-----------|-----------|------------|----------|
+| 1   | pass    | 7m 24s    | 8         | 949        | 89-96%   |
+| 2   | pass    | 8m 51s    | 9         | 1,258      | 88.8%    |
+| 3   | pass    | 10m 11s   | 9         | 677        | 80.2%    |
+| 4   | pass    | 9m 40s    | 4         | 1,028      | 93.6%    |
+| 5   | pass    | 12m 14s   | 16        | 1,144      | 86.9%    |
+| 6   | **FAIL**| ~45m bound| 3 timeouts| —          | —        |
+| 7   | pass    | 7m 37s    | 5         | 966        | 98.6%    |
+| 8   | pass    | 19m 30s   | 29        | 1,394      | 90.0%    |
+| 9   | pass    | 11m 00s   | 10        | 1,510      | 87.8%    |
+
+**Pass rate 8 of 9 (0.89).** Every pass: build clean, vet clean, ≥80%
+coverage, handler tests present. Times 7m24s-19m30s; the dev is the whole
+spread (1m28s to 13m27s), and run 8's 13m27s dev — 29 turns of honest work,
+90 seconds inside its window — is what the 15-minute timeout exists to permit.
+
+The one failure is diagnosed to the line: the test author demanded an
+`{"tasks": [...]}` envelope its own helper could not decode from a bare
+array, the developer returned bare arrays through eight rewrites of
+`listTasks` and never made the leap — the fix was one wrapping line. The
+accepted-but-futile rewrite loop lives inside the harness's definition of
+progress (byte-changing writes reset the stall counter), which only the
+wall-clock timeout can see; that design note stands open.
+
+**The whole-run reroll follows from these numbers.** At a measured 1-in-9
+failure, reverting to the original tree and redrawing (at most three
+attempts, now in the harness) projects to (1/9)^3 ≈ 0.14% — three nines of
+reliability for triple time on bad seeds only. The revert is surgical:
+files the failed attempt created are removed, files it changed are restored,
+nothing the harness did not produce is touched. Runs 4-9 above were measured
+WITHOUT it, deliberately: they are the samples the arithmetic is built on.
