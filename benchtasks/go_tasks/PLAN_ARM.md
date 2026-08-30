@@ -91,3 +91,58 @@ cap, fenced replacements refused instead of repaired, cross-file duplicate
 declarations, and the clone-overlay check. Runs 2 and 3 then completed first
 try, back to back, in under 10 minutes combined — which is what the fixes were
 for.
+
+# The third arm: plan, tests-first, locked suite
+
+Added after the two-stage comparison: a test author between the architect and
+the developer, writing the tests RED with compiling stubs (expected-red gate,
+plus a route gate refusing a suite that never touches the HTTP the tree
+serves), and a developer whose tests are locked — the department's rule,
+restored once its precondition existed — with whole-file rewrites freed in
+exchange, an auto-check after every writing turn, and an 8-minute wall-clock
+per dev attempt with two fresh-start respins that keep the tree and discard
+the trail. Run with the same -plan flag; runs of 2026-08-30, one build.
+
+|                     | run 1     | run 2     | run 3                    |
+|---------------------|-----------|-----------|--------------------------|
+| wall clock          | 7m 24s    | 8m 51s    | ~23m, then failed        |
+| outcome             | passed    | passed    | timeout after 3 attempts |
+| test lines          | 949       | 1,258     | 951                      |
+| coverage            | 89 / 96%  | 88.8%     | n/a (red)                |
+| `go vet`            | clean     | clean     | n/a                      |
+| routes answer       | yes       | yes       | n/a                      |
+| handler tests       | 629 lines | 806 lines | present                  |
+
+Run 3's final tree builds and fails ONE subtest — "expected 2 comments, got 3"
+— across 1,521 lines: the third dev was minutes from green when its clock ran
+out. The respin harness did its job either way: three bounded attempts, ~23
+minutes, against the 80-minute unbounded grind the mechanism replaced. The
+first wedge it was built for evaded every other bound at once — re-running the
+check reset the idle counter, kept the temperature at base, and never tripped
+the repeat notice because go test prints timings.
+
+## The whole experiment, one table
+
+|                      | lone agent ×3    | plan-only ×3      | plan+tests-first ×3 |
+|----------------------|------------------|-------------------|---------------------|
+| passed               | 3 (2 falsely)    | 3                 | 2                   |
+| APIs that answer     | 1 of 3           | 3 of 3            | 2 of 2 passing      |
+| handler tests        | 1 of 3           | 2 of 3            | 3 of 3              |
+| test lines           | 112 / 0 / 544    | 995 / 699 / 0     | 949 / 1,258 / 951   |
+| coverage             | 40 / 0 / 90%     | 92 / 83 / 0%      | 89-96 / 89 / red    |
+| wall clock           | 1-6m             | 2m41s-6m25s       | 7m24s-23m           |
+| the failure mode     | dead routes,     | tests skipped     | time: one run could |
+|                      | reported green   | wholesale         | not converge in 3×8m|
+
+The progression reads cleanly: each arrangement closed the previous one's
+failure mode and exposed its own. The lone agent ships broken code as green;
+the plan fixes liveness but cannot make anyone write tests; the gated test
+author makes the tests exist and the locked suite makes them binding — at
+which point the failure mode left is TIME, which is the honest one: run 3 did
+not ship anything false, it ran out of clock one assertion short, visibly.
+
+The floor moved where it was pushed, every time. What enforced it was never
+the prompt — it was the gate: the route gate produced handler tests three for
+three where the prompt alone went one for three; the locked suite produced
+handler implementations where advice produced stubs. A plan nobody enforces is
+advice, and the corollary held at every stage it was tested.
