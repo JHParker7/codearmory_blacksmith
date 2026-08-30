@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -79,6 +80,10 @@ type session struct {
 	events chan uiEvent
 	seq    int
 
+	// seed is the workspace root's own tree, read once at startup: the project
+	// the runs build on. Empty for a fresh workspace.
+	seed map[string]string
+
 	// ready flips once the sandbox is booted. Submissions queue against it:
 	// a run started before the box exists dies on its first check, which is a
 	// worse experience than a visible "booting" line.
@@ -114,7 +119,11 @@ func (s *session) startRun(ctx context.Context, task string) (string, tea.Cmd) {
 		start := time.Now()
 		var err error
 		if err = os.MkdirAll(dir, 0o755); err == nil {
-			err = runWithReroll(ctx, s.maker, s.stages, map[string]string{}, dir, task)
+			// SEEDED FROM THE WORKSPACE'S OWN FILES, so pointing the TUI at an
+			// existing project means requests build ON that project. A different
+			// project is a different -repo, and nothing else — no env change, no
+			// redeploy, no new repository on the plane.
+			err = runWithReroll(ctx, s.maker, s.stages, copyTree(s.seed), dir, task)
 		}
 		return runDoneMsg{err: err, took: time.Since(start)}
 	}
@@ -431,6 +440,9 @@ func runTUI(base string) error {
 			default: // a full screen buffer must never stall the pipeline
 			}
 		},
+		OnWrite: func(path, content string, deleted bool, message string) {
+			curGit.write(path, content, deleted, message)
+		},
 	}
 	for _, name := range stages {
 		a, err := stage(maker, name, nil)
@@ -470,7 +482,11 @@ func runTUI(base string) error {
 	}
 	defer func() { announce = func(string, string, int) {} }()
 
-	sess := &session{maker: maker, stages: stages, base: base, events: events}
+	seed, err := readProjectTree(base)
+	if err != nil {
+		return fmt.Errorf("reading the workspace: %w", err)
+	}
+	sess := &session{maker: maker, stages: stages, base: base, events: events, seed: seed}
 	m := tuiModel{sess: sess, ctx: ctx}
 
 	// The boot is DEFINED here and STARTED by the first submission — see
@@ -494,4 +510,28 @@ func runTUI(base string) error {
 
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
+}
+
+// readProjectTree reads the workspace root as the project the runs build on,
+// skipping what the workshop itself produces: run directories (NNN-slug), the
+// TUI's log, and .git (readTree already skips it) — the run gets the PROJECT,
+// not the workshop's bookkeeping or the residue of earlier runs.
+func readProjectTree(base string) (map[string]string, error) {
+	all, err := readTree(base)
+	if err != nil {
+		return nil, err
+	}
+	runDir := regexp.MustCompile(`^[0-9]{3}-`)
+	out := map[string]string{}
+	for p, c := range all {
+		top := p
+		if i := strings.IndexByte(p, '/'); i >= 0 {
+			top = p[:i]
+		}
+		if runDir.MatchString(top) || p == "tui.log" {
+			continue
+		}
+		out[p] = c
+	}
+	return out, nil
 }

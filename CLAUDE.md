@@ -19,6 +19,13 @@ go run . service                  # the department daemon (what systemd runs)
 go run . window                   # the department board view
 ```
 
+Every run journals to git: one commit per landed write (the type and summary
+each edit already declares), a mark per stage and draw, and a push to the
+plane's shared repo as branch `<project>/<run>` — `AGENTS_WORKSHOP_GIT_URL`,
+git://192.168.58.2:30918/workshop.git. One repo, namespaced branches: a new
+project is a new -repo flag and a new prefix, never a new repository or a
+redeploy. Clone any run anywhere: `git clone -b myproject/003-… <url>`.
+
 `-dry-run` prints the wiring — forge URL, image, and each role's class and check
 — without calling a model or acquiring a sandbox. It is the fastest way to find
 out whether this host is configured to run a stage at all.

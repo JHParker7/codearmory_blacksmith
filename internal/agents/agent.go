@@ -53,6 +53,11 @@ type Creator struct {
 	// Log receives one line per tool call. Nil is fine. Present because a stage
 	// that takes twenty minutes in silence is indistinguishable from a hung one.
 	Log func(string)
+
+	// OnWrite hears every landed edit, for the caller that turns writes into
+	// commits. Shared by every stage a creator builds, because the history is a
+	// property of the RUN, not of any one stage.
+	OnWrite func(path, content string, deleted bool, message string)
 }
 
 // Options is what makes one stage different from another.
@@ -153,6 +158,7 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			Sandbox:   c.Sandbox,
 			Check:     c.checkFor(o),
 			Names:     o.Tools,
+			OnWrite:   c.OnWrite,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,

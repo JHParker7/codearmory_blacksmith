@@ -419,11 +419,18 @@ metadata:
   namespace: blacksmith
 spec:
   selector: {app: git-local}
-  ports: [{port: 9418, targetPort: 9418}]
+  # A NODEPORT, because the workshop pushes from the HOST and clones from VMs.
+  # The TUI records every run as a branch of workshop.git — one commit per
+  # write, a mark per stage — and the host is outside the cluster, so a
+  # ClusterIP-only service made the whole record unreachable from the machine
+  # producing it.
+  type: NodePort
+  ports: [{port: 9418, targetPort: 9418, nodePort: 30918}]
 ---
-# The git server is reachable from this namespace and nowhere else. Combined with
-# the syncer's refspec, a compromised sandbox can rewrite the local mirror and
-# still cannot reach anything outside it or push where it should not.
+# The git server is reachable from this namespace and from the minikube /24 —
+# the workstation and its VMs — and nowhere else. Combined with the syncer's
+# refspec, a compromised sandbox can rewrite the local mirror and still cannot
+# reach anything outside it or push where it should not.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -437,6 +444,15 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels: {kubernetes.io/metadata.name: blacksmith}
+    # The MINIKUBE NETWORK as well — the workstation and its VMs — because the
+    # workshop's run history pushes from the host and clones into VMs. Scoped
+    # to that /24 rather than opened wide: git daemon has no authentication,
+    # so the network boundary IS the access control, and the boundary chosen
+    # is "this machine and the guests it runs".
+    - from:
+        - ipBlock: {cidr: 192.168.58.0/24}
+      ports:
+        - {port: 9418, protocol: TCP}
 ---
 # The plane's own TICKET STORE.
 #

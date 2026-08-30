@@ -73,6 +73,15 @@ type Set struct {
 	// is a trap.
 	Names []string
 
+	// OnWrite hears every edit that actually landed: the path, its content
+	// after the edit (empty with deleted=true when an undo removed it), and the
+	// one-line message the edit carried. THE COMMIT STREAM WAS ALWAYS HERE —
+	// every write is forced to declare a Conventional Commits type and a
+	// summary, bound to the same list the repository's own hook enforces — and
+	// for two arms of the experiment it drained into log lines. Nil hears
+	// nothing.
+	OnWrite func(path, content string, deleted bool, message string)
+
 	// served is what each path held the last time it was read, so a read that
 	// returns the same bytes can SAY SO. Lazily built.
 	served map[string]string
@@ -316,12 +325,20 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 		if err != nil {
 			return "Error: " + err.Error(), nil
 		}
+		if s.OnWrite != nil {
+			content, _ := s.Workspace.Read(e.Path)
+			s.OnWrite(e.Path, content, false, meta.Type+": "+meta.Summary)
+		}
 		return line + " " + meta.Summary, nil
 
 	case UndoEdit:
 		p, ok := s.Workspace.Undo()
 		if !ok {
 			return "Error: nothing to undo — no write has been made yet.", nil
+		}
+		if s.OnWrite != nil {
+			content, exists := s.Workspace.Read(p)
+			s.OnWrite(p, content, !exists, "revert: undo the last write to "+p)
 		}
 		return fmt.Sprintf("Restored %s to what it was before your last write.", p), nil
 

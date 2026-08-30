@@ -140,6 +140,9 @@ func runBatch(repoDir, task, only string, dryRun, single, plan bool) error {
 		Gateway: gw,
 		Check:   cfg.Repo.TestCommand,
 		Log:     func(line string) { slog.Info(line) },
+		OnWrite: func(path, content string, deleted bool, message string) {
+			curGit.write(path, content, deleted, message)
+		},
 	}
 
 	// EVERY STAGE IS INSPECTED BEFORE ANY OF THEM RUNS. A pipeline that gets four
@@ -208,6 +211,13 @@ func runWithReroll(
 	files map[string]string, repoDir, task string,
 ) error {
 	original := copyTree(files)
+
+	// The run's history opens with the request and closes with the verdict.
+	// curGit is what the write hook reaches; one run holds the GPU at a time.
+	curGit = newGitLog(repoDir, task)
+	defer func() { curGit = nil }()
+	curGit.snapshot("chore: the tree as the request found it")
+
 	var lastErr error
 	for attempt := 1; attempt <= MaxRunAttempts; attempt++ {
 		announce("draw", "", attempt)
@@ -218,9 +228,12 @@ func runWithReroll(
 				return fmt.Errorf("reverting %s: %w", repoDir, err)
 			}
 			files = copyTree(original)
+			curGit.snapshot(fmtDraw(attempt))
 		}
 		files, lastErr = executeRun(ctx, maker, stages, files, repoDir, task)
 		if lastErr == nil {
+			curGit.mark("run: passed")
+			curGit.push(os.Getenv(gitEnvURL), branchFor(repoDir))
 			return nil
 		}
 		// An operator's ctrl-C is not a bad seed.
@@ -228,7 +241,19 @@ func runWithReroll(
 			return lastErr
 		}
 	}
+	// A FAILED run pushes too. The history of how three draws died is exactly
+	// what a person debugging the seed wants on a VM, and it is the record the
+	// reroll's revert would otherwise silently destroy.
+	curGit.mark(fmt.Sprintf("run: failed after %d attempts: %s", MaxRunAttempts, firstLineOf(lastErr.Error())))
+	curGit.push(os.Getenv(gitEnvURL), branchFor(repoDir))
 	return fmt.Errorf("after %d attempts: %w", MaxRunAttempts, lastErr)
+}
+
+func firstLineOf(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // MaxRunAttempts bounds the whole-run reroll.
@@ -262,10 +287,12 @@ func executeRun(
 		}
 		if runErr != nil {
 			announce("stage-fail", name, 0)
+			curGit.mark("stage(" + name + "): failed")
 			return files, fmt.Errorf("stage %s: %w", name, runErr)
 		}
 
 		announce("stage-pass", name, 0)
+		curGit.mark("stage(" + name + "): passed")
 		slog.Info("stage finished",
 			"stage", name, "passed", outcome.Passed, "turns", outcome.Iterations)
 		if outcome.Answer != "" {
