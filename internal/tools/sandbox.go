@@ -1,7 +1,10 @@
 package tools
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"sort"
 	"strings"
@@ -43,15 +46,47 @@ type ForgeSandbox struct {
 // not there for the next one to compile. Anything an agent writes must be laid
 // down and used within the same command.
 //
-// Writing the whole tree rather than a diff is the simple choice and is bounded
-// by the same thing that bounds the prompt: a repository too large to send is
-// also too large to reason about, and the failure is loud rather than subtle.
+// LARGE TREES GO COMPRESSED, because forge caps the execution body. Measured: a
+// 71KB, 2,306-line tree — main, store, handlers and 1,450 lines of tests, the
+// best output of any run to that point — was refused wholesale with `POST
+// /executions: 400 Bad Request` on its FIRST check, killing the stage at the
+// moment it went to verify. The earlier claim here, that a tree too large to
+// send is too large to reason about, was simply false: the model was reasoning
+// about that tree fine. Source gzips at 4-5x, which puts any tree the prompt
+// budget admits well under the cap.
 func (f ForgeSandbox) Run(ctx context.Context, files map[string]string, command string) (Output, error) {
-	res, err := f.Sandbox.Run(ctx, f.Rec, WriteTreeScript(files)+"\n"+command+"\n")
+	script := WriteTreeScript(files) + "\n" + command + "\n"
+	if len(script) > PackThreshold {
+		script = packed(script)
+	}
+	res, err := f.Sandbox.Run(ctx, f.Rec, script)
 	if err != nil {
 		return Output{}, err
 	}
 	return Output{ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr}, nil
+}
+
+// PackThreshold is the script size above which it is shipped compressed.
+//
+// Comfortably under wherever forge's cap sits — the cap is not documented, and
+// a threshold discovered by binary search against a live deployment is a
+// threshold that breaks when the deployment changes. Below it, plain scripts
+// keep the transcript readable.
+const PackThreshold = 24 * 1024
+
+// packed wraps a script so it ships as one base64 line and unpacks in the box.
+//
+// The alphabet is why this is safe where interpolation was not: base64 emits no
+// apostrophes, so the payload cannot close its own quote. `set -e` is restated
+// inside because the leased prelude's one applies to the OUTER script, and the
+// tree writes were relying on it.
+func packed(script string) string {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	zw.Write([]byte("set -e\n" + script))
+	zw.Close()
+	return "printf %s '" + base64.StdEncoding.EncodeToString(buf.Bytes()) +
+		"' | base64 -d | gzip -d | sh\n"
 }
 
 // WriteTreeScript renders a shell script that lays a file tree down on disk.
