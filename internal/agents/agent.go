@@ -277,6 +277,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			})
 		}
 
+		var wrote, ranCheck bool
 		for _, call := range res.Calls {
 			result, err := a.tools.Invoke(ctx, call.Name, call.Arguments)
 			if err != nil {
@@ -298,15 +299,43 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 
 			if progressed(call.Name, result) {
 				idle = 0
+				if call.Name != tools.RunCommand {
+					wrote = true
+				}
 			}
 
 			if call.Name == tools.RunCommand {
+				ranCheck = true
 				out.LastCheck = result
 				if checkPassed(result) {
 					out.Passed = true
 					a.logf("%s: check passed after %d turns", a.opts.Name, out.Iterations)
 					return out, nil
 				}
+			}
+		}
+
+		// THE CHECK RUNS BY ITSELF after any turn that landed a write, and green
+		// ENDS the stage. Waiting for the model to ask had two costs, both
+		// measured: a stage that never asked spent its budget polishing a tree
+		// that had been green for turns — the check is what says "done", and a
+		// model left to decide when to hear it defers it — and a stage that asked
+		// early and never again finished "budget spent, check never passed" with
+		// working code on disk. One check per WRITING turn, not per write, so a
+		// burst of files costs one execution; turns whose writes were all refused
+		// run nothing, so a refusal loop cannot burn the sandbox.
+		if wrote && !ranCheck && a.opts.Check != "" {
+			result, err := a.tools.Invoke(ctx, tools.RunCommand, "{}")
+			if err != nil {
+				return out, fmt.Errorf("%s: auto-check: %w", a.opts.Name, err)
+			}
+			a.logf("%s: auto-check -> %s", a.opts.Name, firstLine(result))
+			out.Trail = append(out.Trail, Step{Tool: tools.RunCommand, Args: "(auto)", Result: result})
+			out.LastCheck = result
+			if checkPassed(result) {
+				out.Passed = true
+				a.logf("%s: check passed after %d turns", a.opts.Name, out.Iterations)
+				return out, nil
 			}
 		}
 
