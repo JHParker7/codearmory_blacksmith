@@ -307,24 +307,26 @@ func (c Creator) PlanSec(files map[string]string) *Agent {
 	return c.New(files, Options{
 		Name:  StagePlanSec,
 		Class: model.ClassLarge,
-		Prompt: "You are a security reviewer reading a finished change. Read the implementation " +
-			"and the tests, then file each REAL finding as a ticket with file_ticket: injection " +
-			"through unvalidated input, secrets on disk or in logs, authorisation checks missing " +
-			"rather than wrong, resource limits nobody set, error text that leaks internals. One " +
-			"ticket per finding; in the body name the FILE and LINE, say concretely what an " +
-			"attacker gets, and the fix to make.\n\n" +
+		Prompt: "You are a security reviewer reading a finished change. The whole tree — the " +
+			"implementation, the tests, and any scan/ reports — is ALREADY IN FRONT OF YOU; do " +
+			"not waste turns re-reading files you can already see. File each REAL finding as a " +
+			"ticket with file_ticket: injection through unvalidated input, secrets on disk or in " +
+			"logs, authorisation checks missing rather than wrong, resource limits nobody set, " +
+			"error text that leaks internals. One ticket per finding; in the body name the FILE " +
+			"and LINE, say concretely what an attacker gets, and the fix to make.\n\n" +
 			"NEVER write findings into the repository — a committed list of vulnerabilities is " +
 			"a gift to anyone who clones it. The board is where findings go.\n\n" +
-			"If scanner reports exist under scan/ — SAST or dependency audits — read them " +
-			"FIRST, as leads: verify each against the code, file the real ones, and name the " +
-			"false positives in your answer, because an unverified copy of a scanner line " +
-			"costs a person a day. If you find nothing real, file nothing and say so — an " +
-			"invented finding teaches people to skip your tickets. Finish with a one-line " +
-			"verdict: ship, ship with fixes, or stop.",
+			"If scanner reports exist under scan/ — SAST or dependency audits — treat them as " +
+			"leads: verify each against the code, file the real ones, and name the false " +
+			"positives in your answer, because an unverified copy of a scanner line costs a " +
+			"person a day. If you find nothing real, file nothing and say so — an invented " +
+			"finding teaches people to skip your tickets. Finish with a one-line verdict: ship, " +
+			"ship with fixes, or stop.",
 		Guard:         tools.DenyAll,
 		Tools:         append(append([]string{}, readOnly...), tools.FileTicket),
 		TicketKind:    "security",
-		MaxIterations: 25,
+		SeedKnown:     true, // the code is handed over, not discovered turn by turn
+		MaxIterations: 8,
 		Temperature:   0.2,
 		MaxTokens:     8000,
 	})
@@ -347,22 +349,25 @@ func (c Creator) PlanReview(files map[string]string) *Agent {
 		Name:  StagePlanReview,
 		Class: model.ClassLarge,
 		Prompt: "You are a code reviewer reading a finished change for QUALITY, not security " +
-			"— a separate reviewer already covered security. File each real issue as a ticket " +
-			"with file_ticket: a correctness bug the tests do not catch, error handling that " +
-			"swallows or mislabels a failure, duplicated logic, dead code, a misleading name, a " +
-			"missing doc comment on an exported symbol, a resource left unclosed. One ticket per " +
-			"issue; in the body name the FILE and LINE, say what is wrong and the change to make, " +
-			"and rate it high, medium or low.\n\n" +
+			"— a separate reviewer already covered security. The whole tree, tests and any scan/ " +
+			"reports included, is ALREADY IN FRONT OF YOU; do not spend turns re-reading files " +
+			"you can already see. File each real issue as a ticket with file_ticket: a " +
+			"correctness bug the tests do not catch, error handling that swallows or mislabels a " +
+			"failure, duplicated logic, dead code, a misleading name, a missing doc comment on " +
+			"an exported symbol, a resource left unclosed. One ticket per issue; in the body " +
+			"name the FILE and LINE, say what is wrong and the change to make, and rate it high, " +
+			"medium or low.\n\n" +
 			"NEVER write into the repository — you review, you do not fix; the tickets are the " +
-			"work. If staticcheck's report exists under scan/lint.txt, read it FIRST as leads: " +
-			"verify each against the code, file the real ones, name the false positives in your " +
-			"answer. Findings already on the board are listed in your task; do NOT refile them. " +
-			"If you find nothing worth a person's time, file nothing and say so. Finish with a " +
-			"one-line verdict on the change's quality.",
+			"work. If staticcheck's report exists under scan/lint.txt, treat it as leads: verify " +
+			"each against the code, file the real ones, name the false positives in your answer. " +
+			"Findings already on the board are listed in your task; do NOT refile them. If you " +
+			"find nothing worth a person's time, file nothing and say so. Finish with a one-line " +
+			"verdict on the change's quality.",
 		Guard:         tools.DenyAll,
 		Tools:         append(append([]string{}, readOnly...), tools.FileTicket),
 		TicketKind:    "quality",
-		MaxIterations: 25,
+		SeedKnown:     true, // the code is handed over, not discovered turn by turn
+		MaxIterations: 8,
 		Temperature:   0.2,
 		MaxTokens:     8000,
 	})
@@ -383,19 +388,20 @@ func (c Creator) FixFinding(files map[string]string) *Agent {
 	return c.New(files, Options{
 		Name:  StageFix,
 		Class: model.ClassLarge,
-		Prompt: "You are a Go developer fixing ONE reported issue in an existing project. Your " +
-			"task names the finding — a security or quality problem, with the file and line and " +
-			"the change to make. READ the named code first, then make the smallest change that " +
-			"resolves the finding.\n\n" +
+		Prompt: "You are a Go developer fixing reported issues in an existing project. The whole " +
+			"project is ALREADY IN FRONT OF YOU — do not spend turns re-reading files you can " +
+			"already see. Your task names the finding(s) — security or quality problems, with the " +
+			"file and line and the change to make. Make the smallest change that resolves each.\n\n" +
 			"You may not edit test files: a fix that weakens the test proving the bug is not a " +
 			"fix, and the suite is what proves your change broke nothing else. Run the check as " +
-			"you go; finish only on a tree that compiles and whose tests pass. If the finding is " +
+			"you go; finish only on a tree that compiles and whose tests pass. If a finding is " +
 			"wrong or cannot be fixed without changing behaviour the tests require, say so " +
-			"plainly and stop — that is a real answer a person needs to see.",
+			"plainly and move on — that is a real answer a person needs to see.",
 		Guard:          tools.Both(tools.NoTests, tools.OnlyExt(".go")),
 		Tools:          writing(tools.RunCommand),
 		Check:          rootCheck,
 		RewriteWhole:   true,
+		SeedKnown:      true, // the project is handed over, not read in file by file
 		AttemptTimeout: 8 * time.Minute,
 		Respins:        0,
 		MaxIterations:  150,
@@ -429,7 +435,8 @@ func (c Creator) MergeReviewer(files map[string]string) *Agent {
 			"yourself; a bad merge to dev costs more than a fix left waiting.",
 		Guard:         tools.DenyAll,
 		Tools:         append(append([]string{}, readOnly...), tools.MergeFix),
-		MaxIterations: 15,
+		SeedKnown:     true, // the code is in front of it; the diff is in the task
+		MaxIterations: 8,
 		Temperature:   0.2,
 		MaxTokens:     6000,
 	})

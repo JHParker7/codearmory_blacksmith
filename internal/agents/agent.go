@@ -133,6 +133,12 @@ type Options struct {
 	MaxIterations int
 	Temperature   float64
 	MaxTokens     int
+
+	// SeedKnown shows the whole tree in the first prompt instead of making the
+	// agent read files in one by one. For a REVIEWER, which judges code it did
+	// not write, this is the difference between the department reviewer's single
+	// handed-over diff and a 25-turn discovery loop.
+	SeedKnown bool
 }
 
 // An Agent is one stage, wired and ready to run.
@@ -159,6 +165,9 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 	space := tools.NewWorkspace(files, o.Guard)
 	if o.RewriteWhole {
 		space.AllowWholeRewrites()
+	}
+	if o.SeedKnown {
+		space.SeedKnown()
 	}
 	return &Agent{
 		opts:  o,

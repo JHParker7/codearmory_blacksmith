@@ -204,3 +204,17 @@ func TestPathsAreSortedSoTwoIdenticalRunsBuildTheSamePrompt(t *testing.T) {
 		t.Fatalf("paths are not sorted: %q", got)
 	}
 }
+
+// SeedKnown puts the whole tree in the agent's memory up front, so a reviewer
+// sees the code on turn one instead of reading files in to discover it.
+func TestSeedKnownMakesTheWholeTreeKnownImmediately(t *testing.T) {
+	w := ws(t, map[string]string{"b.go": "package b", "a.go": "package a"}, AllowAll)
+	if len(w.Known()) != 0 {
+		t.Fatalf("a fresh workspace knows nothing until read; got %v", w.Known())
+	}
+	w.SeedKnown()
+	got := w.Known()
+	if len(got) != 2 || got[0] != "a.go" || got[1] != "b.go" {
+		t.Fatalf("SeedKnown should know every file, sorted; got %v", got)
+	}
+}

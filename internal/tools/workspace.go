@@ -98,6 +98,18 @@ func (w *Workspace) Seen(path string) {
 	w.knownOrder = append(w.knownOrder, path)
 }
 
+// SeedKnown marks every file already in the workspace as known, so the FIRST
+// prompt already carries the code instead of the agent spending turns reading
+// it in. A reviewer that only judges what is already there was starting blind —
+// the workspace held the tree but Known() was empty until it called read_files,
+// so it burned its whole budget discovering a project the department reviewer
+// was simply handed. Seeded, it can answer on turn one. Sorted, so the first
+// prompt is stable between runs and its cache holds.
+func (w *Workspace) SeedKnown() {
+	w.knownOrder = w.knownOrder[:0]
+	w.knownOrder = append(w.knownOrder, w.Paths()...)
+}
+
 // Known lists the paths the agent has read or written, least recently used
 // first, skipping any that have since been removed.
 func (w *Workspace) Known() []string {
