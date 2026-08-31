@@ -60,6 +60,18 @@ func departmentDispatch(cmd string) {
 			slog.Error("the department stopped", "error", err)
 			os.Exit(1)
 		}
+	case "serve":
+		// The agent harness as a CodeArmory service: async action endpoints the
+		// workflows engine invokes. This is what `service` becomes once the
+		// department is removed; kept a separate word until then.
+		addr := ":8199"
+		if p := os.Getenv("PORT"); p != "" {
+			addr = ":" + p
+		}
+		if err := serveActions(addr); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("the action service stopped", "error", err)
+			os.Exit(1)
+		}
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
