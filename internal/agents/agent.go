@@ -368,7 +368,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			if progressed(call.Name, result) {
 				idle = 0
 				switch call.Name {
-				case tools.WriteFile, tools.FileTicket:
+				case tools.WriteFile, tools.FileTicket, tools.MergeFix:
 					wrote = true
 					produced++
 				case tools.UndoEdit:
@@ -390,6 +390,17 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 					a.logf("%s: check passed after %d turns", a.opts.Name, out.Iterations)
 					return out, nil
 				}
+			}
+
+			// A SUCCESSFUL MERGE ENDS THE REVIEW. Once the reviewer approves and
+			// the fix is on dev there is nothing left to review, so approval is
+			// terminal the way a green check is — otherwise the model keeps
+			// calling merge_fix, re-merging what is already merged. Measured on
+			// the first live end-to-end: four merge_fix calls for one approval.
+			if call.Name == tools.MergeFix && !strings.HasPrefix(result, "Error:") {
+				out.Passed = true
+				a.logf("%s: approved and merged after %d turns", a.opts.Name, out.Iterations)
+				return out, nil
 			}
 		}
 
