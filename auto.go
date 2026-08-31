@@ -188,72 +188,44 @@ func autoProject(ctx context.Context, maker agents.Creator, base string, attempt
 		return true, nil
 	}
 
-	// Work each finding on the shared clone; approved fixes accumulate as
-	// commits, rejected work is discarded before the next finding.
-	var approved []finding
-	blockedAboveLow := false
-	for _, f := range group {
-		switch outcome, note := fixReviewOne(ctx, maker, dir, repo, f); outcome {
-		case fixApproved:
-			approved = append(approved, f)
-		case fixNoop:
-			// The tree already satisfies this finding — a sibling fix covered it,
-			// or it targets what the developer cannot edit (a test file), and the
-			// source scanner does not flag it. Not a fix, not an open hole: left
-			// for a person, but it does NOT hold the merge.
-			resolveFinding(f.id, false, note)
-			restoreToHead(ctx, dir)
-		default: // fixFailed
-			resolveFinding(f.id, false, note)
-			if isAboveLow(f.severity) {
-				blockedAboveLow = true // a serious finding is genuinely unfixed: the merge waits
-			}
-			restoreToHead(ctx, dir) // drop the rejected work before the next finding
+	// THE BATCH FIX. All of the project's findings are fixed in ONE developer
+	// run and verified once — the scanners must go quiet and a single reviewer
+	// must approve the combined diff, told to hold the merge unless every
+	// above-low finding is addressed. N findings cost one fix session and one
+	// review instead of N of each; a rejection revises the whole batch.
+	fixed, note := fixBatch(ctx, maker, dir, repo, group)
+	if !fixed {
+		// HELD. The batch could not be built, verified, or approved — dev must
+		// not take a project whose serious findings are unresolved.
+		for _, f := range group {
+			resolveFinding(f.id, false, "auto mode worked this project as a batch; the merge to dev is HELD: "+note)
 		}
-	}
-
-	if len(approved) == 0 {
-		return true, nil // nothing landed; every finding is already resolved-open
-	}
-
-	// THE MERGE GATE. dev takes the project ONLY when every above-low finding is
-	// fixed. If one is not, the approved fixes are real and committed on the
-	// clone, but they do not merge — a person settles the blocker first.
-	if blockedAboveLow {
-		held := "auto mode fixed and approved this, but the merge to dev is HELD: the project still has " +
-			"an above-low finding it could not fix, and dev must not take the project until every finding " +
-			"above low severity is resolved. The approved fix is ready; a person should settle the blocker."
-		for _, f := range approved {
-			resolveFinding(f.id, false, held)
-		}
-		slog.Info("auto: merge held; an above-low finding is unfixed",
-			"project", repo.project, "approved", len(approved))
+		slog.Info("auto: batch not merged; held", "project", repo.project, "findings", len(group))
 		return true, nil
 	}
 
-	// Every above-low finding is resolved: push the accumulated batch and merge
-	// it to dev in one step.
+	// Approved and verified: push the batch and merge it to dev in one step.
 	batch := "fix/batch-" + repo.run
 	if pErr := pushBranch(ctx, dir, batch); pErr != nil {
-		for _, f := range approved {
-			resolveFinding(f.id, false, "auto mode fixed and approved this but could not push the batch branch: "+pErr.Error())
+		for _, f := range group {
+			resolveFinding(f.id, false, "the batch was approved but could not be pushed: "+pErr.Error())
 		}
 		return true, nil
 	}
-	msg := fmt.Sprintf("merge: %d approved fix(es) for run/%s", len(approved), repo.run)
+	msg := fmt.Sprintf("merge: batch fix of %d findings for run/%s", len(group), repo.run)
 	res, mErr := mergeBranchToDev(ctx, base, repo, batch, msg)
 	if mErr != nil {
-		for _, f := range approved {
-			resolveFinding(f.id, false, "auto mode fixed and approved this; the batch merge to dev failed: "+firstLineOf(mErr.Error()))
+		for _, f := range group {
+			resolveFinding(f.id, false, "the batch was approved; the merge to dev failed: "+firstLineOf(mErr.Error()))
 		}
 		return true, nil
 	}
-	for _, f := range approved {
+	for _, f := range group {
 		resolveFinding(f.id, true, fmt.Sprintf(
-			"auto mode fixed this and it merged to dev with the project's other approved fixes: %s", res))
+			"auto mode fixed this in a batch of %d and merged to dev: %s", len(group), res))
 	}
 	slog.Info("auto: project merged to dev",
-		"project", repo.project, "approved", len(approved), "result", res)
+		"project", repo.project, "findings", len(group), "result", res)
 
 	// ANOTHER FULL RUN. The fixes are in; now run the whole detector suite and
 	// both reviewers over the merged tree, so anything left behind or newly
@@ -309,137 +281,128 @@ func auditAfterMerge(ctx context.Context, maker agents.Creator, dir string, repo
 	}
 }
 
-// fixReviewOne runs the fix↔review negotiation for ONE finding on the shared
-// accumulating clone. The fix agent proposes, the reviewer judges the delta the
-// fix makes ON TOP of the fixes already committed, and a rejection is not the
-// end: the reviewer's reasons go BACK to the fix agent as its next task, so it
-// revises rather than abandons. On approval it commits the fix to the clone —
-// advancing what the next finding builds on — and returns true. Bounded, and
-// the fix carries forward between rounds so each revision builds on the last.
-func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo findingRepo, f finding) (fixOutcome, string) {
+// fixBatch fixes a project's WHOLE finding set in ONE developer run, then
+// verifies it once: the source scanners must go quiet and a single reviewer
+// must approve the combined diff. This is the fast path — N findings cost one
+// fix session and one review instead of N of each, because the dominant cost is
+// the number of separate model sessions, not the edits. The trade is
+// granularity: a rejection revises the batch as a whole, and the merge gate
+// moves into the review, which is told to withhold approval unless every
+// ABOVE-LOW finding in the production code is addressed. So dev still never
+// takes a batch that leaves a serious hole open.
+//
+// On success it commits the batch to the clone and returns true. On failure —
+// the developer could not reach a passing tree, the scanner still flags an
+// issue it can see, or the reviewer will not approve within the cycle budget —
+// it returns false and the whole merge is held.
+func fixBatch(ctx context.Context, maker agents.Creator, dir string, repo findingRepo, group []finding) (bool, string) {
 	cur, err := readTree(dir)
 	if err != nil {
-		return fixFailed, "auto mode could not read the working tree: " + err.Error()
+		return false, "auto mode could not read the working tree: " + err.Error()
 	}
-	// THE SCANNER BASELINE: what the source detector says about the tree BEFORE
-	// this fix. The fix is confirmed only if a re-run comes back with this issue
-	// gone and nothing new — measured against here.
-	baseline := scanSignatures(runKindScanners(ctx, maker.Sandbox, cur, f.kind))
+	// Baseline for BOTH detector families over the whole tree — the batch fixes
+	// security and quality findings together, so both must be measured.
+	baseSec := scanSignatures(runKindScanners(ctx, maker.Sandbox, cur, "security"))
+	baseQual := scanSignatures(runKindScanners(ctx, maker.Sandbox, cur, "quality"))
+
 	feedback := ""
 	for cycle := 1; cycle <= maxFixReviewCycles; cycle++ {
-		task := "Fix this reported finding:\n\n" + f.title + "\n\n" + f.body
+		task := batchFixTask(group)
 		if feedback != "" {
-			task += "\n\nA PREVIOUS FIX WAS REJECTED IN REVIEW. Address exactly what the " +
-				"reviewer said and revise your fix:\n" + feedback
+			task += "\n\nA PREVIOUS ATTEMPT WAS SENT BACK IN REVIEW. Address exactly this and revise:\n" + feedback
 		}
 
 		agent := maker.FixFinding(cur)
 		out, tree, runErr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return agent, nil }, cur, task)
 		if runErr != nil {
-			return fixFailed, "auto mode's fix attempt errored: " + firstLineOf(runErr.Error())
+			return false, "the batch fix errored: " + firstLineOf(runErr.Error())
 		}
 		if !out.Passed {
-			return fixFailed, "auto mode could not fix this within its budget; a person should take it. Last check:\n" +
+			return false, "the batch fix could not reach a passing build/test within its budget. Last check:\n" +
 				truncate(out.LastCheck, 500)
 		}
-		cur = tree // carry the attempt forward: the next revision builds on it
+		cur = tree
 
-		// Lay the fix on the shared clone and stage its delta, so the reviewer
-		// sees only THIS finding's change on top of the fixes already committed.
 		if err := replaceTree(dir, cur); err != nil {
-			return fixFailed, "auto mode could not lay the fix down for review: " + err.Error()
+			return false, "auto mode could not lay the batch down for review: " + err.Error()
 		}
 		diff, diffErr := stagedDiff(ctx, dir)
 		if diffErr != nil {
-			return fixFailed, "the fix could not be diffed for review: " + diffErr.Error()
+			return false, "the batch could not be diffed for review: " + diffErr.Error()
 		}
 		if strings.TrimSpace(diff) == "" {
-			// NO CHANGE. The accumulated tree already satisfies this finding — a
-			// sibling fix covered it (the build files near-duplicate findings, and
-			// exact-title dedup lets them through), or it targets what the developer
-			// cannot edit (a test file). Ask the SOURCE SCANNER: if it no longer
-			// flags the issue this is nothing to do, NOT an open hole, and must not
-			// hold the merge. Only a scanner that STILL flags it is a real unfixed
-			// finding. Measured live: two duplicate criticals and a dup high all
-			// "changed no files" and wrongly held a merge whose real fixes were in.
-			after := scanSignatures(runKindScanners(ctx, maker.Sandbox, cur, f.kind))
-			if scanVerify(baseline, after).stuck {
-				return fixFailed, "auto mode changed nothing and the " + f.kind +
-					" scanner still reports the issue; a person should take it."
-			}
-			return fixNoop, "auto mode made no change here — the tree already satisfies this finding " +
-				"(a sibling fix, or a target the developer cannot edit) and the scanner does not flag it. " +
-				"Left open for a person to confirm or close; it does not hold the merge."
+			return false, "the batch changed no files"
 		}
 
-		// THE REVIEW GATE. approve just RECORDS approval; the merge to dev is a
-		// batch that runs once the project's above-low findings are all fixed.
+		// THE SCANNER GATE, over the whole tree: the fixes must introduce no new
+		// finding and leave the detectors quieter than the baseline.
+		secV := scanVerify(baseSec, scanSignatures(runKindScanners(ctx, maker.Sandbox, cur, "security")))
+		qualV := scanVerify(baseQual, scanSignatures(runKindScanners(ctx, maker.Sandbox, cur, "quality")))
+		introduced := append(append([]string{}, secV.introduced...), qualV.introduced...)
+		if len(introduced) > 0 {
+			feedback = "Your changes INTRODUCED new scanner findings at: " + strings.Join(introduced, ", ") +
+				". Remove them; do not trade one issue for another."
+			slog.Info("auto: batch scanner regressed; revising", "cycle", cycle, "introduced", len(introduced))
+			continue
+		}
+
+		// THE REVIEW GATE — and the merge gate. The reviewer is told to approve
+		// only if every above-low finding in the production code is addressed.
 		approved := false
 		m := maker
 		m.MergeFix = func(string) (string, error) {
 			approved = true
-			return "Approved. It will merge to dev once the project's above-low findings are all fixed.", nil
+			return "Approved. The batch will merge to dev.", nil
 		}
-		reviewTask := "Review this proposed fix.\n\nThe finding:\n" + f.title + "\n\n" + f.body +
-			"\n\nThe diff of the fix:\n" + truncate(diff, 8000)
 		reviewAgent := m.MergeReviewer(cur)
-		rout, _, rerr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return reviewAgent, nil }, cur, reviewTask)
+		rout, _, rerr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return reviewAgent, nil }, cur, batchReviewTask(group, diff))
 		if rerr != nil {
-			return fixFailed, "the review stage errored: " + firstLineOf(rerr.Error())
+			return false, "the batch review errored: " + firstLineOf(rerr.Error())
 		}
-
 		if approved {
-			// THE SCANNER GATE. The reviewer said yes; now the tool that raised
-			// the finding runs again on the fixed tree and must not raise it
-			// again. A fix that the detector still flags — or that lights up the
-			// detector somewhere new — is not done, whatever the reviewer thought.
-			report := runKindScanners(ctx, maker.Sandbox, cur, f.kind)
-			switch v := scanVerify(baseline, scanSignatures(report)); {
-			case len(v.introduced) > 0:
-				feedback = "The reviewer approved, but re-running the " + f.kind +
-					" scanner shows your fix INTRODUCED new findings at: " +
-					strings.Join(v.introduced, ", ") + ". Remove them; do not trade one issue for another."
-				slog.Info("auto: scanner regressed on the fix; revising",
-					"finding", f.title, "introduced", len(v.introduced))
-			case v.stuck:
-				feedback = "The reviewer approved, but re-running the " + f.kind +
-					" scanner STILL reports the issue — the fix must make the detector stop flagging it. " +
-					"Latest scanner output:\n" + truncate(report, 2000)
-				slog.Info("auto: scanner still flags the issue; revising", "finding", f.title)
-			default:
-				// Confirmed by both reviewer and scanner. Commit so the next
-				// finding builds on it and the batch branch carries it; the delta
-				// is already staged.
-				msg := "fix: " + strings.TrimPrefix(strings.TrimPrefix(f.title, "security: "), "quality: ")
-				if out, err := gitCmd(ctx, dir, "commit", "-q", "-m", msg); err != nil {
-					return fixFailed, "auto mode approved the fix but could not commit it: " + firstLineOf(out)
-				}
-				return fixApproved, ""
+			if out, err := gitCmd(ctx, dir, "commit", "-q", "-m",
+				fmt.Sprintf("fix: %d findings for run/%s", len(group), repo.run)); err != nil {
+				return false, "the batch was approved but could not be committed: " + firstLineOf(out)
 			}
-			slog.Info("auto: scanner held back an approved fix; revising",
-				"cycle", cycle, "of", maxFixReviewCycles, "finding", f.title)
-			continue
+			return true, ""
 		}
 
-		// Rejected: feed the reason back and revise.
 		feedback = strings.TrimSpace(rout.Answer)
-		slog.Info("auto: review rejected the fix; revising",
-			"cycle", cycle, "of", maxFixReviewCycles, "finding", f.title)
+		slog.Info("auto: batch review rejected; revising", "cycle", cycle, "of", maxFixReviewCycles)
 	}
-
-	return fixFailed, fmt.Sprintf(
-		"auto mode revised the fix through %d cycles without both a review approval and a clean re-scan; "+
-			"a person should settle it. The last objection:\n%s", maxFixReviewCycles, truncate(feedback, 600))
+	return false, fmt.Sprintf(
+		"the batch went through %d review cycles without approval; a person should settle it.", maxFixReviewCycles)
 }
 
-// fixOutcome is how one finding's fix↔review negotiation ended.
-type fixOutcome int
+// batchFixTask lists every finding for the developer to fix in one pass.
+func batchFixTask(group []finding) string {
+	var b strings.Builder
+	b.WriteString("Fix ALL of the following reported findings in this code, in one pass. Each is a real " +
+		"defect; address every one you can with a source-code change. You may NOT edit test files.\n")
+	for i, f := range group {
+		fmt.Fprintf(&b, "\n[%d] (%s / %s) %s\n%s\n", i+1, f.severity, f.kind, f.title, f.body)
+	}
+	return b.String()
+}
 
-const (
-	fixFailed   fixOutcome = iota // could not fix-and-verify; GATES the merge if the finding is above low
-	fixApproved                   // fixed, reviewer-approved, scanner-verified, committed to the batch
-	fixNoop                       // the tree already satisfies it and the scanner is quiet — not a fix, not a hole; never gates
-)
+// batchReviewTask asks the reviewer to judge the whole batch and holds the merge
+// gate: approve only when every above-low finding in the production code is
+// addressed. A finding that cannot be fixed by a source change — one about a
+// test file, or one a sibling fix already covered — does not block approval.
+func batchReviewTask(group []finding, diff string) string {
+	var b strings.Builder
+	b.WriteString("Review this batch of fixes. Call merge_fix to APPROVE only if EVERY finding above low " +
+		"severity (critical, high, medium) is actually addressed by the diff — EXCEPT a finding that no " +
+		"source-code change can fix (one about a *_test.go file, which may not be edited, or one already " +
+		"satisfied by another change) does not block approval. If an above-low finding in the production " +
+		"code remains genuinely unfixed, REJECT and name which ones. Low-severity findings need not all be fixed.\n\n" +
+		"The findings:\n")
+	for i, f := range group {
+		fmt.Fprintf(&b, "\n[%d] (%s / %s) %s\n%s\n", i+1, f.severity, f.kind, f.title, f.body)
+	}
+	b.WriteString("\n\nThe combined diff:\n" + truncate(diff, 12000))
+	return b.String()
+}
 
 // isAboveLow reports whether a finding's severity outranks "low" — critical,
 // high, or medium. These are the findings that GATE the merge to dev: a
