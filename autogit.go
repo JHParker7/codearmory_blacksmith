@@ -37,10 +37,19 @@ func cloneRunBranch(ctx context.Context, base string, repo findingRepo) (string,
 	}
 	url := strings.TrimRight(baseURL, "/") + "/" + repo.project + ".git"
 	branch := "run/" + repo.run
-	dir := filepath.Join(base, "auto-"+repo.project+"-"+repo.run)
+	// CLONE INTO A BARE NAME under base, not a base-joined path. gitCmd runs with
+	// `-C base`, so the target is resolved RELATIVE TO base — passing the joined
+	// path here nests it a second time (base/base/auto-…) and the dir this returns
+	// then does not exist, so every later readTree fails and the finding is
+	// abandoned before a single fix. Measured live: a relative base ("workshop")
+	// left the clone at workshop/workshop/… while this returned workshop/… — 29
+	// findings resolved "could not read the working tree". An absolute base hid it
+	// (git ignores -C for an absolute target), which is why it worked before.
+	name := "auto-" + repo.project + "-" + repo.run
+	dir := filepath.Join(base, name)
 	_ = os.RemoveAll(dir)
 
-	if out, err := gitCmd(ctx, base, "clone", "-q", "--depth", "1", "--branch", branch, url, dir); err != nil {
+	if out, err := gitCmd(ctx, base, "clone", "-q", "--depth", "1", "--branch", branch, url, name); err != nil {
 		return "", fmt.Errorf("clone %s@%s: %s", url, branch, firstLineOf(out))
 	}
 	return dir, nil
