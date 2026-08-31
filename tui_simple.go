@@ -348,6 +348,20 @@ var (
 	promptStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 )
 
+// boardSevStyle colours a finding's severity the way the operator reads it:
+// critical/high in red, medium in yellow, low and anything unrecognised dim.
+// The colour is the at-a-glance triage the board exists to give.
+func boardSevStyle(sev string) lipgloss.Style {
+	switch strings.ToLower(sev) {
+	case "critical", "high":
+		return failStyle
+	case "medium":
+		return runStyle
+	default:
+		return dimStyle
+	}
+}
+
 func glyph(status string) string {
 	switch status {
 	case "running":
@@ -424,15 +438,7 @@ func (m tuiModel) View() string {
 	}
 
 	if m.board.reachable {
-		b.WriteString("\n" + titleStyle.Render("board") +
-			dimStyle.Render(fmt.Sprintf("   %d security / %d quality findings open",
-				m.board.openSecurity, m.board.openQuality)) + "\n")
-		if len(m.board.activeRequests) == 0 {
-			b.WriteString(dimStyle.Render("   no other requests in flight") + "\n")
-		}
-		for _, r := range m.board.activeRequests {
-			b.WriteString("   " + runStyle.Render("▷ ") + truncate(r, 66) + dimStyle.Render("  (in flight)") + "\n")
-		}
+		b.WriteString(m.board.render())
 	}
 
 	b.WriteString("\n" + promptStyle.Render("request> ") + m.input + "▌\n")
