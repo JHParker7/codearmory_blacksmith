@@ -50,12 +50,16 @@ import (
 const workspaceMount = "/workspace"
 
 // actionRequest is the async submit body. The workspace is the workflow's shared
-// VOLUME (its resource name, from create-volume) — not a repo/ref, because the
-// clone and push are the workflow's forge steps, not the agent's.
+// VOLUME, addressed by its LOGICAL HANDLE — WorkflowID (the run id every step
+// shares) plus Volume (the logical name, e.g. "workspace") — not a repo/ref,
+// because the clone and push are the workflow's forge steps, not the agent's,
+// and not a resource name, because forge/create-volume returns none (it derives
+// the resource from the handle). The workflow wires WorkflowID as ${run_id}.
 type actionRequest struct {
-	Volume string `json:"volume"` // the run's shared volume resource name
-	Task   string `json:"task"`   // the request, the finding, the thing to do
-	Check  string `json:"check"`  // optional check-command override for this role
+	WorkflowID string `json:"workflow_id"` // the run id the shared volume belongs to
+	Volume     string `json:"volume"`      // the shared volume's logical name
+	Task       string `json:"task"`        // the request, the finding, the thing to do
+	Check      string `json:"check"`       // optional check-command override for this role
 }
 
 // actionResult is one job's terminal state, shaped for the workflows async
@@ -167,7 +171,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		TimeoutSecs:     a.cfg.Repo.TimeoutSecs,
 		IdleTimeoutSecs: a.cfg.Repo.LeaseIdleSecs,
 		MaxLifetimeSecs: a.cfg.Repo.LeaseMaxSecs,
-		Volumes:         []forge.VolumeMount{{Name: req.Volume, MountPath: workspaceMount, Workdir: true}},
+		Volumes:         []forge.VolumeMount{{WorkflowID: req.WorkflowID, Name: req.Volume, MountPath: workspaceMount, Workdir: true}},
 	})
 	if err != nil {
 		fail("acquire a sandbox on volume " + req.Volume + ": " + firstLineOf(err.Error()))
@@ -375,8 +379,8 @@ func (a *actionServer) handle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request body", http.StatusBadRequest)
 			return
 		}
-		if req.Volume == "" {
-			http.Error(w, "volume is required", http.StatusBadRequest)
+		if req.Volume == "" || req.WorkflowID == "" {
+			http.Error(w, "workflow_id and volume are required to address the shared volume", http.StatusBadRequest)
 			return
 		}
 		who := caller{bearer: strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")}

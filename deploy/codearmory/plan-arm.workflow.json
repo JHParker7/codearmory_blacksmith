@@ -9,54 +9,54 @@
 
     { "name": "clone", "action": "forge/run",
       "with": { "run": "git clone ${inputs.repo} /work && cd /work && git checkout ${inputs.ref}",
-                "volumes": [ { "name": "ws", "path": "/work" } ] } },
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
     { "name": "architect", "action": "blacksmith/plan-architect",
-      "with": { "volume": "ws", "task": "${inputs.task}" } },
+      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "tests", "action": "blacksmith/plan-test",
-      "with": { "volume": "ws", "task": "${inputs.task}" } },
+      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "expected-red", "action": "forge/run",
       "with": { "run": "cd /work && go build ./... && go vet ./... && ! go test ./...",
-                "volumes": [ { "name": "ws", "path": "/work" } ] } },
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
     { "name": "dev", "action": "blacksmith/plan-dev",
-      "with": { "volume": "ws", "task": "${inputs.task}" } },
+      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "green", "action": "forge/run",
       "with": { "run": "cd /work && go build ./... && go test ./...",
-                "volumes": [ { "name": "ws", "path": "/work" } ] } },
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
     { "name": "sast", "action": "forge/run",
       "with": { "run": "cd /work && mkdir -p scan && (gosec -quiet ./... > scan/sast.txt 2>&1 || true)",
-                "volumes": [ { "name": "ws", "path": "/work" } ] } },
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
     { "name": "sca", "action": "forge/run",
       "with": { "run": "cd /work && (govulncheck ./... > scan/sca.txt 2>&1 || true)",
-                "volumes": [ { "name": "ws", "path": "/work" } ] } },
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
     { "name": "sec-review", "action": "blacksmith/plan-sec",
-      "with": { "volume": "ws", "task": "${inputs.task}" } },
+      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "lint", "action": "forge/run",
       "with": { "run": "cd /work && (staticcheck ./... > scan/lint.txt 2>&1 || true)",
-                "volumes": [ { "name": "ws", "path": "/work" } ] } },
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
     { "name": "quality-review", "action": "blacksmith/plan-review",
-      "with": { "volume": "ws", "task": "${inputs.task}" } },
+      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "version", "action": "forge/run",
       "with": { "run": "cd /work && git tag $(scripts/semver.sh) || true; git describe --tags --abbrev=0 --match 'v*'",
-                "volumes": [ { "name": "ws", "path": "/work" } ],
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ],
                 "output_env": [ "VERSION" ] } },
 
     { "name": "package", "action": "forge/run",
       "with": { "run": "cd /work && docker build -t ${CONTAINERS_URL}/${inputs.repo}:${steps.version.output.VERSION} . && docker push ${CONTAINERS_URL}/${inputs.repo}:${steps.version.output.VERSION}",
-                "volumes": [ { "name": "ws", "path": "/work" } ] } },
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
     { "name": "push", "action": "forge/run",
       "with": { "run": "cd /work && git add -A && git -c user.name=blacksmith -c user.email=blacksmith@codearmory commit -m 'chore: run ${run_id}' && git push origin HEAD:refs/heads/${inputs.ref}",
-                "volumes": [ { "name": "ws", "path": "/work" } ] } }
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } }
   ],
 
   "routes": [

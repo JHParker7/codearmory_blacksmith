@@ -67,14 +67,21 @@ const (
 	MaxLifetime    = 3600 * time.Second
 )
 
-// VolumeMount attaches a forge workflow volume to a sandbox. Name is the
-// volume's resource name (what create-volume returns). Workdir makes it the
-// working directory; ReadOnly mounts it read-only.
+// VolumeMount attaches a forge workflow volume to a sandbox by its LOGICAL
+// HANDLE — the (WorkflowID, Name) pair, NOT a resource name. forge derives the
+// resource name itself as fv-<hash(workflow_id)>-<name>; create-volume is
+// idempotent on that pair and never returns a resource name for the caller to
+// carry (measured against the live forge: create-volume's step output is empty,
+// so a downstream mount that referenced it attached nothing). WorkflowID is the
+// run id every step of one workflow shares; Name is the logical volume name
+// (e.g. "workspace"). Workdir makes it the working directory; ReadOnly mounts it
+// read-only.
 type VolumeMount struct {
-	Name      string `json:"name"`
-	MountPath string `json:"mount_path,omitempty"`
-	Workdir   bool   `json:"workdir,omitempty"`
-	ReadOnly  bool   `json:"read_only,omitempty"`
+	WorkflowID string `json:"workflow_id"`
+	Name       string `json:"name"`
+	MountPath  string `json:"mount_path,omitempty"`
+	Workdir    bool   `json:"workdir,omitempty"`
+	ReadOnly   bool   `json:"read_only,omitempty"`
 }
 
 // CheckoutSpec is forge's clone configuration for a lease.
