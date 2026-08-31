@@ -127,10 +127,22 @@ func resolveFinding(id string, fixed bool, note string) {
 	}
 }
 
-// autoNext works ONE finding: pick, clone, fix, push, resolve. It returns
-// whether it found anything to do, so the caller's loop can stop when the
-// board is drained rather than spin.
-func autoNext(ctx context.Context, maker agents.Creator, base string, attempted map[string]bool) (worked bool, err error) {
+// autoProject works a WHOLE project's findings as one unit, because dev must
+// not receive a project's fixes until every finding ABOVE LOW SEVERITY is
+// resolved. Merging a fix for a low nit while a critical hole is still open
+// would put a knowingly-vulnerable tree on the branch a person integrates from;
+// the merge waits for the serious ones.
+//
+// It picks the highest-priority open finding, works every open finding that
+// belongs to the SAME project on one accumulating clone — fix, review, and on
+// approval commit — and only when no above-low finding is left unfixed does it
+// merge the batch to dev. If even one above-low finding cannot be fixed, the
+// whole merge is HELD: the approved fixes wait for a person rather than land a
+// half-secured tree on dev.
+//
+// Returns whether it found a project to work, so the caller's loop stops when
+// the board is drained rather than spins.
+func autoProject(ctx context.Context, maker agents.Creator, base string, attempted map[string]bool) (worked bool, err error) {
 	if tickets == nil {
 		return false, fmt.Errorf("auto mode needs a ticket board; none is configured")
 	}
@@ -142,41 +154,114 @@ func autoNext(ctx context.Context, maker agents.Creator, base string, attempted 
 	if len(todo) == 0 {
 		return false, nil
 	}
-	f := todo[0]
-	// ATTEMPTED ONCE PER SESSION, recorded BEFORE the work so that a finding
-	// left open for a person is not re-picked next cycle. A truly unfixable
-	// finding — auth the tests forbid, a design change no minimal edit makes —
-	// stays open, but auto-mode moves past it instead of grinding forever.
-	// Recorded before, not after, so a mid-fix crash cannot resurrect the loop.
-	attempted[f.id] = true
-	slog.Info("auto: working a finding", "kind", f.kind, "severity", f.severity, "title", f.title)
 
-	repo, ok := repoOfFinding(f)
+	// The project to work is the one the highest-priority finding is about.
+	// ATTEMPTED IS RECORDED BEFORE THE WORK, so a finding left open for a person
+	// is not re-picked next cycle — a truly unfixable finding stays open but the
+	// loop moves past it instead of grinding forever.
+	lead := todo[0]
+	attempted[lead.id] = true
+	repo, ok := repoOfFinding(lead)
 	if !ok {
-		resolveFinding(f.id, false,
+		resolveFinding(lead.id, false,
 			"auto mode could not tell which project or branch this finding is about — its parent "+
 				"request names no project/run. A person needs to point it at the code.")
 		return true, nil
 	}
 
+	// Gather every open finding for this project, in the same priority order,
+	// and mark them all attempted: the project gets one pass per session.
+	var group []finding
+	for _, f := range todo {
+		if r, ok := repoOfFinding(f); ok && r == repo {
+			group = append(group, f)
+			attempted[f.id] = true
+		}
+	}
+	slog.Info("auto: working a project", "project", repo.project, "run", repo.run, "findings", len(group))
+
 	dir, cloneErr := cloneRunBranch(ctx, base, repo)
 	if cloneErr != nil {
-		resolveFinding(f.id, false, "auto mode could not clone the code: "+cloneErr.Error())
+		for _, f := range group {
+			resolveFinding(f.id, false, "auto mode could not clone the code: "+cloneErr.Error())
+		}
 		return true, nil
 	}
 
-	files, readErr := readTree(dir)
-	if readErr != nil {
-		resolveFinding(f.id, false, "auto mode could not read the cloned tree: "+readErr.Error())
+	// Work each finding on the shared clone; approved fixes accumulate as
+	// commits, rejected work is discarded before the next finding.
+	var approved []finding
+	blockedAboveLow := false
+	for _, f := range group {
+		ok, note := fixReviewOne(ctx, maker, dir, repo, f)
+		if ok {
+			approved = append(approved, f)
+			continue
+		}
+		resolveFinding(f.id, false, note)
+		if isAboveLow(f.severity) {
+			blockedAboveLow = true // a serious finding is unfixed: the merge waits
+		}
+		restoreToHead(ctx, dir) // drop the rejected work before the next finding
+	}
+
+	if len(approved) == 0 {
+		return true, nil // nothing landed; every finding is already resolved-open
+	}
+
+	// THE MERGE GATE. dev takes the project ONLY when every above-low finding is
+	// fixed. If one is not, the approved fixes are real and committed on the
+	// clone, but they do not merge — a person settles the blocker first.
+	if blockedAboveLow {
+		held := "auto mode fixed and approved this, but the merge to dev is HELD: the project still has " +
+			"an above-low finding it could not fix, and dev must not take the project until every finding " +
+			"above low severity is resolved. The approved fix is ready; a person should settle the blocker."
+		for _, f := range approved {
+			resolveFinding(f.id, false, held)
+		}
+		slog.Info("auto: merge held; an above-low finding is unfixed",
+			"project", repo.project, "approved", len(approved))
 		return true, nil
 	}
 
-	// THE FIX↔REVIEW LOOP. The fix agent proposes, the reviewer judges, and a
-	// rejection is not the end: the reviewer's reasons go BACK to the fix agent
-	// as its next task, so it revises rather than abandons. Bounded, because a
-	// fix and a reviewer that cannot agree in a few rounds is a disagreement a
-	// person should settle — and the fix carries forward between rounds, so each
-	// revision builds on the last rather than starting over.
+	// Every above-low finding is resolved: push the accumulated batch and merge
+	// it to dev in one step.
+	batch := "fix/batch-" + repo.run
+	if pErr := pushBranch(ctx, dir, batch); pErr != nil {
+		for _, f := range approved {
+			resolveFinding(f.id, false, "auto mode fixed and approved this but could not push the batch branch: "+pErr.Error())
+		}
+		return true, nil
+	}
+	msg := fmt.Sprintf("merge: %d approved fix(es) for run/%s", len(approved), repo.run)
+	res, mErr := mergeBranchToDev(ctx, base, repo, batch, msg)
+	if mErr != nil {
+		for _, f := range approved {
+			resolveFinding(f.id, false, "auto mode fixed and approved this; the batch merge to dev failed: "+firstLineOf(mErr.Error()))
+		}
+		return true, nil
+	}
+	for _, f := range approved {
+		resolveFinding(f.id, true, fmt.Sprintf(
+			"auto mode fixed this and it merged to dev with the project's other approved fixes: %s", res))
+	}
+	slog.Info("auto: project merged to dev",
+		"project", repo.project, "approved", len(approved), "result", res)
+	return true, nil
+}
+
+// fixReviewOne runs the fix↔review negotiation for ONE finding on the shared
+// accumulating clone. The fix agent proposes, the reviewer judges the delta the
+// fix makes ON TOP of the fixes already committed, and a rejection is not the
+// end: the reviewer's reasons go BACK to the fix agent as its next task, so it
+// revises rather than abandons. On approval it commits the fix to the clone —
+// advancing what the next finding builds on — and returns true. Bounded, and
+// the fix carries forward between rounds so each revision builds on the last.
+func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo findingRepo, f finding) (bool, string) {
+	cur, err := readTree(dir)
+	if err != nil {
+		return false, "auto mode could not read the working tree: " + err.Error()
+	}
 	feedback := ""
 	for cycle := 1; cycle <= maxFixReviewCycles; cycle++ {
 		task := "Fix this reported finding:\n\n" + f.title + "\n\n" + f.body
@@ -185,69 +270,73 @@ func autoNext(ctx context.Context, maker agents.Creator, base string, attempted 
 				"reviewer said and revise your fix:\n" + feedback
 		}
 
-		agent := maker.FixFinding(files)
-		out, tree, runErr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return agent, nil }, files, task)
+		agent := maker.FixFinding(cur)
+		out, tree, runErr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return agent, nil }, cur, task)
 		if runErr != nil {
-			resolveFinding(f.id, false, "auto mode's fix attempt errored: "+firstLineOf(runErr.Error()))
-			return true, nil
+			return false, "auto mode's fix attempt errored: " + firstLineOf(runErr.Error())
 		}
 		if !out.Passed {
-			resolveFinding(f.id, false,
-				"auto mode could not fix this within its budget; a person should take it. Last check:\n"+
-					truncate(out.LastCheck, 500))
-			return true, nil
+			return false, "auto mode could not fix this within its budget; a person should take it. Last check:\n" +
+				truncate(out.LastCheck, 500)
 		}
-		files = tree // carry the attempt forward: the next revision builds on it
+		cur = tree // carry the attempt forward: the next revision builds on it
 
-		if pushErr := pushFixBranch(ctx, tree, dir, repo, f); pushErr != nil {
-			resolveFinding(f.id, false, "auto mode fixed this locally but could not push the fix branch: "+pushErr.Error())
-			return true, nil
+		// Lay the fix on the shared clone and stage its delta, so the reviewer
+		// sees only THIS finding's change on top of the fixes already committed.
+		if err := replaceTree(dir, cur); err != nil {
+			return false, "auto mode could not lay the fix down for review: " + err.Error()
 		}
-
-		// THE REVIEW GATE. The fix passed its own tests; now a reviewer reads
-		// the whole diff and decides whether it merges to dev.
-		diff, diffErr := diffOfHead(ctx, dir)
+		diff, diffErr := stagedDiff(ctx, dir)
 		if diffErr != nil {
-			resolveFinding(f.id, false, "the fix is on its branch, but its diff could not be read for review: "+diffErr.Error())
-			return true, nil
+			return false, "the fix could not be diffed for review: " + diffErr.Error()
+		}
+		if strings.TrimSpace(diff) == "" {
+			return false, "the fix changed no files"
 		}
 
-		merged := ""
+		// THE REVIEW GATE. approve just RECORDS approval; the merge to dev is a
+		// batch that runs once the project's above-low findings are all fixed.
+		approved := false
 		m := maker
-		m.MergeFix = func(reason string) (string, error) {
-			res, err := mergeFixToDev(ctx, base, repo, f)
-			if err != nil {
-				return "", err
-			}
-			merged = reason
-			return res, nil
+		m.MergeFix = func(string) (string, error) {
+			approved = true
+			return "Approved. It will merge to dev once the project's above-low findings are all fixed.", nil
 		}
 		reviewTask := "Review this proposed fix.\n\nThe finding:\n" + f.title + "\n\n" + f.body +
 			"\n\nThe diff of the fix:\n" + truncate(diff, 8000)
-		reviewAgent := m.MergeReviewer(files)
-		rout, _, rerr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return reviewAgent, nil }, files, reviewTask)
+		reviewAgent := m.MergeReviewer(cur)
+		rout, _, rerr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return reviewAgent, nil }, cur, reviewTask)
 		if rerr != nil {
-			resolveFinding(f.id, false, "the fix is on its branch; the review stage errored: "+firstLineOf(rerr.Error()))
-			return true, nil
+			return false, "the review stage errored: " + firstLineOf(rerr.Error())
 		}
 
-		if merged != "" {
-			resolveFinding(f.id, true, fmt.Sprintf(
-				"auto mode fixed this in %d review cycle(s) and it merged to dev: %s", cycle, merged))
-			return true, nil
+		if approved {
+			// Commit the approved fix so the next finding builds on it and the
+			// batch branch carries it. The delta is already staged.
+			msg := "fix: " + strings.TrimPrefix(strings.TrimPrefix(f.title, "security: "), "quality: ")
+			if out, err := gitCmd(ctx, dir, "commit", "-q", "-m", msg); err != nil {
+				return false, "auto mode approved the fix but could not commit it: " + firstLineOf(out)
+			}
+			return true, ""
 		}
 
-		// Rejected: feed the reason back and revise. If this was the last
-		// allowed cycle, leave it for a person with the standing objection.
+		// Rejected: feed the reason back and revise.
 		feedback = strings.TrimSpace(rout.Answer)
-		slog.Info("auto: review rejected the fix; revising", "cycle", cycle, "of", maxFixReviewCycles)
+		slog.Info("auto: review rejected the fix; revising",
+			"cycle", cycle, "of", maxFixReviewCycles, "finding", f.title)
 	}
 
-	resolveFinding(f.id, false,
-		fmt.Sprintf("auto mode revised the fix through %d review cycles without approval; a person "+
-			"should settle it. The reviewer's last objection:\n%s\n\nThe latest fix waits on its branch.",
-			maxFixReviewCycles, truncate(feedback, 600)))
-	return true, nil
+	return false, fmt.Sprintf(
+		"auto mode revised the fix through %d review cycles without approval; a person should settle it. "+
+			"The reviewer's last objection:\n%s", maxFixReviewCycles, truncate(feedback, 600))
+}
+
+// isAboveLow reports whether a finding's severity outranks "low" — critical,
+// high, or medium. These are the findings that GATE the merge to dev: a
+// project's fixes wait until every one of them is resolved. A low finding, or
+// an unrecognized severity, does not hold the merge.
+func isAboveLow(sev string) bool {
+	return rankOf(sev) < rankOf("low")
 }
 
 // maxFixReviewCycles bounds the fix↔review negotiation for one finding. Three,

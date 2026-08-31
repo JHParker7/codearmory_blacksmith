@@ -30,11 +30,16 @@ govulncheck) run before `plan-sec` and lint (staticcheck) before `plan-review`,
 dropping reports under `scan/` as leads to verify — never committed. Every run
 is itself a board ticket, opened in_progress and resolved on the verdict.
 
-`-auto` is the board's consumer: with no request to run it pulls the
+`-auto` is the board's consumer: with no request to run it takes the
 highest-priority open finding (all security before all quality, then by
-severity), clones the finding's project run branch, runs the `fix` stage
-(a locked-suite developer whose task is the finding), and pushes a `fix/<id>`
-branch — best-effort, bounded, a stuck fix left open with a comment.
+severity) and works that finding's WHOLE project on one clone — each finding
+through the `fix` stage (a locked-suite developer whose task is the finding)
+and the `review` stage, approved fixes accumulating as commits. The merge to
+dev is GATED: it lands the accumulated batch only when every finding **above
+low severity** (critical/high/medium) is fixed, so dev never takes a project
+while a serious hole is still open. If one above-low finding can't be fixed the
+whole merge is held; low findings don't gate. Best-effort, bounded, a stuck fix
+left open with a comment.
 
 Every run journals to git: one commit per landed write (the type and summary
 each edit already declares), a mark per stage and draw, and a push to the

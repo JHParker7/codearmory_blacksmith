@@ -46,42 +46,6 @@ func cloneRunBranch(ctx context.Context, base string, repo findingRepo) (string,
 	return dir, nil
 }
 
-// pushFixBranch writes the fixed tree over the clone, commits it, and pushes a
-// fix/<finding> branch — a NEW branch, never a force over the run branch,
-// because the run's history is a record that must not be rewritten and the
-// fix is a proposal a person reviews and merges.
-func pushFixBranch(ctx context.Context, files map[string]string, dir string, repo findingRepo, f finding) error {
-	// RESET TO THE RUN TIP FIRST, so each push is ONE commit of the whole fix
-	// against the base — not a delta on the previous attempt. The review loop
-	// re-pushes a revised fix each cycle, and the reviewer must see the entire
-	// change every time, not just what the latest revision moved.
-	if out, err := gitCmd(ctx, dir, "reset", "-q", "--hard", "origin/run/"+repo.run); err != nil {
-		return fmt.Errorf("reset to run tip: %s", out)
-	}
-	if err := replaceTree(dir, files); err != nil {
-		return err
-	}
-	if out, err := gitCmd(ctx, dir, "add", "-A"); err != nil {
-		return fmt.Errorf("add: %s", out)
-	}
-	msg := "fix: " + strings.TrimPrefix(strings.TrimPrefix(f.title, "security: "), "quality: ")
-	if out, err := gitCmd(ctx, dir, "commit", "-q", "-m", msg); err != nil {
-		// Nothing staged means the fix was a no-op edit; not an error worth
-		// failing the resolve over, but worth saying.
-		if strings.Contains(out, "nothing to commit") {
-			return fmt.Errorf("the fix changed no files")
-		}
-		return fmt.Errorf("commit: %s", out)
-	}
-	baseURL := os.Getenv(gitEnvURL)
-	url := strings.TrimRight(baseURL, "/") + "/" + repo.project + ".git"
-	branch := "fix/" + shortID(f.id)
-	if out, err := gitCmd(ctx, dir, "push", "-q", "--force", url, "HEAD:refs/heads/"+branch); err != nil {
-		return fmt.Errorf("push %s: %s", branch, out)
-	}
-	return nil
-}
-
 // shortID trims a ticket UUID to its first segment, enough to name a branch
 // without the whole thing.
 func shortID(id string) string {
@@ -125,35 +89,65 @@ func gitLsFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-// diffOfHead returns the diff of the fix commit — the tip against its parent
-// — for the reviewer to read. A clone of the fix branch has the fix as HEAD,
-// so HEAD~1..HEAD is exactly the change under review.
-func diffOfHead(ctx context.Context, dir string) (string, error) {
-	out, err := gitCmd(ctx, dir, "diff", "HEAD~1", "HEAD")
+// pushBranch force-pushes the working clone's current HEAD to a named branch on
+// origin. Auto-mode accumulates a project's approved fixes as commits in one
+// clone and pushes them as a single batch branch, which mergeBranchToDev then
+// brings onto dev.
+func pushBranch(ctx context.Context, dir, branch string) error {
+	baseURL := os.Getenv(gitEnvURL)
+	if baseURL == "" {
+		return fmt.Errorf("no workshop git url configured")
+	}
+	if out, err := gitCmd(ctx, dir, "push", "-q", "--force", "origin", "HEAD:refs/heads/"+branch); err != nil {
+		return fmt.Errorf("push %s: %s", branch, out)
+	}
+	return nil
+}
+
+// stagedDiff stages the working tree and returns its diff against HEAD — the
+// delta ONE finding's fix makes on top of the fixes already committed in this
+// clone. Reviewing that delta, not the whole accumulated tree, keeps each
+// finding's review about its own change.
+func stagedDiff(ctx context.Context, dir string) (string, error) {
+	if out, err := gitCmd(ctx, dir, "add", "-A"); err != nil {
+		return "", fmt.Errorf("add: %s", out)
+	}
+	out, err := gitCmd(ctx, dir, "diff", "--cached", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("diff: %s", firstLineOf(out))
 	}
 	return out, nil
 }
 
-// mergeFixToDev merges a pushed fix branch into the project's dev branch and
-// pushes dev — the review agent's approval made real. A CLIENT-SIDE MERGE,
-// because the plane's git server is a bare git-daemon with no server-side
-// merge; blacksmith clones, merges, and pushes dev back.
+// restoreToHead throws away an uncommitted, unapproved fix so the next finding
+// starts from the clone's committed state — the run tip plus the fixes that
+// WERE approved, and nothing a reviewer rejected.
+func restoreToHead(ctx context.Context, dir string) {
+	_, _ = gitCmd(ctx, dir, "reset", "-q", "--hard", "HEAD")
+	_, _ = gitCmd(ctx, dir, "clean", "-qfd")
+}
+
+// mergeBranchToDev merges a pushed branch into the project's dev branch and
+// pushes dev — the review's approval made real. A CLIENT-SIDE MERGE, because
+// the plane's git server is a bare git-daemon with no server-side merge;
+// blacksmith clones, merges, and pushes dev back.
 //
-// The first approved fix CREATES dev at the fix tip (the fix branch already
-// carries the run's whole tree plus the fix). Later ones merge onto it. A
-// merge that conflicts is aborted and reported — two fixes touching one file
-// are a human's call, not a machine's — and the fix stays on its branch.
-func mergeFixToDev(ctx context.Context, base string, repo findingRepo, f finding) (string, error) {
+// The first merge CREATES dev at the branch tip (the branch already carries the
+// run's whole tree plus the fixes). Later ones merge onto it. A merge that
+// conflicts is aborted and reported — two changes touching one file are a
+// human's call, not a machine's — and the branch stays put.
+//
+// This runs ONLY after a project's above-low findings are all fixed: the batch
+// branch is the accumulated set of approved fixes, so dev never sees a partial
+// project where a critical hole is still open.
+func mergeBranchToDev(ctx context.Context, base string, repo findingRepo, branch, msg string) (string, error) {
 	baseURL := os.Getenv(gitEnvURL)
 	if baseURL == "" {
 		return "", fmt.Errorf("no workshop git url configured")
 	}
 	url := strings.TrimRight(baseURL, "/") + "/" + repo.project + ".git"
-	fixBranch := "fix/" + shortID(f.id)
 
-	dir := filepath.Join(base, "merge-"+repo.project+"-"+shortID(f.id))
+	dir := filepath.Join(base, "merge-"+repo.project+"-"+repo.run)
 	_ = os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -164,12 +158,12 @@ func mergeFixToDev(ctx context.Context, base string, repo findingRepo, f finding
 	if out, err := gitCmd(ctx, dir, "remote", "add", "origin", url); err != nil {
 		return "", fmt.Errorf("remote: %s", out)
 	}
-	if out, err := gitCmd(ctx, dir, "fetch", "-q", "origin", fixBranch); err != nil {
-		return "", fmt.Errorf("fetch %s: %s", fixBranch, out)
+	if out, err := gitCmd(ctx, dir, "fetch", "-q", "origin", branch); err != nil {
+		return "", fmt.Errorf("fetch %s: %s", branch, out)
 	}
-	fixSHA, err := gitCmd(ctx, dir, "rev-parse", "FETCH_HEAD")
+	branchSHA, err := gitCmd(ctx, dir, "rev-parse", "FETCH_HEAD")
 	if err != nil {
-		return "", fmt.Errorf("rev-parse: %s", fixSHA)
+		return "", fmt.Errorf("rev-parse: %s", branchSHA)
 	}
 
 	// Does dev already exist on the server?
@@ -184,21 +178,20 @@ func mergeFixToDev(ctx context.Context, base string, repo findingRepo, f finding
 		if out, err := gitCmd(ctx, dir, "checkout", "-q", "-B", "dev", "origin/dev"); err != nil {
 			return "", fmt.Errorf("checkout dev: %s", out)
 		}
-		msg := "merge: " + strings.TrimPrefix(strings.TrimPrefix(f.title, "security: "), "quality: ")
-		if out, err := gitCmd(ctx, dir, "merge", "--no-ff", "-m", msg, fixSHA); err != nil {
+		if out, err := gitCmd(ctx, dir, "merge", "--no-ff", "-m", msg, branchSHA); err != nil {
 			_, _ = gitCmd(ctx, dir, "merge", "--abort")
-			return "", fmt.Errorf("the fix conflicts with dev and needs a person: %s", firstLineOf(out))
+			return "", fmt.Errorf("the fixes conflict with dev and need a person: %s", firstLineOf(out))
 		}
 	} else {
-		// dev starts at the fix tip.
-		if out, err := gitCmd(ctx, dir, "checkout", "-q", "-B", "dev", fixSHA); err != nil {
+		// dev starts at the batch tip.
+		if out, err := gitCmd(ctx, dir, "checkout", "-q", "-B", "dev", branchSHA); err != nil {
 			return "", fmt.Errorf("create dev: %s", out)
 		}
 	}
 	if out, err := gitCmd(ctx, dir, "push", "-q", "origin", "HEAD:refs/heads/dev"); err != nil {
 		return "", fmt.Errorf("push dev: %s", out)
 	}
-	return fixBranch + " → dev", nil
+	return branch + " → dev", nil
 }
 
 // autoIdleDelay is how long auto-mode waits after draining the board before
