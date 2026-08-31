@@ -10,11 +10,16 @@ import (
 // still yields one.
 func TestImageRefIsRegistryProjectRun(t *testing.T) {
 	t.Setenv(registryEnvURL, "localhost:5000")
-	if got := imageRef("drop-python", "e2e-val"); got != "localhost:5000/drop-python:run-e2e-val" {
-		t.Fatalf("imageRef = %q", got)
+	// No version: the tag falls back to the run branch name.
+	if got := imageRef("drop-python", "e2e-val", ""); got != "localhost:5000/drop-python:run-e2e-val" {
+		t.Fatalf("imageRef (no version) = %q", got)
+	}
+	// A version: it IS the tag — the image says what it is.
+	if got := imageRef("drop-python", "e2e-val", "v1.2.0"); got != "localhost:5000/drop-python:v1.2.0" {
+		t.Fatalf("imageRef (versioned) = %q", got)
 	}
 	// Unsafe characters collapse to dashes; the ref stays legal.
-	got := imageRef("My Project/v2", "003 Feature")
+	got := imageRef("My Project/v2", "003 Feature", "")
 	if strings.Contains(got, " ") {
 		t.Errorf("ref has a space: %q", got)
 	}
@@ -23,7 +28,7 @@ func TestImageRefIsRegistryProjectRun(t *testing.T) {
 	}
 	// A trailing slash on the registry URL does not double up.
 	t.Setenv(registryEnvURL, "localhost:5000/")
-	if got := imageRef("p", "r"); got != "localhost:5000/p:run-r" {
+	if got := imageRef("p", "r", ""); got != "localhost:5000/p:run-r" {
 		t.Errorf("trailing-slash ref = %q", got)
 	}
 }

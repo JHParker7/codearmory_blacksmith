@@ -263,11 +263,14 @@ func runWithReroll(
 		files, lastErr = executeRun(ctx, maker, stages, files, repoDir, task)
 		if lastErr == nil {
 			curGit.mark("run: passed")
-			// PACKAGE THE PASSING TREE. The DevOps agent writes the Dockerfile and
-			// coded steps build and push the image — before the push, so the run
-			// branch carries the Dockerfile it was built from. Best-effort: it
-			// never fails a green run, and a host without docker simply skips it.
-			files = packageProject(ctx, maker, files, repoDir)
+			// VERSION FROM THE HISTORY, then PACKAGE. semantic-release reads the
+			// journal to name a release (vX.Y.Z), the tag lands on the run tip, and
+			// the DevOps agent's Dockerfile is built and pushed to the registry
+			// under that version — all before the git push, so the run branch
+			// carries the Dockerfile it was built from and the tag that names it.
+			// Best-effort: none of it fails a green run.
+			version := curGit.tagRelease()
+			files = packageProject(ctx, maker, files, repoDir, version)
 			curGit.pushRun(os.Getenv(gitEnvURL), os.Getenv(gitEnvMkrepo), repoDir)
 			closeRequestTicket(true, fmt.Sprintf("passed on draw %d", attempt))
 			return nil

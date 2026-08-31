@@ -35,12 +35,15 @@ func TestEveryWriteIsACommitUnderItsOwnMessage(t *testing.T) {
 	g.write("store.go", "package main\n", true, "revert: undo the last write to store.go")
 
 	log := gitOut(t, dir, "log", "--reverse", "--format=%s")
+	// Each edit's type keeps its meaning and gains the scope of the file it
+	// touched; the journal's own marks are normalised to a chore so the whole
+	// history is Conventional Commits and machine-readable for versioning.
 	want := []string{
-		"request: build a task api",
-		"feat: add the store",
-		"feat: add the constructor",
-		"stage(plan-dev): passed",
-		"revert: undo the last write to store.go",
+		"chore: request: build a task api",
+		"feat(store): add the store",
+		"feat(store): add the constructor",
+		"chore: stage(plan-dev): passed",
+		"revert(store): undo the last write to store.go",
 	}
 	got := strings.Split(log, "\n")
 	if len(got) != len(want) {
@@ -51,8 +54,59 @@ func TestEveryWriteIsACommitUnderItsOwnMessage(t *testing.T) {
 			t.Errorf("commit %d = %q, want %q", i, got[i], want[i])
 		}
 	}
+	// EVERY subject must satisfy the format the installed hook enforces —
+	// otherwise blacksmith's own commits would trip its own hook.
+	for _, s := range got {
+		if !ccSubject.MatchString(s) {
+			t.Errorf("subject is not Conventional Commits: %q", s)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(dir, "store.go")); !os.IsNotExist(err) {
 		t.Error("the undone file survived on disk")
+	}
+}
+
+// The commit-msg hook blacksmith installs actually rejects a non-conforming
+// message and passes a conforming one — the enforcement a human cloning the
+// project hits, and the backstop on blacksmith's own commits.
+func TestTheInstalledCommitHookEnforcesTheFormat(t *testing.T) {
+	dir := t.TempDir()
+	g := newGitLog(dir, "build a task api")
+	if !g.ok {
+		t.Skip("no git on this host")
+	}
+	hook := filepath.Join(dir, ".git", "hooks", "commit-msg")
+	if info, err := os.Stat(hook); err != nil || info.Mode()&0o100 == 0 {
+		t.Fatalf("commit-msg hook not installed executable: %v", err)
+	}
+	// A commit through the hook with a bad message must fail; a good one passes.
+	if out, err := g.git("commit", "--allow-empty", "-m", "just some words"); err == nil {
+		t.Errorf("the hook accepted a non-conventional subject:\n%s", out)
+	}
+	if out, err := g.git("commit", "--allow-empty", "-m", "feat(x): a real change"); err != nil {
+		t.Errorf("the hook rejected a valid subject: %v\n%s", err, out)
+	}
+}
+
+// A releasable history is tagged with the version its commits imply, and the
+// tag lands on the run tip.
+func TestTagReleaseVersionsFromHistory(t *testing.T) {
+	dir := t.TempDir()
+	g := newGitLog(dir, "build a task api")
+	if !g.ok {
+		t.Skip("no git on this host")
+	}
+	g.write("store.go", "package main\n", false, "feat: add the store")
+	if v := g.tagRelease(); v != "v1.0.0" {
+		t.Fatalf("first releasable history tagged %q, want v1.0.0", v)
+	}
+	// A fix on top bumps the patch.
+	g.write("store.go", "package main\n// fixed\n", false, "fix: correct the store")
+	if v := g.tagRelease(); v != "v1.0.1" {
+		t.Fatalf("a fix bumped to %q, want v1.0.1", v)
+	}
+	if got := gitOut(t, dir, "tag", "--list"); !strings.Contains(got, "v1.0.0") || !strings.Contains(got, "v1.0.1") {
+		t.Errorf("tags missing: %q", got)
 	}
 }
 

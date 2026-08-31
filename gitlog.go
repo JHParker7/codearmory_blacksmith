@@ -58,10 +58,26 @@ func newGitLog(dir, task string) *gitLog {
 		return g
 	}
 	g.ok = true
+	g.installCommitHook()
 	// The request is the root commit, so `git log --reverse` reads as the
 	// story of the run: what was asked, then every change made answering it.
 	g.mark("request: " + task)
 	return g
+}
+
+// installCommitHook drops the Conventional-Commits commit-msg hook into the
+// run's repository. Best-effort: a repo whose hooks directory cannot be written
+// still journals, just without the enforcement — the format is also guaranteed
+// on blacksmith's own commits by ccNormalize, and the hook is what catches a
+// human who clones and commits.
+func (g *gitLog) installCommitHook() {
+	hookPath := filepath.Join(g.dir, ".git", "hooks", "commit-msg")
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+		return
+	}
+	if err := os.WriteFile(hookPath, []byte(commitMsgHook), 0o755); err != nil {
+		slog.Warn("run history: could not install the commit-msg hook", "error", err)
+	}
 }
 
 // git runs one command in the run directory, with identity supplied per-call
@@ -96,7 +112,9 @@ func (g *gitLog) write(path, content string, deleted bool, message string) {
 			return
 		}
 	}
-	g.commitAll(message)
+	// The edit declared a type and summary; add the scope of the file it touched
+	// so the subject reads `fix(store): …` rather than `fix: …`.
+	g.commitAll(ccWithScope(message, ccScope(path)))
 }
 
 // snapshot commits whatever the directory holds now — the seed tree, or a
@@ -113,7 +131,7 @@ func (g *gitLog) mark(message string) {
 	if g == nil || !g.ok {
 		return
 	}
-	if out, err := g.git("commit", "-q", "--allow-empty", "-m", message); err != nil {
+	if out, err := g.git("commit", "-q", "--allow-empty", "-m", ccNormalize(message)); err != nil {
 		slog.Warn("run history: mark failed", "error", err, "output", out)
 	}
 }
@@ -128,7 +146,7 @@ func (g *gitLog) commitAll(message string) {
 	if _, err := g.git("diff", "--cached", "--quiet"); err == nil {
 		return
 	}
-	if out, err := g.git("commit", "-q", "-m", message); err != nil {
+	if out, err := g.git("commit", "-q", "-m", ccNormalize(message)); err != nil {
 		slog.Warn("run history: commit failed", "error", err, "output", out)
 	}
 }
@@ -159,6 +177,13 @@ func (g *gitLog) pushRun(baseURL, mkrepo, dir string) {
 		slog.Warn("run history: push failed — the run itself is unaffected",
 			"url", url, "branch", branch, "error", err, "output", out)
 		return
+	}
+	// THE VERSION TAGS RIDE ALONG. semantic-release reads the history to name a
+	// release; pushing the tags is what makes that name visible to a clone and
+	// what pins the image's tag to a commit. Forced, because a rerun of the same
+	// run moves the tag to the new tip.
+	if out, err := g.git("push", "-q", "--force", "--tags", url); err != nil {
+		slog.Warn("run history: tag push failed", "url", url, "error", err, "output", out)
 	}
 	slog.Info("run history pushed", "project", project, "branch", branch)
 }

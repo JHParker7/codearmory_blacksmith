@@ -41,7 +41,7 @@ func registryURL() string {
 // that is down, a docker daemon that is missing, or a Dockerfile that would not
 // build must not turn a good build into a failed one. It journals what it did
 // either way, so the history says whether an image exists.
-func packageProject(ctx context.Context, maker agents.Creator, files map[string]string, repoDir string) map[string]string {
+func packageProject(ctx context.Context, maker agents.Creator, files map[string]string, repoDir, version string) map[string]string {
 	project, run := projectAndRun(repoDir)
 
 	// The DevOps agent writes the Dockerfile; its writes journal through the same
@@ -65,7 +65,7 @@ func packageProject(ctx context.Context, maker agents.Creator, files map[string]
 		return files
 	}
 
-	tag, err := buildAndPushImage(ctx, repoDir, project, run)
+	tag, err := buildAndPushImage(ctx, repoDir, project, run, version)
 	if err != nil {
 		slog.Warn("packaging: image build or push failed", "error", err)
 		curGit.mark("package: build/push failed: " + firstLineOf(err.Error()))
@@ -81,16 +81,20 @@ func packageProject(ctx context.Context, maker agents.Creator, files map[string]
 // so a project or run name with spaces or slashes still yields a legal ref.
 var tagUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
 
-func imageRef(project, run string) string {
+// imageRef names the image: the registry, the project, and a tag. The tag is
+// the semantic-release VERSION when the history produced one (drop-python:v1.2.0
+// — the image says exactly what it is), falling back to the run branch's name
+// when nothing releasable was tagged.
+func imageRef(project, run, version string) string {
 	p := strings.Trim(tagUnsafe.ReplaceAllString(strings.ToLower(project), "-"), "-.")
-	r := strings.Trim(tagUnsafe.ReplaceAllString(strings.ToLower(run), "-"), "-.")
 	if p == "" {
 		p = "project"
 	}
-	if r == "" {
-		r = "run"
+	tag := "run-" + strings.Trim(tagUnsafe.ReplaceAllString(strings.ToLower(run), "-"), "-.")
+	if v := strings.Trim(tagUnsafe.ReplaceAllString(strings.ToLower(version), "-"), "-."); v != "" {
+		tag = v
 	}
-	return strings.TrimRight(registryURL(), "/") + "/" + p + ":run-" + r
+	return strings.TrimRight(registryURL(), "/") + "/" + p + ":" + tag
 }
 
 // buildAndPushImage runs docker build over the run's tree and pushes the image
@@ -98,8 +102,8 @@ func imageRef(project, run string) string {
 // no deadline, and a docker build that stalls pulling a base image, or a push to
 // a wedged registry, would otherwise hang the run the way an unbounded git call
 // once did.
-func buildAndPushImage(ctx context.Context, dir, project, run string) (string, error) {
-	ref := imageRef(project, run)
+func buildAndPushImage(ctx context.Context, dir, project, run, version string) (string, error) {
+	ref := imageRef(project, run, version)
 
 	bctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
