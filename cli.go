@@ -323,11 +323,13 @@ func runAuto(base string) error {
 	defer release()
 
 	maker := agents.Creator{
-		Gateway: gw,
-		Sandbox: box,
-		Check:   cfg.Repo.TestCommand,
-		Log:     func(line string) { slog.Info(line) },
+		Gateway:    gw,
+		Sandbox:    box,
+		Check:      cfg.Repo.TestCommand,
+		Log:        func(line string) { slog.Info(line) },
+		FileTicket: fileFinding, // the post-merge audit's reviewers file through here
 	}
+	wireScanners(cfg)
 
 	slog.Info("auto mode: working the board")
 	// One pass per project per session: a finding left open for a person is not

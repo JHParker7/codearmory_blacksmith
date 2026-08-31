@@ -247,7 +247,59 @@ func autoProject(ctx context.Context, maker agents.Creator, base string, attempt
 	}
 	slog.Info("auto: project merged to dev",
 		"project", repo.project, "approved", len(approved), "result", res)
+
+	// ANOTHER FULL RUN. The fixes are in; now run the whole detector suite and
+	// both reviewers over the merged tree, so anything left behind or newly
+	// exposed becomes a fresh finding the next cycle works. A project is done
+	// only when a full run turns up nothing.
+	auditAfterMerge(ctx, maker, dir, repo, lead.parent)
 	return true, nil
+}
+
+// auditAfterMerge is the "another full run" a fixed project gets: the scanner
+// suite and both reviewers re-examine the merged tree and file any finding that
+// survived the fixes or that the fixes newly exposed. Those land on the board,
+// the outer loop picks them up, and the project converges — done only when an
+// audit turns up nothing. Best-effort: a failed audit never un-merges the fixes
+// that already landed.
+func auditAfterMerge(ctx context.Context, maker agents.Creator, dir string, repo findingRepo, requestID string) {
+	files, err := readTree(dir)
+	if err != nil {
+		slog.Warn("auto: post-merge audit could not read the tree", "error", err)
+		return
+	}
+	// New findings belong to the same request as the ones just fixed, so they
+	// stay attached to the project's context on the board.
+	prev := curRequest
+	curRequest = requestID
+	defer func() { curRequest = prev }()
+
+	before := countOpenFindings()
+	stages := []struct {
+		name  string
+		build func(map[string]string) *agents.Agent
+	}{
+		{agents.StagePlanSec, maker.PlanSec},
+		{agents.StagePlanReview, maker.PlanReview},
+	}
+	for _, st := range stages {
+		tree := runScanners(ctx, maker.Sandbox, copyTree(files), st.name)
+		task := "This project was just fixed and merged to dev. Re-examine it as a fresh full review " +
+			"and file any finding that still stands or that the fixes newly exposed."
+		if existing := openFindings(); existing != "" {
+			task += "\n\n--- findings already on the board (do NOT refile) ---\n" + existing
+		}
+		build := st.build
+		if _, _, rerr := runStage(ctx, func(t map[string]string) (*agents.Agent, error) { return build(t), nil }, tree, task); rerr != nil {
+			slog.Warn("auto: post-merge audit stage errored", "stage", st.name, "error", rerr)
+		}
+	}
+	if after := countOpenFindings(); after > before {
+		slog.Info("auto: post-merge audit filed new findings; the loop will work them",
+			"project", repo.project, "new", after-before)
+	} else {
+		slog.Info("auto: post-merge audit found nothing new", "project", repo.project)
+	}
 }
 
 // fixReviewOne runs the fix↔review negotiation for ONE finding on the shared
@@ -262,6 +314,10 @@ func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo fi
 	if err != nil {
 		return false, "auto mode could not read the working tree: " + err.Error()
 	}
+	// THE SCANNER BASELINE: what the source detector says about the tree BEFORE
+	// this fix. The fix is confirmed only if a re-run comes back with this issue
+	// gone and nothing new — measured against here.
+	baseline := scanSignatures(runKindScanners(ctx, maker.Sandbox, cur, f.kind))
 	feedback := ""
 	for cycle := 1; cycle <= maxFixReviewCycles; cycle++ {
 		task := "Fix this reported finding:\n\n" + f.title + "\n\n" + f.body
@@ -311,13 +367,36 @@ func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo fi
 		}
 
 		if approved {
-			// Commit the approved fix so the next finding builds on it and the
-			// batch branch carries it. The delta is already staged.
-			msg := "fix: " + strings.TrimPrefix(strings.TrimPrefix(f.title, "security: "), "quality: ")
-			if out, err := gitCmd(ctx, dir, "commit", "-q", "-m", msg); err != nil {
-				return false, "auto mode approved the fix but could not commit it: " + firstLineOf(out)
+			// THE SCANNER GATE. The reviewer said yes; now the tool that raised
+			// the finding runs again on the fixed tree and must not raise it
+			// again. A fix that the detector still flags — or that lights up the
+			// detector somewhere new — is not done, whatever the reviewer thought.
+			report := runKindScanners(ctx, maker.Sandbox, cur, f.kind)
+			switch v := scanVerify(baseline, scanSignatures(report)); {
+			case len(v.introduced) > 0:
+				feedback = "The reviewer approved, but re-running the " + f.kind +
+					" scanner shows your fix INTRODUCED new findings at: " +
+					strings.Join(v.introduced, ", ") + ". Remove them; do not trade one issue for another."
+				slog.Info("auto: scanner regressed on the fix; revising",
+					"finding", f.title, "introduced", len(v.introduced))
+			case v.stuck:
+				feedback = "The reviewer approved, but re-running the " + f.kind +
+					" scanner STILL reports the issue — the fix must make the detector stop flagging it. " +
+					"Latest scanner output:\n" + truncate(report, 2000)
+				slog.Info("auto: scanner still flags the issue; revising", "finding", f.title)
+			default:
+				// Confirmed by both reviewer and scanner. Commit so the next
+				// finding builds on it and the batch branch carries it; the delta
+				// is already staged.
+				msg := "fix: " + strings.TrimPrefix(strings.TrimPrefix(f.title, "security: "), "quality: ")
+				if out, err := gitCmd(ctx, dir, "commit", "-q", "-m", msg); err != nil {
+					return false, "auto mode approved the fix but could not commit it: " + firstLineOf(out)
+				}
+				return true, ""
 			}
-			return true, ""
+			slog.Info("auto: scanner held back an approved fix; revising",
+				"cycle", cycle, "of", maxFixReviewCycles, "finding", f.title)
+			continue
 		}
 
 		// Rejected: feed the reason back and revise.
@@ -327,8 +406,8 @@ func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo fi
 	}
 
 	return false, fmt.Sprintf(
-		"auto mode revised the fix through %d review cycles without approval; a person should settle it. "+
-			"The reviewer's last objection:\n%s", maxFixReviewCycles, truncate(feedback, 600))
+		"auto mode revised the fix through %d cycles without both a review approval and a clean re-scan; "+
+			"a person should settle it. The last objection:\n%s", maxFixReviewCycles, truncate(feedback, 600))
 }
 
 // isAboveLow reports whether a finding's severity outranks "low" — critical,

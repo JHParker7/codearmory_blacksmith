@@ -131,6 +131,26 @@ func existingFindingID(title string) string {
 	return ""
 }
 
+// countOpenFindings is how the post-merge audit tells whether a fresh full run
+// turned anything up: the number of open kinded findings on the board, before
+// and after. A rise means the audit filed something the next cycle must work.
+func countOpenFindings() int {
+	if tickets == nil {
+		return 0
+	}
+	open, err := tickets.List(context.Background(), ticket.ListOpts{Status: ticket.StatusOpen})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, t := range open {
+		if strings.HasPrefix(t.Title, "security: ") || strings.HasPrefix(t.Title, "quality: ") {
+			n++
+		}
+	}
+	return n
+}
+
 // openFindings renders the board's current open findings for a reviewer's
 // context, so it knows what is already filed before it starts and does not
 // spend turns re-deriving them. Empty when the board is unreachable or clean.

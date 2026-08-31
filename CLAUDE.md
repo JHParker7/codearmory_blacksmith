@@ -34,12 +34,19 @@ is itself a board ticket, opened in_progress and resolved on the verdict.
 highest-priority open finding (all security before all quality, then by
 severity) and works that finding's WHOLE project on one clone — each finding
 through the `fix` stage (a locked-suite developer whose task is the finding)
-and the `review` stage, approved fixes accumulating as commits. The merge to
-dev is GATED: it lands the accumulated batch only when every finding **above
-low severity** (critical/high/medium) is fixed, so dev never takes a project
-while a serious hole is still open. If one above-low finding can't be fixed the
-whole merge is held; low findings don't gate. Best-effort, bounded, a stuck fix
-left open with a comment.
+and the `review` stage, approved fixes accumulating as commits. A fix is not
+done on the reviewer's yes alone: the SOURCE SCANNER re-runs on the fixed tree
+and must go quiet — the issue gone and nothing new flagged (security re-runs
+gosec+govulncheck, quality re-runs staticcheck; the kind names the tool). A fix
+the detector still flags, or that lights it up somewhere new, is fed back and
+revised. The merge to dev is GATED: it lands the accumulated batch only when
+every finding **above low severity** (critical/high/medium) is fixed, so dev
+never takes a project while a serious hole is still open. If one above-low
+finding can't be fixed the whole merge is held; low findings don't gate. After
+a batch merges, the project gets ANOTHER FULL RUN — the scanner suite and both
+reviewers re-examine the merged tree and file anything that survived or was
+newly exposed, so the loop converges: a project is done only when a full run
+turns up nothing. Best-effort, bounded, a stuck fix left open with a comment.
 
 Every run journals to git: one commit per landed write (the type and summary
 each edit already declares), a mark per stage and draw, and a push to the
