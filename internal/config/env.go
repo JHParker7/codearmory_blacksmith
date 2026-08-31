@@ -156,6 +156,9 @@ func Load() (Config, error) {
 		TicketsURL: e.str("AGENTS_TICKETS_URL", ""),
 		BoardID:    e.str("AGENTS_BOARD_ID", ""),
 
+		GatekeeperURL: e.str("AGENTS_GATEKEEPER_URL", ""),
+		ServiceKey:    e.secret("AGENTS_SERVICE_KEY"),
+
 		AgentAuthors: DefaultAgentAuthors,
 
 		PMClass:  model.Class(e.str("AGENTS_PM_CLASS", string(model.ClassSmall))),

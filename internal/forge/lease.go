@@ -41,6 +41,14 @@ type LeaseSpec struct {
 	// directory ONCE, at boot, rather than per command. This is most of the point.
 	Checkout *CheckoutSpec `json:"checkout,omitempty"`
 
+	// Volumes attaches shared workflow volumes (created via forge's create-volume)
+	// to the sandbox. A Workdir mount makes the volume the working directory, so a
+	// role operates on the SAME checkout every workflow step shares — the clone a
+	// prior forge step laid down, the scanner reports it wrote. Each volume must
+	// already exist and belong to the caller, which is why the lease is acquired
+	// as the run's user, not as blacksmith.
+	Volumes []VolumeMount `json:"volumes,omitempty"`
+
 	// IdleTimeout and MaxLifetime bound a lease the agent fails to release. They
 	// are a backstop for a crashed agent, not the expected way a lease ends — a
 	// held sandbox is reserved memory, so the agent releases explicitly.
@@ -58,6 +66,16 @@ const (
 	MaxIdleTimeout = 300 * time.Second
 	MaxLifetime    = 3600 * time.Second
 )
+
+// VolumeMount attaches a forge workflow volume to a sandbox. Name is the
+// volume's resource name (what create-volume returns). Workdir makes it the
+// working directory; ReadOnly mounts it read-only.
+type VolumeMount struct {
+	Name      string `json:"name"`
+	MountPath string `json:"mount_path,omitempty"`
+	Workdir   bool   `json:"workdir,omitempty"`
+	ReadOnly  bool   `json:"read_only,omitempty"`
+}
 
 // CheckoutSpec is forge's clone configuration for a lease.
 type CheckoutSpec struct {

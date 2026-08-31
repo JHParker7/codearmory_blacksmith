@@ -35,6 +35,12 @@ type SandboxSpec struct {
 	SecretRef string
 	Branch    string
 
+	// Volumes attaches shared workflow volumes to the sandbox (see
+	// LeaseSpec.Volumes). A Workdir mount makes the volume the working directory,
+	// so the agent operates on the checkout the workflow's steps share rather than
+	// a private clone.
+	Volumes []VolumeMount
+
 	// IdleTimeoutSecs and MaxLifetimeSecs bound a sandbox this process fails to
 	// release — a crash, a kill, a host shutdown. They are a BACKSTOP FOR A
 	// CRASHED AGENT, not a substitute for a stage that simply finished.
@@ -85,7 +91,8 @@ func (c *Client) Acquire(ctx context.Context, spec SandboxSpec) (*Sandbox, error
 		MaxLifetime: spec.MaxLifetimeSecs,
 		// ON THE LEASE, so every command inherits it. A leased command runs
 		// LeasedPrelude, which deliberately exports nothing — see SandboxEnv.
-		Env: SandboxEnv(),
+		Env:     SandboxEnv(),
+		Volumes: spec.Volumes,
 	}
 	if spec.CloneURL != "" {
 		// FULL HISTORY, NOT SHALLOW. This one checkout serves the agent's reads and

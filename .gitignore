@@ -14,3 +14,11 @@ plans/
 # Neither is source; both are local to a workstation.
 /test_repo/
 /venv/
+
+# session scratch (e2e runs, service logs, deploy helpers)
+.e2e*
+.serve*.log
+.ca-build.log
+workshop/
+build-ca-images.sh
+dns-fix.service

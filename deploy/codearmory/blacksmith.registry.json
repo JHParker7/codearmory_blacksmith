@@ -1,0 +1,40 @@
+[
+  {
+    "name": "blacksmith",
+    "url": "http://blacksmith:8199",
+    "description": "Agent harness: each stage role exposed as an async action the workflows engine invokes. Blacksmith owns the roles (tools, read/write guards, prompts); forge owns the volume, clone, exec and push; the workflow owns the flow. Each action runs as a temp identity scoped to the triggering user.",
+    "forward_auth": true,
+    "service_key": "blacksmith-registry-local-secret",
+
+    "endpoints": [
+      { "method": "POST", "path": "/actions/plan-architect", "action": "runAction",  "resource": "{username}/blacksmith/actions" },
+      { "method": "POST", "path": "/actions/plan-test",      "action": "runAction",  "resource": "{username}/blacksmith/actions" },
+      { "method": "POST", "path": "/actions/plan-dev",       "action": "runAction",  "resource": "{username}/blacksmith/actions" },
+      { "method": "POST", "path": "/actions/plan-sec",       "action": "runAction",  "resource": "{username}/blacksmith/actions" },
+      { "method": "POST", "path": "/actions/plan-review",    "action": "runAction",  "resource": "{username}/blacksmith/actions" },
+      { "method": "POST", "path": "/actions/fix",            "action": "runAction",  "resource": "{username}/blacksmith/actions" },
+      { "method": "POST", "path": "/actions/review",         "action": "runAction",  "resource": "{username}/blacksmith/actions" },
+      { "method": "POST", "path": "/actions/devops",         "action": "runAction",  "resource": "{username}/blacksmith/actions" },
+      { "method": "GET",  "path": "/actions/{id}",           "action": "pollAction", "resource": "{username}/blacksmith/actions" }
+    ],
+
+    "actions": [
+      { "name": "blacksmith/plan-architect", "summary": "Plan the implementation and the tests for a request", "method": "POST", "path": "/actions/plan-architect", "required_permission": { "action": "runAction", "resource": "blacksmith/actions" }, "async": { "id_field": "job_id", "poll_path": "/actions/{id}", "poll_interval_secs": 5, "status_field": "status", "success_states": ["completed"], "failure_states": ["failed"], "output_map_field": "outputs", "output_field": "stdout", "error_fields": ["error"] } },
+      { "name": "blacksmith/plan-test",      "summary": "Write the tests RED with compiling stubs",           "method": "POST", "path": "/actions/plan-test",      "required_permission": { "action": "runAction", "resource": "blacksmith/actions" }, "async": { "id_field": "job_id", "poll_path": "/actions/{id}", "poll_interval_secs": 5, "status_field": "status", "success_states": ["completed"], "failure_states": ["failed"], "output_map_field": "outputs", "output_field": "stdout", "error_fields": ["error"] } },
+      { "name": "blacksmith/plan-dev",       "summary": "Make the locked test suite pass",                    "method": "POST", "path": "/actions/plan-dev",       "required_permission": { "action": "runAction", "resource": "blacksmith/actions" }, "async": { "id_field": "job_id", "poll_path": "/actions/{id}", "poll_interval_secs": 5, "status_field": "status", "success_states": ["completed"], "failure_states": ["failed"], "output_map_field": "outputs", "output_field": "stdout", "error_fields": ["error"] } },
+      { "name": "blacksmith/plan-sec",       "summary": "Security review; files findings as tickets",         "method": "POST", "path": "/actions/plan-sec",       "required_permission": { "action": "runAction", "resource": "blacksmith/actions" }, "async": { "id_field": "job_id", "poll_path": "/actions/{id}", "poll_interval_secs": 5, "status_field": "status", "success_states": ["completed"], "failure_states": ["failed"], "output_map_field": "outputs", "output_field": "stdout", "error_fields": ["error"] } },
+      { "name": "blacksmith/plan-review",    "summary": "Quality review; files findings as tickets",          "method": "POST", "path": "/actions/plan-review",    "required_permission": { "action": "runAction", "resource": "blacksmith/actions" }, "async": { "id_field": "job_id", "poll_path": "/actions/{id}", "poll_interval_secs": 5, "status_field": "status", "success_states": ["completed"], "failure_states": ["failed"], "output_map_field": "outputs", "output_field": "stdout", "error_fields": ["error"] } },
+      { "name": "blacksmith/fix",            "summary": "Fix one reported finding on the locked suite",        "method": "POST", "path": "/actions/fix",            "required_permission": { "action": "runAction", "resource": "blacksmith/actions" }, "async": { "id_field": "job_id", "poll_path": "/actions/{id}", "poll_interval_secs": 5, "status_field": "status", "success_states": ["completed"], "failure_states": ["failed"], "output_map_field": "outputs", "output_field": "stdout", "error_fields": ["error"] } },
+      { "name": "blacksmith/review",         "summary": "Review a proposed fix; approval is an output",        "method": "POST", "path": "/actions/review",         "required_permission": { "action": "runAction", "resource": "blacksmith/actions" }, "async": { "id_field": "job_id", "poll_path": "/actions/{id}", "poll_interval_secs": 5, "status_field": "status", "success_states": ["completed"], "failure_states": ["failed"], "output_map_field": "outputs", "output_field": "stdout", "error_fields": ["error"] } },
+      { "name": "blacksmith/devops",         "summary": "Write the Dockerfile packaging the project",          "method": "POST", "path": "/actions/devops",         "required_permission": { "action": "runAction", "resource": "blacksmith/actions" }, "async": { "id_field": "job_id", "poll_path": "/actions/{id}", "poll_interval_secs": 5, "status_field": "status", "success_states": ["completed"], "failure_states": ["failed"], "output_map_field": "outputs", "output_field": "stdout", "error_fields": ["error"] } }
+    ],
+
+    "default_grants": [
+      {
+        "grant_on": "user",
+        "actions": ["runAction", "pollAction"],
+        "resources": ["{username}/blacksmith/actions"]
+      }
+    ]
+  }
+]

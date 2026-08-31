@@ -259,6 +259,14 @@ type Config struct {
 	// claim protocol the single ordering authority it needs.
 	TicketsURL string
 
+	// GatekeeperURL and ServiceKey are how the ACTION SERVICE authenticates as a
+	// CodeArmory service: GatekeeperURL is gatekeeper's base URL, ServiceKey is
+	// blacksmith's east-west key (rotated), used to validate a caller's bearer and
+	// to mint each agent run a temp identity scoped to that caller. Empty leaves
+	// the service unauthenticated — fine for a local smoke test, not for the plane.
+	GatekeeperURL string
+	ServiceKey    string
+
 	BoardID     string
 	Concurrency int
 	Poll        time.Duration
