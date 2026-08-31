@@ -393,10 +393,14 @@ func (c Creator) FixFinding(files map[string]string) *Agent {
 			"already see. Your task names the finding(s) — security or quality problems, with the " +
 			"file and line and the change to make. Make the smallest change that resolves each.\n\n" +
 			"You may not edit test files: a fix that weakens the test proving the bug is not a " +
-			"fix, and the suite is what proves your change broke nothing else. Run the check as " +
-			"you go; finish only on a tree that compiles and whose tests pass. If a finding is " +
-			"wrong or cannot be fixed without changing behaviour the tests require, say so " +
-			"plainly and move on — that is a real answer a person needs to see.",
+			"fix, and the suite is what proves your change broke nothing else.\n\n" +
+			"CRITICAL: these findings do NOT break the build. A passing `go build`/`go test` is " +
+			"NOT evidence they are fixed — the tree already compiles and passes with the bugs in " +
+			"it. So EDIT the code to address every finding FIRST; run the check only AFTER you " +
+			"have made your changes, to confirm you broke nothing. Do not run the check before " +
+			"you have edited, or you will finish having fixed nothing. If a finding is wrong or " +
+			"cannot be fixed without changing behaviour the tests require, say so plainly and " +
+			"move on — that is a real answer a person needs to see.",
 		Guard:          tools.Both(tools.NoTests, tools.OnlyExt(".go")),
 		Tools:          writing(tools.RunCommand),
 		Check:          rootCheck,
@@ -425,18 +429,25 @@ func (c Creator) MergeReviewer(files map[string]string) *Agent {
 	return c.New(files, Options{
 		Name:  StageReview,
 		Class: model.ClassLarge,
-		Prompt: "You are reviewing a proposed fix before it merges to dev. Your task gives the " +
-			"finding and the DIFF of the fix. Read the diff against the current code and judge " +
-			"it: does it actually resolve the finding, does it keep the tests meaningful rather " +
-			"than weakening them to pass, does it introduce a new problem, is it safe to ship.\n\n" +
-			"If it is right, call merge_fix with a one-line reason and it merges to dev. If it is " +
-			"wrong, incomplete, or you are unsure — do NOT merge; say plainly what is wrong, and " +
-			"the fix waits on its branch for a person. Approve only what you would merge " +
-			"yourself; a bad merge to dev costs more than a fix left waiting.",
-		Guard:         tools.DenyAll,
-		Tools:         append(append([]string{}, readOnly...), tools.MergeFix),
-		SeedKnown:     true, // the code is in front of it; the diff is in the task
-		MaxIterations: 8,
+		Prompt: "You are reviewing proposed fixes before they merge to dev. Your task gives the " +
+			"finding(s) and the DIFF. The whole current tree is ALREADY IN FRONT OF YOU and the " +
+			"diff is in your task — judge from those; do not spend turns re-searching what you can " +
+			"already read. Decide: does the diff actually resolve each finding, does it keep the " +
+			"tests meaningful rather than weakening them to pass, does it introduce a new problem, " +
+			"is it safe to ship.\n\n" +
+			"REACH A DECISION — do not run out of turns. If the fixes are right, call merge_fix " +
+			"with a one-line reason and they merge to dev. If a fix is wrong, incomplete, or you " +
+			"are unsure — do NOT merge; say plainly what is wrong, and it waits for a person. " +
+			"Approve only what you would merge yourself; a bad merge to dev costs more than a fix " +
+			"left waiting.",
+		Guard: tools.DenyAll,
+		Tools: append(append([]string{}, readOnly...), tools.MergeFix),
+		// SEEDED and roomier than a filing reviewer: this one judges a whole batch
+		// diff across several files and must reach a merge_fix verdict, not just
+		// file findings. At 8 turns it spent them all verifying and defaulted to
+		// reject — a false hold. Measured on the e2e-val batch of 13 findings.
+		SeedKnown:     true,
+		MaxIterations: 20,
 		Temperature:   0.2,
 		MaxTokens:     6000,
 	})

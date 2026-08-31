@@ -17,14 +17,34 @@ import (
 
 // gitCmd runs one git command in a directory with the workshop identity, the
 // same identity gitlog.go commits under.
+//
+// EVERY GIT CALL IS BOUNDED. auto-mode's context carries no deadline — it lives
+// for the whole session — so a clone, fetch, or push to the git-daemon that
+// stalls would block the loop forever with the GPU idle and nothing in the log.
+// Measured live: a merge to dev hung for ten minutes after an approved batch,
+// zero CPU, no git child still running, the run wedged. A per-call timeout turns
+// that into an error the caller reports and moves past.
 func gitCmd(ctx context.Context, dir string, args ...string) (string, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, gitCallTimeout)
+		defer cancel()
+	}
 	full := []string{"-C", dir,
 		"-c", "user.name=blacksmith",
 		"-c", "user.email=blacksmith@workshop.invalid",
 		"-c", "commit.gpgsign=false"}
 	out, err := exec.CommandContext(ctx, "git", append(full, args...)...).CombinedOutput()
+	if err != nil && ctx.Err() != nil {
+		return strings.TrimSpace(string(out)), fmt.Errorf("git %s timed out after %s: %w", args[0], gitCallTimeout, ctx.Err())
+	}
 	return strings.TrimSpace(string(out)), err
 }
+
+// gitCallTimeout bounds any single git operation. Two minutes is far more than a
+// shallow clone or a push of one branch to a LAN git-daemon needs, and short
+// enough that a wedged daemon interaction fails the finding rather than the run.
+const gitCallTimeout = 2 * time.Minute
 
 // cloneRunBranch clones a project's run branch into a fresh directory under
 // base, and returns that directory. The clone is shallow — one branch, no

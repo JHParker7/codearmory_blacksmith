@@ -331,7 +331,20 @@ func fixBatch(ctx context.Context, maker agents.Creator, dir string, repo findin
 			return false, "the batch could not be diffed for review: " + diffErr.Error()
 		}
 		if strings.TrimSpace(diff) == "" {
-			return false, "the batch changed no files"
+			// The developer produced NO change. For these findings a green build is
+			// not evidence of a fix — they do not break the build — so an empty diff
+			// means the developer ran the check, saw green, and stopped without
+			// editing, not that the work is done. Push back and retry rather than
+			// hold. Measured live: the batch developer's first act was the check, it
+			// passed on the untouched tree, and the stage ended having fixed nothing.
+			if cycle == maxFixReviewCycles {
+				return false, "the developer made no changes across every cycle; a person should take these findings."
+			}
+			feedback = "You made NO changes, but the findings are NOT fixed. A passing build/test does " +
+				"not resolve these issues — they do not break the build. EDIT the code to address every " +
+				"finding listed above, THEN run the check. Do not stop on a green check you got without editing."
+			slog.Info("auto: batch fix made no changes; pushing back", "cycle", cycle)
+			continue
 		}
 
 		// THE SCANNER GATE, over the whole tree: the fixes must introduce no new
