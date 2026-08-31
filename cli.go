@@ -263,6 +263,11 @@ func runWithReroll(
 		files, lastErr = executeRun(ctx, maker, stages, files, repoDir, task)
 		if lastErr == nil {
 			curGit.mark("run: passed")
+			// PACKAGE THE PASSING TREE. The DevOps agent writes the Dockerfile and
+			// coded steps build and push the image — before the push, so the run
+			// branch carries the Dockerfile it was built from. Best-effort: it
+			// never fails a green run, and a host without docker simply skips it.
+			files = packageProject(ctx, maker, files, repoDir)
 			curGit.pushRun(os.Getenv(gitEnvURL), os.Getenv(gitEnvMkrepo), repoDir)
 			closeRequestTicket(true, fmt.Sprintf("passed on draw %d", attempt))
 			return nil
@@ -613,6 +618,8 @@ func stage(c agents.Creator, name string, files map[string]string) (*agents.Agen
 		return c.PlanReview(files), nil
 	case agents.StageReview:
 		return c.MergeReviewer(files), nil
+	case agents.StageDevOps:
+		return c.DevOps(files), nil
 	}
 	return c.Stage(name, files)
 }

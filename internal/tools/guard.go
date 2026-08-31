@@ -86,6 +86,27 @@ func OnlyExt(exts ...string) Guard {
 	}
 }
 
+// OnlyBasenames permits writes only to files with one of the given base names,
+// wherever they sit in the tree. For a stage whose product is a fixed set of
+// named files — a Dockerfile and a .dockerignore — rather than an extension: an
+// allowlist that says "this stage writes THESE files" and refuses the rest, so
+// a packaging agent cannot wander into the application code it is packaging.
+func OnlyBasenames(names ...string) Guard {
+	allowed := make(map[string]bool, len(names))
+	for _, n := range names {
+		allowed[n] = true
+	}
+	list := strings.Join(names, ", ")
+	return func(p string) error {
+		if allowed[path.Base(p)] {
+			return nil
+		}
+		return fmt.Errorf(
+			"%s cannot be written at this stage, which produces only %s. Put the change in one of "+
+				"those, or leave the application code to the stage that owns it", p, list)
+	}
+}
+
 // Both applies two guards, reporting the first refusal.
 func Both(a, b Guard) Guard {
 	return func(p string) error {

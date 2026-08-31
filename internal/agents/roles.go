@@ -33,6 +33,12 @@ const (
 	// the review stage that merges its approved work.
 	StageFix    = "fix"
 	StageReview = "review"
+
+	// The packaging stage: after the code is built and passing, a DevOps agent
+	// writes the container image's Dockerfile. Its output is infrastructure, not
+	// application code, and the coded build-and-push that follows is what turns
+	// it into an image on the workshop registry.
+	StageDevOps = "devops"
 )
 
 // PlanStages are the plan arm's stages, in order: plan the work and the tests,
@@ -448,6 +454,40 @@ func (c Creator) MergeReviewer(files map[string]string) *Agent {
 		// reject — a false hold. Measured on the e2e-val batch of 13 findings.
 		SeedKnown:     true,
 		MaxIterations: 20,
+		Temperature:   0.2,
+		MaxTokens:     6000,
+	})
+}
+
+// DevOps packages a finished project into a container image — for now, by
+// writing the Dockerfile (and a .dockerignore); more infrastructure-as-code
+// comes later. It runs AFTER the code is built and passing, so the whole tree
+// is in front of it and it reads the real build and run commands from the
+// source rather than guessing. It writes ONLY the packaging files: the coded
+// build-and-push that follows turns them into an image, and a packaging agent
+// that could edit the application would be reviewing-by-rewriting all over
+// again.
+func (c Creator) DevOps(files map[string]string) *Agent {
+	return c.New(files, Options{
+		Name:  StageDevOps,
+		Class: model.ClassLarge,
+		Prompt: "You are a DevOps engineer packaging this project into a container image. The whole " +
+			"source tree is IN FRONT OF YOU — read go.mod, the main package, and how the server " +
+			"starts, so the build and run commands are what the code actually needs, not a guess.\n\n" +
+			"Write a production Dockerfile and a .dockerignore. Use a MULTI-STAGE build: compile the " +
+			"binary in a `golang` builder with CGO disabled, then copy ONLY the binary into a minimal " +
+			"runtime (`gcr.io/distroless/static` or `alpine`). Run as a NON-ROOT user. EXPOSE the port " +
+			"the server listens on — read it from the code; if it reads a PORT env var, default to " +
+			"8080. Set ENTRYPOINT to the binary. Do not invent dependencies or change any application " +
+			"code — base everything on what this code does. Write ONLY Dockerfile and .dockerignore.",
+		// It writes packaging files and nothing else, and it needs no check: there
+		// is no Go to build here, and the coded docker build that follows is the
+		// real gate. OwnCheck keeps the operator's test command off this stage.
+		Guard:         tools.OnlyBasenames("Dockerfile", ".dockerignore"),
+		Tools:         writing(),
+		OwnCheck:      true,
+		SeedKnown:     true,
+		MaxIterations: 8,
 		Temperature:   0.2,
 		MaxTokens:     6000,
 	})
