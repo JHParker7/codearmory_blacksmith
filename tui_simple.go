@@ -163,6 +163,11 @@ type tuiModel struct {
 	height  int
 	err     string
 	started bool
+
+	// board is the last snapshot of what the WHOLE workshop is doing — other
+	// processes' requests and the findings waiting — polled on a ticker so this
+	// screen monitors more than its own runs.
+	board boardView
 }
 
 func newRunView(task, dir string, stages []string) *runView {
@@ -183,8 +188,23 @@ func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+// boardMsg carries a fresh board snapshot to the screen.
+type boardMsg boardView
+
+// pollBoard reads the board off the UI goroutine and delivers a snapshot. It
+// re-arms itself on a slow tick — the board changes at request speed, not
+// frame speed, so a poll every few seconds is plenty and keeps the store
+// quiet.
+func pollBoard() tea.Cmd {
+	return func() tea.Msg { return boardMsg(snapshotBoard()) }
+}
+
+func boardTick() tea.Cmd {
+	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return boardMsg(snapshotBoard()) })
+}
+
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(waitForEvent(m.sess.events), tick())
+	return tea.Batch(waitForEvent(m.sess.events), tick(), pollBoard())
 }
 
 // submit takes the typed request into the queue, and onto the GPU if it is
@@ -241,6 +261,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		return m, tick()
+
+	case boardMsg:
+		m.board = boardView(msg)
+		return m, boardTick()
 
 	case uiEvent:
 		if msg.kind == "sandbox-ready" || msg.kind == "sandbox-fail" {
@@ -396,6 +420,18 @@ func (m tuiModel) View() string {
 			}
 			b.WriteString(fmt.Sprintf("   %s %s  %s\n      %s\n",
 				mark, truncate(e.task, 60), dimStyle.Render(e.took.Round(time.Second).String()), note))
+		}
+	}
+
+	if m.board.reachable {
+		b.WriteString("\n" + titleStyle.Render("board") +
+			dimStyle.Render(fmt.Sprintf("   %d security / %d quality findings open",
+				m.board.openSecurity, m.board.openQuality)) + "\n")
+		if len(m.board.activeRequests) == 0 {
+			b.WriteString(dimStyle.Render("   no other requests in flight") + "\n")
+		}
+		for _, r := range m.board.activeRequests {
+			b.WriteString("   " + runStyle.Render("▷ ") + truncate(r, 66) + dimStyle.Render("  (in flight)") + "\n")
 		}
 	}
 
