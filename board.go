@@ -4,7 +4,8 @@ package main
 // doing, not just this screen's own runs. A request built by a batch process,
 // a finding filed by a reviewer, a fix auto-mode is working — all of it is on
 // the board, and this is how the TUI surfaces it so a person watching one
-// screen sees every process's work.
+// screen sees every process's work, navigates it, and opens any ticket to read
+// why it stands where it does.
 
 import (
 	"context"
@@ -15,60 +16,34 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/ticket"
 )
 
-// render draws the board section for the TUI: a one-line summary, the requests
-// building now, and the open findings in the order -auto works them. The board
-// IS the refiner's queue, so the screen shows it as one. Bounded to a handful
-// of rows so a long backlog does not push the input line off-screen.
-func (v boardView) render() string {
-	var b strings.Builder
-	summary := fmt.Sprintf("   %d security · %d quality open", v.openSecurity, v.openQuality)
-	if v.resolved > 0 {
-		summary += fmt.Sprintf(" · %d fixed", v.resolved)
-	}
-	b.WriteString("\n" + titleStyle.Render("board") + dimStyle.Render(summary) + "\n")
-
-	for _, r := range v.activeRequests {
-		b.WriteString("   " + runStyle.Render("▷ ") + truncate(r, 64) + dimStyle.Render("  building") + "\n")
-	}
-	if len(v.findings) == 0 {
-		b.WriteString(dimStyle.Render("   no open findings") + "\n")
-		return b.String()
-	}
-	const maxRows = 8
-	for i, f := range v.findings {
-		if i >= maxRows {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("   …and %d more", len(v.findings)-maxRows)) + "\n")
-			break
-		}
-		sev := boardSevStyle(f.severity).Render(fmt.Sprintf("%-8s", f.severity))
-		tag := dimStyle.Render(f.kind[:3])
-		b.WriteString("   " + sev + " " + tag + " " + truncate(f.title, 58) + "\n")
-	}
-	return b.String()
-}
-
-// boardFinding is one finding as the screen lists it: its kind and severity for
-// ordering and colour, and its title with the kind prefix already stripped.
-type boardFinding struct {
-	kind     string // "security" | "quality"
+// boardTicket is one row in the navigable board: enough to draw it and to fetch
+// its detail. kind is empty for a request.
+type boardTicket struct {
+	id       string
+	label    string // title with the kind/request prefix stripped
+	status   string // open | in_progress | resolved | closed
 	severity string
-	title    string
+	kind     string // "security" | "quality" | "" for a request
+	request  bool
 }
 
-// boardView is a snapshot of the board for the screen: the requests in flight,
-// the findings still open (the refiner's queue), and how many have been fixed.
+// boardView is a snapshot of the board for the screen: the tickets in the order
+// the operator reads them, plus the counts for the summary line.
 type boardView struct {
-	activeRequests []string       // titles of in_progress requests
-	findings       []boardFinding // open findings, security first then by severity
-	openSecurity   int
-	openQuality    int
-	resolved       int // findings already fixed — progress the refiner has made
-	reachable      bool
+	tickets      []boardTicket
+	openSecurity int
+	openQuality  int
+	resolved     int // findings already fixed — progress the refiner has made
+	reachable    bool
 }
 
 // snapshotBoard reads the board once. Best-effort: an unreachable board yields
 // an empty, not-reachable view rather than an error, because the TUI must keep
 // drawing.
+//
+// The rows are ordered the way the work flows: requests building now, then the
+// open findings in the exact order -auto works them (security first, then by
+// severity — the refiner's queue), then a tail of what has been resolved.
 func snapshotBoard() boardView {
 	if tickets == nil {
 		return boardView{}
@@ -79,50 +54,132 @@ func snapshotBoard() boardView {
 	if err1 != nil || err2 != nil {
 		return boardView{}
 	}
-	// Resolved is best-effort on top: a store that lists open but not resolved
-	// still draws, just without the fixed count.
 	resolved, _ := tickets.List(ctx, ticket.ListOpts{Status: ticket.StatusResolved})
 
 	v := boardView{reachable: true}
+
 	for _, t := range inprog {
-		if title, ok := strings.CutPrefix(t.Title, "request: "); ok {
-			v.activeRequests = append(v.activeRequests, title)
+		if label, ok := strings.CutPrefix(t.Title, "request: "); ok {
+			v.tickets = append(v.tickets, boardTicket{
+				id: t.ID, label: label, status: t.Status, request: true,
+			})
 		}
 	}
-	sort.Strings(v.activeRequests)
 
+	var findings []boardTicket
 	for _, t := range open {
-		var kind string
-		switch {
-		case strings.HasPrefix(t.Title, "security: "):
-			kind = "security"
-			v.openSecurity++
-		case strings.HasPrefix(t.Title, "quality: "):
-			kind = "quality"
-			v.openQuality++
-		default:
-			continue
+		if bt, ok := findingRow(t); ok {
+			findings = append(findings, bt)
+			if bt.kind == "security" {
+				v.openSecurity++
+			} else {
+				v.openQuality++
+			}
 		}
-		v.findings = append(v.findings, boardFinding{
-			kind:     kind,
-			severity: t.Priority,
-			title:    strings.TrimPrefix(strings.TrimPrefix(t.Title, "security: "), "quality: "),
-		})
 	}
-	// SAME ORDER THE REFINER WORKS THEM: all security before all quality, each
-	// block by severity. What the screen shows top-to-bottom is what -auto takes
-	// next-to-last, so the board reads as the queue it is.
-	sort.SliceStable(v.findings, func(i, j int) bool {
-		if (v.findings[i].kind == "security") != (v.findings[j].kind == "security") {
-			return v.findings[i].kind == "security"
+	sort.SliceStable(findings, func(i, j int) bool {
+		if (findings[i].kind == "security") != (findings[j].kind == "security") {
+			return findings[i].kind == "security"
 		}
-		return rankOf(v.findings[i].severity) < rankOf(v.findings[j].severity)
+		return rankOf(findings[i].severity) < rankOf(findings[j].severity)
 	})
+	v.tickets = append(v.tickets, findings...)
 
+	// A bounded tail of resolved findings, most recent first, so the fixes are
+	// visible without the whole history crowding out the live queue.
+	const resolvedTail = 8
+	shown := 0
+	for i := len(resolved) - 1; i >= 0 && shown < resolvedTail; i-- {
+		if bt, ok := findingRow(resolved[i]); ok {
+			v.tickets = append(v.tickets, bt)
+			shown++
+		}
+	}
 	for _, t := range resolved {
-		if strings.HasPrefix(t.Title, "security: ") || strings.HasPrefix(t.Title, "quality: ") {
+		if _, ok := findingRow(t); ok {
 			v.resolved++
 		}
 	}
 	return v
+}
+
+// findingRow turns a kinded finding ticket into a board row, or reports that
+// the ticket is not a finding (a request, anything unkinded).
+func findingRow(t ticket.Ticket) (boardTicket, bool) {
+	var kind string
+	switch {
+	case strings.HasPrefix(t.Title, "security: "):
+		kind = "security"
+	case strings.HasPrefix(t.Title, "quality: "):
+		kind = "quality"
+	default:
+		return boardTicket{}, false
+	}
+	return boardTicket{
+		id:       t.ID,
+		label:    strings.TrimPrefix(strings.TrimPrefix(t.Title, "security: "), "quality: "),
+		status:   t.Status,
+		severity: t.Priority,
+		kind:     kind,
+	}, true
+}
+
+// render draws the board section for the TUI: a summary line and the ticket
+// list, with the selected row marked. Windowed around the selection so a long
+// board never pushes the rest of the screen away, and the selected row stays in
+// view as the cursor moves.
+func (v boardView) render(sel int) string {
+	var b strings.Builder
+	summary := fmt.Sprintf("   %d security · %d quality open", v.openSecurity, v.openQuality)
+	if v.resolved > 0 {
+		summary += fmt.Sprintf(" · %d fixed", v.resolved)
+	}
+	b.WriteString(titleStyle.Render("board") + dimStyle.Render(summary) + "\n")
+
+	if len(v.tickets) == 0 {
+		b.WriteString(dimStyle.Render("   the board is empty") + "\n")
+		return b.String()
+	}
+
+	const window = 10
+	start := 0
+	if sel >= window {
+		start = sel - window + 1
+	}
+	end := start + window
+	if end > len(v.tickets) {
+		end = len(v.tickets)
+	}
+	if start > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("   ↑ %d above", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		b.WriteString(v.tickets[i].row(i == sel) + "\n")
+	}
+	if end < len(v.tickets) {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("   ↓ %d below", len(v.tickets)-end)) + "\n")
+	}
+	return b.String()
+}
+
+// row draws one ticket line: a cursor when selected, a coloured status badge, a
+// severity for a finding, and the label.
+func (t boardTicket) row(selected bool) string {
+	cursor := "  "
+	if selected {
+		cursor = promptStyle.Render("▸ ")
+	}
+	badge := boardStatusStyle(t.status).Render(fmt.Sprintf("%-11s", boardStatusLabel(t.status)))
+	if t.request {
+		return cursor + badge + " " + titleStyle.Render("request") + " " + truncate(t.label, 50)
+	}
+	sev := boardSevStyle(t.severity).Render(fmt.Sprintf("%-8s", t.severity))
+	return cursor + badge + " " + sev + " " + dimStyle.Render(t.kind[:3]) + " " + truncate(t.label, 46)
+}
+
+func boardStatusLabel(s string) string {
+	if s == ticket.StatusInProgress {
+		return "in progress"
+	}
+	return s
 }

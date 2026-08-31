@@ -23,7 +23,12 @@ func testModel() tuiModel {
 	return tuiModel{sess: sess, ctx: context.Background()}
 }
 
+// typeIn drives the real path a person takes to submit: press r to open the
+// request line, then type. The board is the primary view now, so typing only
+// reaches the input once r has focused it.
 func typeIn(m tuiModel, s string) tuiModel {
+	open, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = open.(tuiModel)
 	for _, r := range s {
 		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		m = next.(tuiModel)

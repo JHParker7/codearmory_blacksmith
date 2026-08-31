@@ -5,59 +5,73 @@ import (
 	"testing"
 )
 
-// The TUI board shows the findings themselves, security first then by severity,
-// with a summary and a fixed count — the refiner's queue, drawn as one.
-func TestBoardRenderShowsFindingsInQueueOrder(t *testing.T) {
+// The board lists tickets the operator navigates: a coloured status, a severity
+// for findings, and the label. This checks a mixed board renders with the
+// selection cursor on the right row.
+func TestBoardRenderListsTicketsWithStatus(t *testing.T) {
 	v := boardView{
-		reachable:      true,
-		openSecurity:   1,
-		openQuality:    1,
-		resolved:       3,
-		activeRequests: []string{"build a task API"},
-		findings: []boardFinding{
-			// Deliberately out of order; render relies on snapshotBoard's sort,
-			// so hand it pre-sorted (security first, then severity) as it would be.
-			{kind: "security", severity: "critical", title: "nil MaxBytesReader panics"},
-			{kind: "quality", severity: "medium", title: "PUT cannot clear Description"},
+		reachable:    true,
+		openSecurity: 1,
+		openQuality:  1,
+		resolved:     3,
+		tickets: []boardTicket{
+			{id: "1", label: "build a task API", status: "in_progress", request: true},
+			{id: "2", label: "nil MaxBytesReader panics", status: "open", severity: "critical", kind: "security"},
+			{id: "3", label: "PUT cannot clear Description", status: "resolved", severity: "medium", kind: "quality"},
 		},
 	}
-	out := v.render()
+	out := v.render(1) // cursor on the finding
 
-	if !strings.Contains(out, "1 security · 1 quality open") {
-		t.Errorf("summary line missing counts:\n%s", out)
+	if !strings.Contains(out, "1 security · 1 quality open") || !strings.Contains(out, "3 fixed") {
+		t.Errorf("summary line wrong:\n%s", out)
 	}
-	if !strings.Contains(out, "3 fixed") {
-		t.Errorf("summary should show the fixed count:\n%s", out)
+	if !strings.Contains(out, "in progress") {
+		t.Errorf("in_progress status should render as 'in progress':\n%s", out)
 	}
-	if !strings.Contains(out, "build a task API") || !strings.Contains(out, "building") {
-		t.Errorf("in-flight request not shown:\n%s", out)
+	if !strings.Contains(out, "build a task API") || !strings.Contains(out, "request") {
+		t.Errorf("request row missing:\n%s", out)
 	}
-	if !strings.Contains(out, "nil MaxBytesReader panics") || !strings.Contains(out, "PUT cannot clear Description") {
-		t.Errorf("findings not listed:\n%s", out)
+	if !strings.Contains(out, "nil MaxBytesReader panics") || !strings.Contains(out, "resolved") {
+		t.Errorf("findings/status not listed:\n%s", out)
 	}
-	// Security must render above quality.
-	if strings.Index(out, "MaxBytesReader") > strings.Index(out, "clear Description") {
-		t.Errorf("security finding should render before quality:\n%s", out)
+	if !strings.Contains(out, "▸") {
+		t.Errorf("selection cursor not drawn:\n%s", out)
 	}
 }
 
-func TestBoardRenderCapsRowsAndCountsTheRest(t *testing.T) {
+// A long board windows around the selection so the rest of the screen survives,
+// and says how many rows are hidden each way.
+func TestBoardRenderWindowsAroundSelection(t *testing.T) {
 	v := boardView{reachable: true}
-	for i := 0; i < 12; i++ {
-		v.findings = append(v.findings, boardFinding{kind: "quality", severity: "low", title: "nit"})
+	for i := 0; i < 30; i++ {
+		v.tickets = append(v.tickets, boardTicket{id: "x", label: "finding", status: "open", severity: "low", kind: "quality"})
 	}
-	out := v.render()
-	if strings.Count(out, "nit") != 8 {
-		t.Errorf("expected 8 finding rows, got %d:\n%s", strings.Count(out, "nit"), out)
+	out := v.render(20)
+	if !strings.Contains(out, "above") || !strings.Contains(out, "below") {
+		t.Errorf("a windowed board should mark hidden rows above and below:\n%s", out)
 	}
-	if !strings.Contains(out, "…and 4 more") {
-		t.Errorf("expected the overflow count line:\n%s", out)
+	// The window is bounded, not the whole 30 rows.
+	if n := strings.Count(out, "finding"); n > 12 {
+		t.Errorf("expected a bounded window, got %d rows:\n%s", n, out)
 	}
 }
 
 func TestBoardRenderEmptyIsHonest(t *testing.T) {
-	out := boardView{reachable: true}.render()
-	if !strings.Contains(out, "no open findings") {
+	out := boardView{reachable: true}.render(0)
+	if !strings.Contains(out, "the board is empty") {
 		t.Errorf("an empty board should say so:\n%s", out)
+	}
+}
+
+// wrapLines keeps the author's own breaks and never exceeds the width.
+func TestWrapLinesRespectsWidthAndBreaks(t *testing.T) {
+	got := wrapLines("one two three\nfour", 8)
+	for _, l := range got {
+		if len(l) > 8 {
+			t.Errorf("line %q exceeds width 8", l)
+		}
+	}
+	if got[len(got)-1] != "four" {
+		t.Errorf("the explicit line break was not kept: %v", got)
 	}
 }

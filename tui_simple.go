@@ -151,6 +151,18 @@ func slugOf(task string) string {
 	return out
 }
 
+// focus is which pane has the keyboard. The board is a monitor you navigate;
+// pressing r drops into the request line to submit; enter on a ticket opens its
+// detail. The TUI is the primary interface, so all three live on one screen and
+// the keys move between them rather than down a menu.
+type focus int
+
+const (
+	focusBoard  focus = iota // navigate the ticket list (default)
+	focusSubmit              // the request line has the keyboard
+	focusDetail              // reading one ticket
+)
+
 // tuiModel is the whole screen's state.
 type tuiModel struct {
 	sess    *session
@@ -167,7 +179,10 @@ type tuiModel struct {
 	// board is the last snapshot of what the WHOLE workshop is doing — other
 	// processes' requests and the findings waiting — polled on a ticker so this
 	// screen monitors more than its own runs.
-	board boardView
+	board  boardView
+	focus  focus
+	sel    int          // selected row in board.tickets
+	detail *boardDetail // the ticket being read, nil while loading or closed
 }
 
 func newRunView(task, dir string, stages []string) *runView {
@@ -203,18 +218,131 @@ func boardTick() tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return boardMsg(snapshotBoard()) })
 }
 
+// boardDetail is one ticket read in full for the detail pane: what it is, where
+// it stands, and every comment — which for a finding is the story of its fix
+// (the reviewer's objection, the scanner's verdict, "merge held", the resolve).
+type boardDetail struct {
+	title, status, priority, kind, body string
+	comments                            []string
+	err                                 string
+}
+
+// detailMsg delivers a fetched ticket to the screen.
+type detailMsg boardDetail
+
+// fetchDetail reads one ticket off the UI goroutine. The board list carries
+// only enough to draw a row; the body and comments are pulled on demand when a
+// ticket is opened, so navigating the list stays a local, instant move.
+func fetchDetail(id string) tea.Cmd {
+	return func() tea.Msg {
+		if tickets == nil {
+			return detailMsg{err: "no board configured"}
+		}
+		t, err := tickets.Get(context.Background(), id)
+		if err != nil {
+			return detailMsg{err: err.Error()}
+		}
+		d := boardDetail{status: t.Status, priority: t.Priority, body: t.Description}
+		d.title = t.Title
+		switch {
+		case strings.HasPrefix(t.Title, "security: "):
+			d.kind = "security"
+		case strings.HasPrefix(t.Title, "quality: "):
+			d.kind = "quality"
+		case strings.HasPrefix(t.Title, "request: "):
+			d.kind = "request"
+		}
+		for _, c := range t.Comments {
+			d.comments = append(d.comments, c.Body)
+		}
+		return detailMsg(d)
+	}
+}
+
 func (m tuiModel) Init() tea.Cmd {
 	return tea.Batch(waitForEvent(m.sess.events), tick(), pollBoard())
 }
 
+// handleKey routes a keypress by which pane holds focus. The board is a monitor
+// you navigate; r opens the request line; enter opens a ticket; esc backs out.
+func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
+
+	switch m.focus {
+	case focusSubmit:
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.input, m.focus = "", focusBoard
+			return m, nil
+		case tea.KeyEnter:
+			return m.submit()
+		case tea.KeyBackspace:
+			if r := []rune(m.input); len(r) > 0 {
+				m.input = string(r[:len(r)-1])
+			}
+			return m, nil
+		case tea.KeySpace:
+			m.input += " "
+			return m, nil
+		case tea.KeyRunes:
+			m.input += string(msg.Runes)
+			return m, nil
+		}
+		return m, nil
+
+	case focusDetail:
+		switch msg.String() {
+		case "esc", "q", "enter", "backspace", "left":
+			m.detail, m.focus = nil, focusBoard
+		}
+		return m, nil
+
+	default: // focusBoard
+		switch msg.String() {
+		case "q":
+			return m, tea.Quit
+		case "r":
+			m.focus = focusSubmit
+			return m, nil
+		case "j", "down":
+			if m.sel < len(m.board.tickets)-1 {
+				m.sel++
+			}
+			return m, nil
+		case "k", "up":
+			if m.sel > 0 {
+				m.sel--
+			}
+			return m, nil
+		case "g", "home":
+			m.sel = 0
+			return m, nil
+		case "G", "end":
+			m.sel = max(0, len(m.board.tickets)-1)
+			return m, nil
+		case "enter", "right", "l":
+			if m.sel >= 0 && m.sel < len(m.board.tickets) {
+				m.focus, m.detail = focusDetail, nil
+				return m, fetchDetail(m.board.tickets[m.sel].id)
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+}
+
 // submit takes the typed request into the queue, and onto the GPU if it is
-// idle.
+// idle, then returns focus to the board so the operator watches it run.
 func (m tuiModel) submit() (tuiModel, tea.Cmd) {
 	task := strings.TrimSpace(m.input)
 	if task == "" {
+		m.focus = focusBoard
 		return m, nil
 	}
 	m.input = ""
+	m.focus = focusBoard
 	m.queue = append(m.queue, task)
 	m.sess.ensureBoot()
 	return m.maybeStart()
@@ -240,31 +368,22 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC:
-			return m, tea.Quit
-		case tea.KeyEnter:
-			return m.submit()
-		case tea.KeyBackspace:
-			if len(m.input) > 0 {
-				m.input = m.input[:len(m.input)-len(string([]rune(m.input)[len([]rune(m.input))-1:]))]
-			}
-			return m, nil
-		case tea.KeySpace:
-			m.input += " "
-			return m, nil
-		case tea.KeyRunes:
-			m.input += string(msg.Runes)
-			return m, nil
-		}
-		return m, nil
+		return m.handleKey(msg)
 
 	case tickMsg:
 		return m, tick()
 
 	case boardMsg:
 		m.board = boardView(msg)
+		if m.sel >= len(m.board.tickets) {
+			m.sel = max(0, len(m.board.tickets)-1)
+		}
 		return m, boardTick()
+
+	case detailMsg:
+		d := boardDetail(msg)
+		m.detail = &d
+		return m, nil
 
 	case uiEvent:
 		if msg.kind == "sandbox-ready" || msg.kind == "sandbox-fail" {
@@ -362,6 +481,19 @@ func boardSevStyle(sev string) lipgloss.Style {
 	}
 }
 
+// boardStatusStyle colours a ticket's status: resolved green (done), in-progress
+// yellow (working), open and closed dim (waiting or gone).
+func boardStatusStyle(status string) lipgloss.Style {
+	switch status {
+	case "resolved":
+		return passStyle
+	case "in_progress":
+		return runStyle
+	default:
+		return dimStyle
+	}
+}
+
 func glyph(status string) string {
 	switch status {
 	case "running":
@@ -385,6 +517,10 @@ func elapsed(sv stageView) string {
 }
 
 func (m tuiModel) View() string {
+	if m.focus == focusDetail {
+		return m.detailView()
+	}
+
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("blacksmith — the simple shape"))
 	b.WriteString(dimStyle.Render("   workspace " + m.sess.base))
@@ -438,15 +574,86 @@ func (m tuiModel) View() string {
 	}
 
 	if m.board.reachable {
-		b.WriteString(m.board.render())
+		b.WriteString("\n" + m.board.render(m.sel))
+	} else {
+		b.WriteString("\n" + dimStyle.Render("board unreachable — monitoring this screen's runs only") + "\n")
 	}
 
-	b.WriteString("\n" + promptStyle.Render("request> ") + m.input + "▌\n")
-	b.WriteString(dimStyle.Render("enter submits · ctrl+c quits") + "\n")
+	b.WriteString("\n")
+	if m.focus == focusSubmit {
+		b.WriteString(promptStyle.Render("request> ") + m.input + "▌\n")
+		b.WriteString(dimStyle.Render("enter submits · esc cancels") + "\n")
+	} else {
+		b.WriteString(dimStyle.Render("↑↓ move · enter open · r new request · q quit") + "\n")
+	}
 	if m.err != "" {
 		b.WriteString(failStyle.Render(m.err) + "\n")
 	}
 	return b.String()
+}
+
+// detailView is the full-screen read of one ticket: its title and status, its
+// body, and every comment — for a finding, the record of how its fix went.
+func (m tuiModel) detailView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("ticket") + dimStyle.Render("   esc to go back") + "\n\n")
+	if m.detail == nil {
+		b.WriteString(dimStyle.Render("loading…") + "\n")
+		return b.String()
+	}
+	d := m.detail
+	if d.err != "" {
+		b.WriteString(failStyle.Render("could not load: "+d.err) + "\n")
+		return b.String()
+	}
+
+	status := boardStatusStyle(d.status).Render(boardStatusLabel(d.status))
+	kind := d.kind
+	if d.priority != "" && d.kind != "request" {
+		kind = d.priority + " " + d.kind
+	}
+	b.WriteString(titleStyle.Render(truncate(d.title, max(30, m.width-2))) + "\n")
+	b.WriteString(status + dimStyle.Render("  ·  "+kind) + "\n\n")
+
+	wrapWidth := max(40, m.width-2)
+	for _, line := range wrapLines(d.body, wrapWidth) {
+		b.WriteString(line + "\n")
+	}
+	if len(d.comments) > 0 {
+		b.WriteString("\n" + titleStyle.Render(fmt.Sprintf("comments (%d)", len(d.comments))) + "\n")
+		for _, c := range d.comments {
+			b.WriteString("\n")
+			for _, line := range wrapLines(strings.TrimSpace(c), wrapWidth) {
+				b.WriteString(dimStyle.Render("│ ") + line + "\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+// wrapLines breaks text to a width, keeping the author's own line breaks. A
+// ticket body and its comments are prose, and the detail pane is the one place
+// the TUI shows them in full.
+func wrapLines(s string, width int) []string {
+	var out []string
+	for _, para := range strings.Split(s, "\n") {
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			out = append(out, "")
+			continue
+		}
+		line := words[0]
+		for _, w := range words[1:] {
+			if len(line)+1+len(w) > width {
+				out = append(out, line)
+				line = w
+				continue
+			}
+			line += " " + w
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 func truncate(s string, n int) string {
