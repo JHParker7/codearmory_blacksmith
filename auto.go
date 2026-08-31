@@ -193,16 +193,23 @@ func autoProject(ctx context.Context, maker agents.Creator, base string, attempt
 	var approved []finding
 	blockedAboveLow := false
 	for _, f := range group {
-		ok, note := fixReviewOne(ctx, maker, dir, repo, f)
-		if ok {
+		switch outcome, note := fixReviewOne(ctx, maker, dir, repo, f); outcome {
+		case fixApproved:
 			approved = append(approved, f)
-			continue
+		case fixNoop:
+			// The tree already satisfies this finding — a sibling fix covered it,
+			// or it targets what the developer cannot edit (a test file), and the
+			// source scanner does not flag it. Not a fix, not an open hole: left
+			// for a person, but it does NOT hold the merge.
+			resolveFinding(f.id, false, note)
+			restoreToHead(ctx, dir)
+		default: // fixFailed
+			resolveFinding(f.id, false, note)
+			if isAboveLow(f.severity) {
+				blockedAboveLow = true // a serious finding is genuinely unfixed: the merge waits
+			}
+			restoreToHead(ctx, dir) // drop the rejected work before the next finding
 		}
-		resolveFinding(f.id, false, note)
-		if isAboveLow(f.severity) {
-			blockedAboveLow = true // a serious finding is unfixed: the merge waits
-		}
-		restoreToHead(ctx, dir) // drop the rejected work before the next finding
 	}
 
 	if len(approved) == 0 {
@@ -309,10 +316,10 @@ func auditAfterMerge(ctx context.Context, maker agents.Creator, dir string, repo
 // revises rather than abandons. On approval it commits the fix to the clone —
 // advancing what the next finding builds on — and returns true. Bounded, and
 // the fix carries forward between rounds so each revision builds on the last.
-func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo findingRepo, f finding) (bool, string) {
+func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo findingRepo, f finding) (fixOutcome, string) {
 	cur, err := readTree(dir)
 	if err != nil {
-		return false, "auto mode could not read the working tree: " + err.Error()
+		return fixFailed, "auto mode could not read the working tree: " + err.Error()
 	}
 	// THE SCANNER BASELINE: what the source detector says about the tree BEFORE
 	// this fix. The fix is confirmed only if a re-run comes back with this issue
@@ -329,10 +336,10 @@ func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo fi
 		agent := maker.FixFinding(cur)
 		out, tree, runErr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return agent, nil }, cur, task)
 		if runErr != nil {
-			return false, "auto mode's fix attempt errored: " + firstLineOf(runErr.Error())
+			return fixFailed, "auto mode's fix attempt errored: " + firstLineOf(runErr.Error())
 		}
 		if !out.Passed {
-			return false, "auto mode could not fix this within its budget; a person should take it. Last check:\n" +
+			return fixFailed, "auto mode could not fix this within its budget; a person should take it. Last check:\n" +
 				truncate(out.LastCheck, 500)
 		}
 		cur = tree // carry the attempt forward: the next revision builds on it
@@ -340,14 +347,29 @@ func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo fi
 		// Lay the fix on the shared clone and stage its delta, so the reviewer
 		// sees only THIS finding's change on top of the fixes already committed.
 		if err := replaceTree(dir, cur); err != nil {
-			return false, "auto mode could not lay the fix down for review: " + err.Error()
+			return fixFailed, "auto mode could not lay the fix down for review: " + err.Error()
 		}
 		diff, diffErr := stagedDiff(ctx, dir)
 		if diffErr != nil {
-			return false, "the fix could not be diffed for review: " + diffErr.Error()
+			return fixFailed, "the fix could not be diffed for review: " + diffErr.Error()
 		}
 		if strings.TrimSpace(diff) == "" {
-			return false, "the fix changed no files"
+			// NO CHANGE. The accumulated tree already satisfies this finding — a
+			// sibling fix covered it (the build files near-duplicate findings, and
+			// exact-title dedup lets them through), or it targets what the developer
+			// cannot edit (a test file). Ask the SOURCE SCANNER: if it no longer
+			// flags the issue this is nothing to do, NOT an open hole, and must not
+			// hold the merge. Only a scanner that STILL flags it is a real unfixed
+			// finding. Measured live: two duplicate criticals and a dup high all
+			// "changed no files" and wrongly held a merge whose real fixes were in.
+			after := scanSignatures(runKindScanners(ctx, maker.Sandbox, cur, f.kind))
+			if scanVerify(baseline, after).stuck {
+				return fixFailed, "auto mode changed nothing and the " + f.kind +
+					" scanner still reports the issue; a person should take it."
+			}
+			return fixNoop, "auto mode made no change here — the tree already satisfies this finding " +
+				"(a sibling fix, or a target the developer cannot edit) and the scanner does not flag it. " +
+				"Left open for a person to confirm or close; it does not hold the merge."
 		}
 
 		// THE REVIEW GATE. approve just RECORDS approval; the merge to dev is a
@@ -363,7 +385,7 @@ func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo fi
 		reviewAgent := m.MergeReviewer(cur)
 		rout, _, rerr := runStage(ctx, func(map[string]string) (*agents.Agent, error) { return reviewAgent, nil }, cur, reviewTask)
 		if rerr != nil {
-			return false, "the review stage errored: " + firstLineOf(rerr.Error())
+			return fixFailed, "the review stage errored: " + firstLineOf(rerr.Error())
 		}
 
 		if approved {
@@ -390,9 +412,9 @@ func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo fi
 				// is already staged.
 				msg := "fix: " + strings.TrimPrefix(strings.TrimPrefix(f.title, "security: "), "quality: ")
 				if out, err := gitCmd(ctx, dir, "commit", "-q", "-m", msg); err != nil {
-					return false, "auto mode approved the fix but could not commit it: " + firstLineOf(out)
+					return fixFailed, "auto mode approved the fix but could not commit it: " + firstLineOf(out)
 				}
-				return true, ""
+				return fixApproved, ""
 			}
 			slog.Info("auto: scanner held back an approved fix; revising",
 				"cycle", cycle, "of", maxFixReviewCycles, "finding", f.title)
@@ -405,10 +427,19 @@ func fixReviewOne(ctx context.Context, maker agents.Creator, dir string, repo fi
 			"cycle", cycle, "of", maxFixReviewCycles, "finding", f.title)
 	}
 
-	return false, fmt.Sprintf(
+	return fixFailed, fmt.Sprintf(
 		"auto mode revised the fix through %d cycles without both a review approval and a clean re-scan; "+
 			"a person should settle it. The last objection:\n%s", maxFixReviewCycles, truncate(feedback, 600))
 }
+
+// fixOutcome is how one finding's fix↔review negotiation ended.
+type fixOutcome int
+
+const (
+	fixFailed   fixOutcome = iota // could not fix-and-verify; GATES the merge if the finding is above low
+	fixApproved                   // fixed, reviewer-approved, scanner-verified, committed to the batch
+	fixNoop                       // the tree already satisfies it and the scanner is quiet — not a fix, not a hole; never gates
+)
 
 // isAboveLow reports whether a finding's severity outranks "low" — critical,
 // high, or medium. These are the findings that GATE the merge to dev: a
