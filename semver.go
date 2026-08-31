@@ -44,15 +44,16 @@ func bumpFrom(subjects []string, bodies string) string {
 }
 
 // nextVersion applies a bump to the last released version. With no prior release
-// the first one is v1.0.0 whenever anything is releasable — the semantic-release
-// convention — and empty when only chores have landed, so a run that changed
-// nothing worth shipping is not tagged.
+// the line STARTS AT v0.0.0 — first versions are not stable, so a first feature
+// is v0.1.0 and a first fix v0.0.1, not a v1.0.0 that claims stability the code
+// has not earned. Empty when only chores landed, so a run that changed nothing
+// worth shipping is not tagged.
 func nextVersion(last, bump string) string {
+	if bump == "none" {
+		return ""
+	}
 	if last == "" {
-		if bump == "none" {
-			return ""
-		}
-		return "v1.0.0"
+		last = "v0.0.0"
 	}
 	m := semverTag.FindStringSubmatch(last)
 	if m == nil {

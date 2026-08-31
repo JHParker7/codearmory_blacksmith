@@ -97,15 +97,15 @@ func TestTagReleaseVersionsFromHistory(t *testing.T) {
 		t.Skip("no git on this host")
 	}
 	g.write("store.go", "package main\n", false, "feat: add the store")
-	if v := g.tagRelease(); v != "v1.0.0" {
-		t.Fatalf("first releasable history tagged %q, want v1.0.0", v)
+	if v := g.tagRelease(); v != "v0.1.0" {
+		t.Fatalf("first feature tagged %q, want v0.1.0 (0.x line)", v)
 	}
 	// A fix on top bumps the patch.
 	g.write("store.go", "package main\n// fixed\n", false, "fix: correct the store")
-	if v := g.tagRelease(); v != "v1.0.1" {
-		t.Fatalf("a fix bumped to %q, want v1.0.1", v)
+	if v := g.tagRelease(); v != "v0.1.1" {
+		t.Fatalf("a fix bumped to %q, want v0.1.1", v)
 	}
-	if got := gitOut(t, dir, "tag", "--list"); !strings.Contains(got, "v1.0.0") || !strings.Contains(got, "v1.0.1") {
+	if got := gitOut(t, dir, "tag", "--list"); !strings.Contains(got, "v0.1.0") || !strings.Contains(got, "v0.1.1") {
 		t.Errorf("tags missing: %q", got)
 	}
 }

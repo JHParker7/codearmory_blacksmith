@@ -25,8 +25,9 @@ func TestBumpFromReadsConventionalCommits(t *testing.T) {
 
 func TestNextVersionAppliesTheBump(t *testing.T) {
 	cases := []struct{ last, bump, want string }{
-		{"", "minor", "v1.0.0"}, // first release is always 1.0.0
-		{"", "major", "v1.0.0"}, // even a breaking first release
+		{"", "minor", "v0.1.0"}, // first versions are not stable: 0.x line
+		{"", "patch", "v0.0.1"}, // a first fix
+		{"", "major", "v1.0.0"}, // a first breaking change earns 1.0.0
 		{"", "none", ""},        // nothing releasable, no tag
 		{"v1.2.3", "major", "v2.0.0"},
 		{"v1.2.3", "minor", "v1.3.0"},
