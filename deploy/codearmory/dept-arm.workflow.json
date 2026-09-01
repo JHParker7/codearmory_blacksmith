@@ -1,6 +1,6 @@
 {
   "name": "dept-arm",
-  "description": "The old department pipeline as a CodeArmory workflow, up to the merge-to-dev: architect -> pm -> [reset-src -> {spec -> expected-red}xN -> dev -> green]xN -> sec -> integrator -> publish. Blacksmith owns the roles (data in postgres); forge owns the volume/exec; the workflow owns the flow. The module lives under src/, as the architect lays it down. The outer 'draw' loop is the whole-run reroll (matching blacksmith's runWithReroll): if green fails, it re-rolls the code — reset-src clears src for a fresh test+impl draw — up to 3 times; the architect/pm plan is kept. Nested inside each draw, the 'specloop' converges the spec against expected-red. The publish step opens a git-factory PR of the run's work against dev.",
+  "description": "The old department pipeline as a CodeArmory workflow, up to the merge-to-dev: architect -> [reset-src -> {spec -> expected-red}xN -> dev -> green]xN -> sec -> integrator -> publish. Blacksmith owns the roles (data in postgres); forge owns the volume/exec; the workflow owns the flow. The module lives under src/, as the architect lays it down. The outer 'draw' loop is the whole-run reroll (matching blacksmith's runWithReroll): if green fails, it re-rolls the code — reset-src clears src for a fresh test+impl draw — up to 3 times; the architect/pm plan is kept. Nested inside each draw, the 'specloop' converges the spec against expected-red. The publish step opens a git-factory PR of the run's work against dev.",
   "timeout_secs": 5400,
   "inputs": [
     { "name": "task", "required": true, "description": "the work the department builds" },
@@ -12,9 +12,6 @@
 
     { "action": "blacksmith/agent", "name": "architect", "timeout": 1200,
       "with": { "role": "architect", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
-
-    { "action": "blacksmith/agent", "name": "pm", "timeout": 1200,
-      "with": { "role": "pm", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "action": "forge/run", "name": "reset-src", "timeout": 120, "loop_id": "draw",
       "with": { "image": "alpine:3.19", "runner_class": "standard",
