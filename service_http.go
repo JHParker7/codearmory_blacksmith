@@ -262,6 +262,13 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 	// The agent files findings AS THE USER through a tickets client on the agent's
 	// token, and a reviewer records approval as an output rather than merging.
 	approved := false
+	// Capture each landed write in order — path, content, deleted, and the
+	// "type: summary" the edit declared — so the stage can commit its own work
+	// into the volume as one conventional commit per write (commitJournal). The
+	// service arm used to write a final tree with no git; the stages journal
+	// their history now, and publish reads the commit types to name the branch by
+	// impact and just pushes what the stages committed.
+	var journal []recordedWrite
 	maker := agents.Creator{
 		Gateway:    a.gw,
 		Sandbox:    tools.ForgeSandbox{Sandbox: sb},
@@ -269,6 +276,9 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		Log:        func(line string) { slog.Info(line); tr.add(line) },
 		FileTicket: a.ticketFiler(agentBearer),
 		MergeFix:   func(string) (string, error) { approved = true; return "approved", nil },
+		OnWrite: func(path, content string, deleted bool, message string) {
+			journal = append(journal, recordedWrite{path: path, content: content, deleted: deleted, message: message})
+		},
 	}
 	if req.Check != "" {
 		maker.Check = req.Check
@@ -288,17 +298,19 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		}
 		return stage(maker, role, tree)
 	}
-	out, tree, runErr := runStage(ctx, build, files, req.Task)
+	out, _, runErr := runStage(ctx, build, files, req.Task)
 	if runErr != nil {
 		fail("role " + role + ": " + firstLineOf(runErr.Error()))
 		return
 	}
 
-	// WRITE THE EDITS BACK TO THE VOLUME — no git. The next workflow step (a check,
-	// a scanner, the push) mounts the same volume and sees them.
-	changed, err := writeToWorkspace(ctx, sb, tree)
+	// COMMIT THE EDITS INTO THE VOLUME — one conventional commit per landed write,
+	// on top of the .git the workflow's clone step laid down. The next steps (a
+	// check, a scanner, the push) mount the same volume; publish reads these
+	// commits' types to name the branch by impact and pushes them as the dev PR.
+	changed, err := commitJournal(ctx, sb, journal)
 	if err != nil {
-		fail("write the role's edits back to the volume: " + firstLineOf(err.Error()))
+		fail("commit the role's edits into the volume: " + firstLineOf(err.Error()))
 		return
 	}
 
@@ -418,25 +430,57 @@ func seedFromWorkspace(ctx context.Context, sb *forge.Sandbox) (map[string]strin
 	return files, nil
 }
 
-// writeToWorkspace makes the shared checkout EXACTLY the role's tree — clears
-// the working files (keeping .git and the volume itself), lays the tree down —
-// so the next step sees the edits. No git: committing and pushing are the
-// workflow's. Returns whether the tree differs from what was there.
-func writeToWorkspace(ctx context.Context, sb *forge.Sandbox, files map[string]string) (bool, error) {
-	script := "cd " + workspaceMount + "\n" +
-		"before=$(find . -path ./.git -prune -o -type f -print | sort | xargs -r sha1sum | sha1sum)\n" +
-		"find . -mindepth 1 -path ./.git -prune -o -exec rm -rf {} + 2>/dev/null || true\n" +
-		tools.WriteTreeScript(files) +
-		"after=$(find . -path ./.git -prune -o -type f -print | sort | xargs -r sha1sum | sha1sum)\n" +
-		"[ \"$before\" = \"$after\" ] && echo __SAME__ || echo __CHANGED__\n"
-	res, err := sb.Run(ctx, nil, script)
+// recordedWrite is one landed edit captured from the agent's OnWrite: the file
+// it touched, the post-edit content (empty when deleted), and the "type: summary"
+// the edit declared, ready to become a conventional-commit subject.
+type recordedWrite struct {
+	path, content string
+	deleted       bool
+	message       string
+}
+
+// commitJournal replays the writes a role made — captured in order via the
+// Creator's OnWrite — into the shared volume as ONE conventional commit per
+// landed write, on top of the .git the workflow's clone step laid down. It
+// reuses the same ccScope/ccWithScope/ccNormalize the CLI arm's journal uses
+// (gitlog.go), so a run's history reads identically whichever arm produced it,
+// and semantic versioning accepts every subject.
+//
+// This replaces writeToWorkspace, which laid the final tree with no git
+// ("committing is the workflow's"). The stages own their history now: the
+// publish step reads these commits' types to name the branch by impact
+// (chore < fix < feat) and just pushes what the stages committed. A read-only
+// role (a reviewer) journals nothing and commits nothing. Returns whether
+// anything was written back.
+func commitJournal(ctx context.Context, sb *forge.Sandbox, journal []recordedWrite) (bool, error) {
+	if len(journal) == 0 {
+		return false, nil
+	}
+	var b strings.Builder
+	b.WriteString("cd " + workspaceMount + "\n")
+	b.WriteString("export HOME=/tmp\n")
+	// The forge container has no git identity or ownership config; set both so
+	// the commits land and go tooling in later steps trusts the .git.
+	b.WriteString("git config --global --add safe.directory '*'\n")
+	for _, w := range journal {
+		if w.deleted {
+			fmt.Fprintf(&b, "rm -f %s\n", forge.Quote(w.path))
+		} else {
+			b.WriteString(tools.WriteTreeScript(map[string]string{w.path: w.content}))
+		}
+		// A no-op write (identical content) stages nothing; `|| true` lets the
+		// replay continue past a commit git declines for lack of changes.
+		msg := ccNormalize(ccWithScope(w.message, ccScope(w.path)))
+		fmt.Fprintf(&b, "git add -A && git -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q -m %s || true\n", forge.Quote(msg))
+	}
+	res, err := sb.Run(ctx, nil, b.String())
 	if err != nil {
 		return false, err
 	}
 	if res.ExitCode != 0 {
 		return false, fmt.Errorf("%s", firstLineOf(strings.TrimSpace(res.Stderr)))
 	}
-	return strings.Contains(res.Stdout, "__CHANGED__"), nil
+	return true, nil
 }
 
 // serveActions is the service entrypoint: register with gatekeeper, wire the
