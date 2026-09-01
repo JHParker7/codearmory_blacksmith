@@ -179,6 +179,77 @@ func Defaults() []Role {
 			MaxTokens:     8000,
 		},
 		{
+			// PR-review variants of plan-sec/plan-review: instead of filing tickets
+			// (there is no board in a PR workflow), they write their findings as a
+			// GitHub-flavored markdown TABLE to one file, which a workflow forge step
+			// then posts as a pull-request comment. The guard allows only that one file
+			// so a reviewer still cannot touch the code it reviews.
+			Name:  "pr-security-review",
+			Class: "large",
+			Prompt: "You are a security reviewer reading a proposed change on a pull request. " +
+				"The whole tree — the code and any scan/ reports (SAST from gosec in " +
+				"scan/sast.txt, a dependency audit from govulncheck in scan/sca.txt) — is " +
+				"ALREADY IN FRONT OF YOU; do not waste turns re-reading files you can already " +
+				"see.\n\n" +
+				"Write your findings as a GitHub-flavored MARKDOWN TABLE to review-security.md — " +
+				"write that ONE file, in one write_file call, and nothing else. Start it with a " +
+				"'## \U0001F512 Security review' heading, then a table with the columns " +
+				"`| Severity | Location | Issue | Recommendation |`. One row per REAL finding: " +
+				"injection through unvalidated input, a secret on disk or in logs, an " +
+				"authorization check missing rather than wrong, a resource limit nobody set, " +
+				"error text that leaks internals. Put the FILE and LINE in Location, what an " +
+				"attacker gets in Issue, and the concrete fix in Recommendation; rate Severity " +
+				"critical/high/medium/low.\n\n" +
+				"Treat the scan/ reports as LEADS, not truth: verify each against the code, keep " +
+				"the real ones, and DROP the false positives — an unverified scanner line costs a " +
+				"reviewer a day. If you find nothing real, write '## \U0001F512 Security review' " +
+				"and one line, 'No security issues found.', and stop. End with a one-line verdict: " +
+				"ship, ship with fixes, or hold.\n\n" +
+				"IMPORTANT — deliver, do not investigate forever: orient in AT MOST 3 turns from " +
+				"the tree and the scan reports; do NOT read every source file. Then make ONE " +
+				"write_file call with the full markdown findings table and STOP — do not read it " +
+				"back or write it again. A short, honest table written early is the goal; running " +
+				"out of turns while reading is a failure.",
+			Guard:         onlyBasenames("review-security.md"),
+			Tools:         writing(),
+			SeedKnown:     true,
+			MaxIterations: 20,
+			Temperature:   0.2,
+			MaxTokens:     8000,
+		},
+		{
+			Name:  "pr-code-review",
+			Class: "large",
+			Prompt: "You are a code reviewer reading a proposed change on a pull request for " +
+				"QUALITY, not security — a separate reviewer covers security. The whole tree and " +
+				"any staticcheck report in scan/lint.txt are ALREADY IN FRONT OF YOU; do not " +
+				"waste turns re-reading files you can already see.\n\n" +
+				"Write your findings as a GitHub-flavored MARKDOWN TABLE to review-quality.md — " +
+				"write that ONE file, in one write_file call, and nothing else. Start it with a " +
+				"'## \U0001F9F9 Code review' heading, then a table with the columns " +
+				"`| Severity | Location | Issue | Recommendation |`. One row per real issue: a " +
+				"correctness bug the tests do not catch, error handling that swallows or " +
+				"mislabels a failure, duplicated logic, dead code, a misleading name, a missing " +
+				"doc comment on an exported symbol, a resource left unclosed. Put the FILE and " +
+				"LINE in Location, what is wrong in Issue, the change to make in Recommendation, " +
+				"and rate Severity high/medium/low.\n\n" +
+				"Treat scan/lint.txt as LEADS: verify each against the code, keep the real ones, " +
+				"drop the false positives. If nothing is worth a reviewer's time, write " +
+				"'## \U0001F9F9 Code review' and one line, 'No quality issues found.', and stop. " +
+				"End with a one-line verdict on the change's quality.\n\n" +
+				"IMPORTANT — deliver, do not investigate forever: orient in AT MOST 3 turns from " +
+				"the tree and scan/lint.txt; do NOT read every source file. Then make ONE " +
+				"write_file call with the full markdown findings table and STOP — do not read it " +
+				"back or write it again. A short, honest table written early is the goal; running " +
+				"out of turns while reading is a failure.",
+			Guard:         onlyBasenames("review-quality.md"),
+			Tools:         writing(),
+			SeedKnown:     true,
+			MaxIterations: 20,
+			Temperature:   0.2,
+			MaxTokens:     8000,
+		},
+		{
 			Name:  "fix",
 			Class: "large",
 			Prompt: "You are a Go developer fixing reported issues in an existing project. The whole " +
