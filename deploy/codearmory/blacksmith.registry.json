@@ -7,15 +7,15 @@
     "service_key": "blacksmith-registry-local-secret",
 
     "endpoints": [
-      { "method": "POST", "path": "/actions/plan-architect", "action": "runAction",  "resource": "{username}/blacksmith/actions" },
-      { "method": "POST", "path": "/actions/plan-test",      "action": "runAction",  "resource": "{username}/blacksmith/actions" },
-      { "method": "POST", "path": "/actions/plan-dev",       "action": "runAction",  "resource": "{username}/blacksmith/actions" },
-      { "method": "POST", "path": "/actions/plan-sec",       "action": "runAction",  "resource": "{username}/blacksmith/actions" },
-      { "method": "POST", "path": "/actions/plan-review",    "action": "runAction",  "resource": "{username}/blacksmith/actions" },
-      { "method": "POST", "path": "/actions/fix",            "action": "runAction",  "resource": "{username}/blacksmith/actions" },
-      { "method": "POST", "path": "/actions/review",         "action": "runAction",  "resource": "{username}/blacksmith/actions" },
-      { "method": "POST", "path": "/actions/devops",         "action": "runAction",  "resource": "{username}/blacksmith/actions" },
-      { "method": "GET",  "path": "/actions/{id}",           "action": "pollAction", "resource": "{username}/blacksmith/actions" }
+      { "method": "POST", "path": "/actions/plan-architect", "action": "runAction",  "resource": "blacksmith/actions" },
+      { "method": "POST", "path": "/actions/plan-test",      "action": "runAction",  "resource": "blacksmith/actions" },
+      { "method": "POST", "path": "/actions/plan-dev",       "action": "runAction",  "resource": "blacksmith/actions" },
+      { "method": "POST", "path": "/actions/plan-sec",       "action": "runAction",  "resource": "blacksmith/actions" },
+      { "method": "POST", "path": "/actions/plan-review",    "action": "runAction",  "resource": "blacksmith/actions" },
+      { "method": "POST", "path": "/actions/fix",            "action": "runAction",  "resource": "blacksmith/actions" },
+      { "method": "POST", "path": "/actions/review",         "action": "runAction",  "resource": "blacksmith/actions" },
+      { "method": "POST", "path": "/actions/devops",         "action": "runAction",  "resource": "blacksmith/actions" },
+      { "method": "GET",  "path": "/actions/{id}",           "action": "pollAction", "resource": "blacksmith/actions" }
     ],
 
     "actions": [

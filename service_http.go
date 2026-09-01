@@ -233,9 +233,28 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 // file findings and run in its sandbox, and only against what the user can.
 func agentPermissions() []gatekeeper.Permission {
 	return []gatekeeper.Permission{
-		{Service: "tickets", Action: "createTicket", Resource: "tickets/tickets"},
-		{Service: "tickets", Action: "createComment", Resource: "tickets/tickets"},
+		// The role runs its ENTIRE tool loop inside ONE forge lease: acquire it
+		// (createLease), wait for its sandbox to boot (getLease), run every command
+		// in it — the seed, the edits, each check — as executions bound to the lease
+		// (createExecution to submit, getExecution to poll each to a terminal state),
+		// and release it at the end (deleteLease). Requesting only createExecution —
+		// as this first did — got the mint past gatekeeper but 403'd at POST /leases,
+		// because a lease is its own resource, not an execution. Item-scoped reads and
+		// the release use the "/*" child space the owner's forge grant covers.
+		// Forge checks getLease and deleteLease on the BARE forge/leases collection
+		// (not the item space) — measured: requesting them on forge/leases/* minted
+		// fine but 403'd the WaitReady poll and the release. getExecution, in
+		// contrast, forge checks on the item forge/executions/{id}, so that one is
+		// the "/*" child space.
+		{Service: "forge", Action: "createLease", Resource: "forge/leases"},
+		{Service: "forge", Action: "getLease", Resource: "forge/leases"},
+		{Service: "forge", Action: "deleteLease", Resource: "forge/leases"},
 		{Service: "forge", Action: "createExecution", Resource: "forge/executions"},
+		{Service: "forge", Action: "getExecution", Resource: "forge/executions/*"},
+		// A reviewer files findings on the board AS THE USER — never committed to the
+		// tree — so an agent can only file where the user could.
+		{Service: "tickets", Action: "createTicket", Resource: "tickets/tickets"},
+		{Service: "tickets", Action: "createComment", Resource: "tickets/tickets/*"},
 	}
 }
 
