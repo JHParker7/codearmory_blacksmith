@@ -158,6 +158,7 @@ func Load() (Config, error) {
 
 		GatekeeperURL: e.str("AGENTS_GATEKEEPER_URL", ""),
 		ServiceKey:    e.secret("AGENTS_SERVICE_KEY"),
+		DatabaseURL:   e.secret("AGENTS_DATABASE_URL"),
 
 		AgentAuthors: DefaultAgentAuthors,
 

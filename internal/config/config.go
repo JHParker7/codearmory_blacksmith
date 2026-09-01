@@ -267,6 +267,12 @@ type Config struct {
 	GatekeeperURL string
 	ServiceKey    string
 
+	// DatabaseURL is the postgres DSN the action service reads its ROLES from —
+	// the editable role definitions a workflow picks by name on the blacksmith/agent
+	// action. Empty means no store: the service falls back to the roles compiled
+	// into internal/agents, so a local smoke test needs no database.
+	DatabaseURL string
+
 	BoardID     string
 	Concurrency int
 	Poll        time.Duration

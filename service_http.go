@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,6 +41,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/gatekeeper"
 	"github.com/code-armory-app/blacksmith/internal/model"
 	"github.com/code-armory-app/blacksmith/internal/platform"
+	"github.com/code-armory-app/blacksmith/internal/roles"
 	"github.com/code-armory-app/blacksmith/internal/ticket"
 	"github.com/code-armory-app/blacksmith/internal/tools"
 	"github.com/code-armory-app/blacksmith/internal/transport"
@@ -56,6 +58,7 @@ const workspaceMount = "/workspace"
 // and not a resource name, because forge/create-volume returns none (it derives
 // the resource from the handle). The workflow wires WorkflowID as ${run_id}.
 type actionRequest struct {
+	Role       string `json:"role"`        // which stored role to run as (architect, plan-dev, …)
 	WorkflowID string `json:"workflow_id"` // the run id the shared volume belongs to
 	Volume     string `json:"volume"`      // the shared volume's logical name
 	Task       string `json:"task"`        // the request, the finding, the thing to do
@@ -118,6 +121,11 @@ type actionServer struct {
 	gk   *gatekeeper.Client
 	cfg  config.Config
 	jobs *jobStore
+
+	// roles is the store the agent action looks a role up in. Nil when no database
+	// is configured, in which case run() falls back to the roles compiled into
+	// internal/agents — so a local smoke test needs no postgres.
+	roles *roles.Store
 }
 
 // caller is who a request is for and the bearer to act as, resolved from the
@@ -200,7 +208,20 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		maker.Check = req.Check
 	}
 
-	build := func(tree map[string]string) (*agents.Agent, error) { return stage(maker, role, tree) }
+	// BUILD THE AGENT FROM THE STORED ROLE. The role is data now: a row an operator
+	// edits in the portal, picked by name on the one blacksmith/agent action. With
+	// no database configured, fall back to the roles compiled into internal/agents
+	// so the local CLI/TUI and a smoke test still work.
+	build := func(tree map[string]string) (*agents.Agent, error) {
+		if a.roles != nil {
+			row, err := a.roles.Get(ctx, role)
+			if err != nil {
+				return nil, fmt.Errorf("role %q: %w", role, err)
+			}
+			return maker.New(tree, roleToOptions(row)), nil
+		}
+		return stage(maker, role, tree)
+	}
 	out, tree, runErr := runStage(ctx, build, files, req.Task)
 	if runErr != nil {
 		fail("role " + role + ": " + firstLineOf(runErr.Error()))
@@ -379,16 +400,34 @@ func serveActions(addr string) error {
 		slog.Info("registered with gatekeeper", "url", cfg.GatekeeperURL)
 	}
 
+	// OPEN THE ROLE STORE. It migrates the table and seeds the default roles on a
+	// fresh database. Without AGENTS_DATABASE_URL there is no store and the agent
+	// action falls back to the compiled-in roles — enough for a local smoke test,
+	// but the portal's role editing and role CRUD need the database.
+	if cfg.DatabaseURL != "" {
+		store, err := roles.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			return fmt.Errorf("roles store: %w", err)
+		}
+		srv.roles = store
+		slog.Info("role store ready (postgres)")
+	} else {
+		slog.Warn("no AGENTS_DATABASE_URL: agent action uses compiled-in roles; role editing is off")
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/actions/", srv.handle)
+	mux.HandleFunc("/roles", srv.handleRoles)
+	mux.HandleFunc("/roles/", srv.handleRole)
 	slog.Info("blacksmith action service listening", "addr", addr)
 	return http.ListenAndServe(addr, mux)
 }
 
-// handle routes the async contract: POST /actions/<role> submits, GET
-// /actions/<job-id> polls. A POST is authorised — the caller must hold the
-// action's permission — before any agent runs.
+// handle routes the async contract of the ONE general agent action: POST
+// /actions/agent submits (the role is named in the body), GET /actions/<job-id>
+// polls. A POST is authorised — the caller must hold runAction — before any
+// agent runs.
 func (a *actionServer) handle(w http.ResponseWriter, r *http.Request) {
 	seg := strings.TrimPrefix(r.URL.Path, "/actions/")
 	switch r.Method {
@@ -400,6 +439,10 @@ func (a *actionServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Volume == "" || req.WorkflowID == "" {
 			http.Error(w, "workflow_id and volume are required to address the shared volume", http.StatusBadRequest)
+			return
+		}
+		if req.Role == "" {
+			http.Error(w, "role is required: name the role this agent runs as (e.g. plan-architect)", http.StatusBadRequest)
 			return
 		}
 		who := caller{bearer: strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")}
@@ -415,7 +458,7 @@ func (a *actionServer) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			who.sub = sub
 		}
-		id := a.submit(context.WithoutCancel(r.Context()), seg, req, who)
+		id := a.submit(context.WithoutCancel(r.Context()), req.Role, req, who)
 		writeJSON(w, http.StatusAccepted, map[string]string{"job_id": id})
 	case http.MethodGet:
 		res, ok := a.jobs.get(seg)
@@ -424,6 +467,109 @@ func (a *actionServer) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// rolesAuthorized gates a role-CRUD call. Conductor already enforces the
+// endpoint's permission before it proxies here, so this is defense in depth: it
+// re-checks the caller's bearer against the action on blacksmith/roles. With no
+// gatekeeper configured (a local run) it allows the call, matching how the agent
+// action behaves unauthenticated.
+func (a *actionServer) rolesAuthorized(w http.ResponseWriter, r *http.Request, action string) bool {
+	if a.gk == nil {
+		return true
+	}
+	bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	_, ok, err := a.gk.Check(r.Context(), bearer, action, "blacksmith/roles")
+	if err != nil {
+		http.Error(w, "gatekeeper unavailable", http.StatusBadGateway)
+		return false
+	}
+	if !ok {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// handleRoles serves the collection: GET /roles lists every stored role. A role
+// is created by PUT /roles/{name} (handleRole), so there is no POST here.
+func (a *actionServer) handleRoles(w http.ResponseWriter, r *http.Request) {
+	if a.roles == nil {
+		http.Error(w, "role store not configured; set AGENTS_DATABASE_URL", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.rolesAuthorized(w, r, "listRole") {
+		return
+	}
+	list, err := a.roles.List(r.Context())
+	if err != nil {
+		http.Error(w, "list roles: "+firstLineOf(err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []roles.Role{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handleRole serves one role: GET reads it, PUT creates or replaces it, DELETE
+// removes it. The name is the last path segment.
+func (a *actionServer) handleRole(w http.ResponseWriter, r *http.Request) {
+	if a.roles == nil {
+		http.Error(w, "role store not configured; set AGENTS_DATABASE_URL", http.StatusServiceUnavailable)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/roles/")
+	if name == "" || strings.Contains(name, "/") {
+		http.Error(w, "role name required", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if !a.rolesAuthorized(w, r, "getRole") {
+			return
+		}
+		role, err := a.roles.Get(r.Context(), name)
+		if errors.Is(err, roles.ErrNotFound) {
+			http.Error(w, "no such role", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "get role: "+firstLineOf(err.Error()), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, role)
+	case http.MethodPut:
+		if !a.rolesAuthorized(w, r, "updateRole") {
+			return
+		}
+		var role roles.Role
+		if err := json.NewDecoder(r.Body).Decode(&role); err != nil {
+			http.Error(w, "bad request body", http.StatusBadRequest)
+			return
+		}
+		role.Name = name // the URL is authoritative, not the body
+		if err := a.roles.Put(r.Context(), role); err != nil {
+			http.Error(w, "save role: "+firstLineOf(err.Error()), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, role)
+	case http.MethodDelete:
+		if !a.rolesAuthorized(w, r, "deleteRole") {
+			return
+		}
+		if err := a.roles.Delete(r.Context(), name); err != nil {
+			http.Error(w, "delete role: "+firstLineOf(err.Error()), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

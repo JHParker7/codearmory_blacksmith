@@ -11,18 +11,18 @@
       "with": { "run": "git clone ${inputs.repo} /work && cd /work && git checkout ${inputs.ref}",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
-    { "name": "architect", "action": "blacksmith/plan-architect",
-      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+    { "name": "architect", "action": "blacksmith/agent",
+      "with": { "role": "plan-architect", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
-    { "name": "tests", "action": "blacksmith/plan-test",
-      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+    { "name": "tests", "action": "blacksmith/agent",
+      "with": { "role": "plan-test", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "expected-red", "action": "forge/run",
       "with": { "run": "cd /work && go build ./... && go vet ./... && ! go test ./...",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
-    { "name": "dev", "action": "blacksmith/plan-dev",
-      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+    { "name": "dev", "action": "blacksmith/agent",
+      "with": { "role": "plan-dev", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "green", "action": "forge/run",
       "with": { "run": "cd /work && go build ./... && go test ./...",
@@ -35,15 +35,15 @@
       "with": { "run": "cd /work && (govulncheck ./... > scan/sca.txt 2>&1 || true)",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
-    { "name": "sec-review", "action": "blacksmith/plan-sec",
-      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+    { "name": "sec-review", "action": "blacksmith/agent",
+      "with": { "role": "plan-sec", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "lint", "action": "forge/run",
       "with": { "run": "cd /work && (staticcheck ./... > scan/lint.txt 2>&1 || true)",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
-    { "name": "quality-review", "action": "blacksmith/plan-review",
-      "with": { "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+    { "name": "quality-review", "action": "blacksmith/agent",
+      "with": { "role": "plan-review", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "version", "action": "forge/run",
       "with": { "run": "cd /work && git tag $(scripts/semver.sh) || true; git describe --tags --abbrev=0 --match 'v*'",
