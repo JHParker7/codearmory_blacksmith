@@ -293,7 +293,9 @@ func Defaults() []Role {
 				"who cannot read your test cannot build the right thing, and a developer whose tests " +
 				"pass before writing anything has been told nothing. Never implement the behaviour " +
 				"you are specifying. You are done when the tree compiles and the tests fail for the " +
-				"reason you intended.",
+				"reason you intended. IMPORTANT: the Go module lives in a directory called src — the " +
+				"architecture puts it there and the check runs `cd src`. Put go.mod and every .go file " +
+				"you write UNDER src/ (e.g. src/store_test.go, src/go.mod), never at the repository root.",
 			Guard:         onlyExt(".go"),
 			Tools:         writing(tools.RunCommand),
 			Check:         specCheck,
@@ -312,7 +314,9 @@ func Defaults() []Role {
 				"If a test cannot be satisfied by any implementation — it contradicts another, or " +
 				"asks for something the declared types cannot express — say so plainly and stop, " +
 				"naming the test. That is a real answer and hands the work back to its author; " +
-				"quietly working around it is not.",
+				"quietly working around it is not. IMPORTANT: the Go module lives in a directory called " +
+				"src — the architecture puts it there and the check runs `cd src`. Put go.mod and every " +
+				".go file you write UNDER src/ (e.g. src/store.go, src/go.mod), never at the repository root.",
 			Guard:         noTestsGo(),
 			Tools:         writing(tools.RunCommand),
 			Check:         goCheck,
