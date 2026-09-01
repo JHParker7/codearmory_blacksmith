@@ -1,6 +1,6 @@
 {
   "name": "dept-arm",
-  "description": "The old department pipeline as a CodeArmory workflow, up to the merge-to-dev: architect -> [reset-src -> {spec -> expected-red}xN -> dev -> green]xN -> sec -> integrator -> publish. Blacksmith owns the roles (data in postgres); forge owns the volume/exec; the workflow owns the flow. The module lives under src/, as the architect lays it down. The outer 'draw' loop is the whole-run reroll (matching blacksmith's runWithReroll): if green fails, it re-rolls the code — reset-src clears src for a fresh test+impl draw — up to 3 times; the architect/pm plan is kept. Nested inside each draw, the 'specloop' converges the spec against expected-red. The publish step opens a git-factory PR of the run's work against dev.",
+  "description": "The old department pipeline as a CodeArmory workflow, up to the merge-to-dev: architect -> [reset-src -> {spec -> expected-red}xN -> dev -> green]xN -> show -> publish. Blacksmith owns the roles (data in postgres); forge owns the volume/exec; the workflow owns the flow. The module lives under src/, as the architect lays it down. The outer 'draw' loop is the whole-run reroll (matching blacksmith's runWithReroll): if green fails, it re-rolls the code — reset-src clears src for a fresh test+impl draw — up to 3 times. Nested inside each draw, the 'specloop' converges the spec against expected-red. The publish step opens a git-factory PR of the run's work against dev (it never merges — a human judges the PR). Security/quality review is intentionally NOT a gating stage: the plan is for that feedback to land on the PR for a human to judge.",
   "timeout_secs": 5400,
   "inputs": [
     { "name": "task", "required": true, "description": "the work the department builds" },
@@ -34,12 +34,6 @@
                 "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOBIN=/tmp/gobin; cd /workspace/src && go install ./... && go test ./...",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
 
-    { "action": "blacksmith/agent", "name": "sec", "timeout": 1200,
-      "with": { "role": "sec", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
-
-    { "action": "blacksmith/agent", "name": "integrator", "timeout": 1800,
-      "with": { "role": "integrator", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
-
     { "action": "forge/run", "name": "show", "timeout": 180,
       "with": { "image": "golang:1.25", "runner_class": "large",
                 "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; cd /workspace && echo '=== TREE ===' && find . -type f -not -path './.git/*' | sort && echo '=== go test (src) ===' && (cd src && go test ./... 2>&1 | tail -20)",
@@ -56,8 +50,6 @@
     { "id": "draw", "limit": 3, "until": "steps.green.status == 'completed'", "var": "draw" }
   ],
   "outputs": [
-    { "name": "dev_passed", "value": "${steps.dev.output.passed}" },
-    { "name": "sec_answer", "value": "${steps.sec.output.answer}" },
-    { "name": "integrator_passed", "value": "${steps.integrator.output.passed}" }
+    { "name": "dev_passed", "value": "${steps.dev.output.passed}" }
   ]
 }
