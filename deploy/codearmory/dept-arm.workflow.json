@@ -1,6 +1,6 @@
 {
   "name": "dept-arm",
-  "description": "The old department pipeline as a CodeArmory workflow, up to the merge-to-dev: architect -> pm -> spec -> (expected-red gate) -> [dev -> green]xN loop -> sec -> integrator -> publish. Blacksmith owns the roles (data in postgres); forge owns the volume/exec; the workflow owns the flow. The module lives under src/, as the architect lays it down; the dev/green loop retries the developer until the suite is green or the limit is hit. The publish step opens a git-factory PR of the run's work against dev.",
+  "description": "The old department pipeline as a CodeArmory workflow, up to the merge-to-dev: architect -> pm -> [reset-src -> {spec -> expected-red}xN -> dev -> green]xN -> sec -> integrator -> publish. Blacksmith owns the roles (data in postgres); forge owns the volume/exec; the workflow owns the flow. The module lives under src/, as the architect lays it down. The outer 'draw' loop is the whole-run reroll (matching blacksmith's runWithReroll): if green fails, it re-rolls the code — reset-src clears src for a fresh test+impl draw — up to 3 times; the architect/pm plan is kept. Nested inside each draw, the 'specloop' converges the spec against expected-red. The publish step opens a git-factory PR of the run's work against dev.",
   "timeout_secs": 5400,
   "inputs": [
     { "name": "task", "required": true, "description": "the work the department builds" },
@@ -16,18 +16,23 @@
     { "action": "blacksmith/agent", "name": "pm", "timeout": 1200,
       "with": { "role": "pm", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
-    { "action": "blacksmith/agent", "name": "spec", "timeout": 1800,
+    { "action": "forge/run", "name": "reset-src", "timeout": 120, "loop_id": "draw",
+      "with": { "image": "alpine:3.19", "runner_class": "standard",
+                "run": "rm -rf /workspace/src 2>/dev/null; echo 'draw: src cleared for a fresh test+impl draw (architect/pm plan kept)'",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "action": "blacksmith/agent", "name": "spec", "timeout": 1800, "loop_id": "specloop",
       "with": { "role": "spec", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
-    { "action": "forge/run", "name": "expected-red", "timeout": 300,
+    { "action": "forge/run", "name": "expected-red", "timeout": 300, "loop_id": "specloop",
       "with": { "image": "golang:1.25", "runner_class": "large",
                 "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOBIN=/tmp/gobin; cd /workspace/src 2>/dev/null || { echo 'no src/ module — the spec did not lay the module down under src/'; exit 1; }; go install ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests pass before dev'; exit 1; else echo 'OK: compiles and RED'; fi",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
 
-    { "action": "blacksmith/agent", "name": "dev", "timeout": 2400, "loop_id": "devloop",
+    { "action": "blacksmith/agent", "name": "dev", "timeout": 2400, "loop_id": "draw",
       "with": { "role": "dev", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
-    { "action": "forge/run", "name": "green", "timeout": 300, "loop_id": "devloop",
+    { "action": "forge/run", "name": "green", "timeout": 300, "loop_id": "draw",
       "with": { "image": "golang:1.25", "runner_class": "large",
                 "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOBIN=/tmp/gobin; cd /workspace/src && go install ./... && go test ./...",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
@@ -50,7 +55,8 @@
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } }
   ],
   "loops": [
-    { "id": "devloop", "limit": 3, "until": "steps.green.status == 'completed'", "var": "attempt" }
+    { "id": "specloop", "parent": "draw", "limit": 3, "until": "steps['expected-red'].status == 'completed'", "var": "specattempt" },
+    { "id": "draw", "limit": 3, "until": "steps.green.status == 'completed'", "var": "draw" }
   ],
   "outputs": [
     { "name": "dev_passed", "value": "${steps.dev.output.passed}" },
