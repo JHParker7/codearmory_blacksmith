@@ -1,67 +1,70 @@
 {
   "name": "plan-arm",
-  "description": "The plan arm as a CodeArmory workflow: a shared forge volume holds the checkout, blacksmith ACTIONS run the agent roles against it, and forge/run STEPS do the deterministic work (checks, scanners, version, image build, push) between them. Blacksmith owns the roles; forge owns the volume, execution and git; this workflow owns the flow. Trigger with inputs {repo, ref, task}.",
-  "inputs": { "repo": "", "ref": "", "task": "" },
-
-  "steps": [
-    { "name": "workspace", "action": "forge/create-volume",
-      "with": { "workflow_id": "${run_id}", "name": "ws", "medium": "memory" } },
-
-    { "name": "clone", "action": "forge/run",
-      "with": { "run": "git clone ${inputs.repo} /work && cd /work && git checkout ${inputs.ref}",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
-
-    { "name": "architect", "action": "blacksmith/agent",
-      "with": { "role": "plan-architect", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
-
-    { "name": "tests", "action": "blacksmith/agent",
-      "with": { "role": "plan-test", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
-
-    { "name": "expected-red", "action": "forge/run",
-      "with": { "run": "cd /work && go build -o /tmp/gobin/ ./... && go vet ./... && ! go test ./...",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
-
-    { "name": "dev", "action": "blacksmith/agent",
-      "with": { "role": "plan-dev", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
-
-    { "name": "green", "action": "forge/run",
-      "with": { "run": "cd /work && go build -o /tmp/gobin/ ./... && go test ./...",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
-
-    { "name": "sast", "action": "forge/run",
-      "with": { "run": "cd /work && mkdir -p scan && (gosec -quiet ./... > scan/sast.txt 2>&1 || true)",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
-    { "name": "sca", "action": "forge/run",
-      "with": { "run": "cd /work && (govulncheck ./... > scan/sca.txt 2>&1 || true)",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
-
-    { "name": "sec-review", "action": "blacksmith/agent",
-      "with": { "role": "plan-sec", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
-
-    { "name": "lint", "action": "forge/run",
-      "with": { "run": "cd /work && (staticcheck ./... > scan/lint.txt 2>&1 || true)",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
-
-    { "name": "quality-review", "action": "blacksmith/agent",
-      "with": { "role": "plan-review", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
-
-    { "name": "version", "action": "forge/run",
-      "with": { "run": "cd /work && git tag $(scripts/semver.sh) || true; git describe --tags --abbrev=0 --match 'v*'",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ],
-                "output_env": [ "VERSION" ] } },
-
-    { "name": "package", "action": "forge/run",
-      "with": { "run": "cd /work && docker build -t ${CONTAINERS_URL}/${inputs.repo}:${steps.version.output.VERSION} . && docker push ${CONTAINERS_URL}/${inputs.repo}:${steps.version.output.VERSION}",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
-
-    { "name": "push", "action": "forge/run",
-      "with": { "run": "cd /work && git add -A && git -c user.name=blacksmith -c user.email=blacksmith@codearmory commit -m 'chore: run ${run_id}' && git push origin HEAD:refs/heads/${inputs.ref}",
-                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } }
+  "description": "The migrated blacksmith plan arm as a CodeArmory workflow: req -> architect -> test-writer -> (expected-red) -> dev -> (green) -> sast/sca -> sec-review -> lint -> quality-review -> publish. A forge git CLONE brings the repo's .git into the shared volume; blacksmith/agent ACTIONS write plain files on top (the service arm does not commit — service_http.go); the forge/run STEPS do the deterministic work (checks, scanners) between them. The publish step commits the run's work onto a run/${run_id} branch and opens a git-factory PR to dev for a human to judge — it never pushes to the ref directly. Trigger with inputs {task, repo}; repo is the git-factory repo NAME under ops/.",
+  "inputs": [
+    { "name": "task", "required": true, "description": "the work the arm builds" },
+    { "name": "repo", "required": true, "description": "the git-factory repo name (under ops/) to clone and open the dev PR against" }
   ],
 
-  "routes": [
-    { "from": "expected-red",   "to": "dev",  "when": "steps.expected-red.status == 'completed'" },
-    { "from": "green",          "to": "sast", "when": "steps.green.status == 'completed'" },
-    { "from": "green",          "to": "dev",  "when": "steps.green.status == 'failed'" }
+  "steps": [
+    { "name": "workspace", "action": "forge/create-volume", "timeout": 120,
+      "with": { "workflow_id": "${run_id}", "name": "ws", "medium": "memory" } },
+
+    { "name": "clone", "action": "forge/run", "timeout": 300,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "secret_refs": { "GIT_URL": "git:http://codearmory-git-factory:9002/ops/${inputs.repo}.git" },
+                "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; CODE=$(curl -s -o /tmp/r -w '%{http_code}' -X POST \"$GF/repos\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"name\\\":\\\"$REPO\\\",\\\"visibility\\\":\\\"private\\\"}\"); case \"$CODE\" in 201|409) ;; *) echo \"repo create failed $CODE\"; cat /tmp/r; exit 1;; esac; if ! git ls-remote --exit-code --heads \"$GIT_URL\" main >/dev/null 2>&1; then D=$(mktemp -d); git -C \"$D\" init -q; git -C \"$D\" -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q --allow-empty -m 'chore: init main'; git -C \"$D\" push \"$GIT_URL\" HEAD:refs/heads/main; fi; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q main; echo 'cloned:'; git log --oneline -1",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "name": "architect", "action": "blacksmith/agent", "timeout": 1200,
+      "with": { "role": "plan-architect", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "name": "tests", "action": "blacksmith/agent", "timeout": 1800,
+      "with": { "role": "plan-test", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "name": "expected-red", "action": "forge/run", "timeout": 300,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && go build -o /tmp/gobin/ ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests are green before dev'; exit 1; else echo 'OK: tests compile and are RED'; fi",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "name": "dev", "action": "blacksmith/agent", "timeout": 2400,
+      "with": { "role": "plan-dev", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "name": "green", "action": "forge/run", "timeout": 300,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && go build -o /tmp/gobin/ ./... && go test ./...",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "name": "sast", "action": "forge/run", "timeout": 600,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && mkdir -p scan && (go run github.com/securego/gosec/v2/cmd/gosec@latest -quiet ./... > scan/sast.txt 2>&1 || true) && echo sast-done",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "name": "sca", "action": "forge/run", "timeout": 600,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && mkdir -p scan && (go run golang.org/x/vuln/cmd/govulncheck@latest ./... > scan/sca.txt 2>&1 || true) && echo sca-done",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "name": "sec-review", "action": "blacksmith/agent", "timeout": 900,
+      "with": { "role": "plan-sec", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "name": "lint", "action": "forge/run", "timeout": 600,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && mkdir -p scan && (go run honnef.co/go/tools/cmd/staticcheck@latest ./... > scan/lint.txt 2>&1 || true) && echo lint-done",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "name": "quality-review", "action": "blacksmith/agent", "timeout": 900,
+      "with": { "role": "plan-review", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "name": "show", "action": "forge/run", "timeout": 180,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && echo '=== TREE ===' && find . -type f -not -path './.git/*' | sort && echo '=== go test ===' && (go test ./... 2>&1 | tail -20) && echo '=== scan ===' && (cat scan/*.txt 2>/dev/null | head -40 || true)",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "name": "publish", "action": "forge/run", "timeout": 300,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "secret_refs": { "GIT_URL": "git:http://codearmory-git-factory:9002/ops/${inputs.repo}.git" },
+                "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; BASE=$(git rev-parse HEAD); printf 'scan/\\n/tmp/\\n' > .gitignore; git add -A; if git diff --cached --quiet; then echo 'no changes from the stages — nothing to publish'; exit 0; fi; git -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q -m \"run ${run_id}: ${inputs.task}\"; if ! git ls-remote --exit-code --heads \"$GIT_URL\" dev >/dev/null 2>&1; then git push \"$GIT_URL\" \"$BASE\":refs/heads/dev; fi; BR=run/${run_id}; git push \"$GIT_URL\" HEAD:refs/heads/$BR; RID=$(curl -s \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); PR=$(curl -s -X POST \"$GF/repos/$RID/pulls\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"title\\\":\\\"run/${run_id}: ${inputs.task}\\\",\\\"source_ref\\\":\\\"$BR\\\",\\\"target_ref\\\":\\\"dev\\\"}\"); echo \"$PR\"; echo \"PR_URL=$GF/repos/$RID/pulls\"; echo PR_OPENED",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } }
   ]
 }
