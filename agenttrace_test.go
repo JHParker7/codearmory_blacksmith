@@ -11,7 +11,7 @@ import (
 // fill the log, and the trace is bounded so a 60-turn role cannot bloat the
 // poll response the engine reads every few seconds.
 
-func TestCapTraceLineCapsEachSegmentTo50(t *testing.T) {
+func TestCapTraceLineCapsEachSegmentTo200(t *testing.T) {
 	longPath := strings.Repeat("x", 200)
 	longRes := strings.Repeat("y", 200)
 	line := "spec: write_file({\"path\":\"" + longPath + "\"}) -> " + longRes
@@ -26,12 +26,12 @@ func TestCapTraceLineCapsEachSegmentTo50(t *testing.T) {
 	if !ok {
 		t.Fatalf("lost the call -> result split: %q", got)
 	}
-	// truncate(s, 50) yields at most 50 runes (49 + the ellipsis).
-	if n := len([]rune(call)); n > 50 {
-		t.Errorf("call segment not capped to 50: got %d runes (%q)", n, call)
+	// truncate(s, 200) yields at most 200 runes (199 + the ellipsis).
+	if n := len([]rune(call)); n > 200 {
+		t.Errorf("call segment not capped to 200: got %d runes (%q)", n, call)
 	}
-	if n := len([]rune(res)); n > 50 {
-		t.Errorf("result segment not capped to 50: got %d runes (%q)", n, res)
+	if n := len([]rune(res)); n > 200 {
+		t.Errorf("result segment not capped to 200: got %d runes (%q)", n, res)
 	}
 }
 
@@ -42,8 +42,8 @@ func TestCapTraceLineNoArrow(t *testing.T) {
 		t.Fatalf("lost the role prefix: %q", got)
 	}
 	body := strings.TrimPrefix(got, "architect: ")
-	if n := len([]rune(body)); n > 50 {
-		t.Errorf("body not capped to 50: got %d runes (%q)", n, body)
+	if n := len([]rune(body)); n > 200 {
+		t.Errorf("body not capped to 200: got %d runes (%q)", n, body)
 	}
 }
 

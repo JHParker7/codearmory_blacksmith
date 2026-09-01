@@ -116,9 +116,12 @@ func (t *agentTrace) withCheck(lastCheck string) string {
 // capTraceLine trims a log line's content to traceContentCap characters per segment.
 // The loop logs lines as "<role>: <body>", body often "<call> -> <result>"; capping
 // the call and the result independently keeps both the action and its outcome
-// visible (write_file(path…) -> 115 lines now) without dumping the whole payload.
+// visible without dumping the whole payload. The cap is wide enough to show a real
+// result — a multi-line output like list_files collapses to one space-separated line
+// (truncate flattens whitespace), so at 50 it read as just the first filename and
+// looked like the tree held nothing else; 200 shows the actual list.
 func capTraceLine(line string) string {
-	const traceContentCap = 50
+	const traceContentCap = 200
 	name, body, ok := strings.Cut(line, ": ")
 	if !ok {
 		return truncate(line, traceContentCap)
