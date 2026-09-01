@@ -1,0 +1,53 @@
+{
+  "name": "dept-arm",
+  "description": "The old department pipeline as a CodeArmory workflow, up to the merge-to-dev: architect -> pm -> spec -> (expected-red gate) -> [dev -> green]xN loop -> sec -> integrator. Blacksmith owns the roles (data in postgres); forge owns the volume/exec; the workflow owns the flow. The module lives under src/, as the architect lays it down; the dev/green loop retries the developer until the suite is green or the limit is hit.",
+  "timeout_secs": 5400,
+  "inputs": [
+    { "name": "task", "required": true, "description": "the work the department builds" }
+  ],
+  "steps": [
+    { "action": "forge/create-volume", "name": "workspace", "timeout": 120,
+      "with": { "workflow_id": "${run_id}", "name": "ws", "medium": "memory" } },
+
+    { "action": "blacksmith/agent", "name": "architect", "timeout": 1200,
+      "with": { "role": "architect", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "action": "blacksmith/agent", "name": "pm", "timeout": 1200,
+      "with": { "role": "pm", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "action": "blacksmith/agent", "name": "spec", "timeout": 1800,
+      "with": { "role": "spec", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "action": "forge/run", "name": "expected-red", "timeout": 300,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; cd /workspace/src 2>/dev/null || { echo 'no src/ module — the spec did not lay the module down under src/'; exit 1; }; go build -o /tmp/gobin/ ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests pass before dev'; exit 1; else echo 'OK: compiles and RED'; fi",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "action": "blacksmith/agent", "name": "dev", "timeout": 2400, "loop_id": "devloop",
+      "with": { "role": "dev", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "action": "forge/run", "name": "green", "timeout": 300, "loop_id": "devloop",
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; cd /workspace/src && go build -o /tmp/gobin/ ./... && go test ./...",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
+
+    { "action": "blacksmith/agent", "name": "sec", "timeout": 1200,
+      "with": { "role": "sec", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "action": "blacksmith/agent", "name": "integrator", "timeout": 1800,
+      "with": { "role": "integrator", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
+
+    { "action": "forge/run", "name": "show", "timeout": 180,
+      "with": { "image": "golang:1.25", "runner_class": "large",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; cd /workspace && echo '=== TREE ===' && find . -type f -not -path './.git/*' | sort && echo '=== go test (src) ===' && (cd src && go test ./... 2>&1 | tail -20)",
+                "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } }
+  ],
+  "loops": [
+    { "id": "devloop", "limit": 3, "until": "steps.green.status == 'completed'", "var": "attempt" }
+  ],
+  "outputs": [
+    { "name": "dev_passed", "value": "${steps.dev.output.passed}" },
+    { "name": "sec_answer", "value": "${steps.sec.output.answer}" },
+    { "name": "integrator_passed", "value": "${steps.integrator.output.passed}" }
+  ]
+}

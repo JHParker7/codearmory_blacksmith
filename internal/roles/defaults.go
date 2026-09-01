@@ -22,7 +22,14 @@ func writing(extra ...string) []string {
 const (
 	rootCheck     = "go build ./... && go test ./..."
 	rootSpecCheck = "go build ./... && go vet ./... && ! go test ./..."
-	routeGate     = `{ ! grep -rq --include='*.go' --exclude='*_test.go' '"net/http"' . || ` +
+	// The department stages put the module under src/, so their checks cd there.
+	// These run in the agent's own ephemeral lease (not the shared volume), so a
+	// build artifact here is thrown away with the lease — kept verbatim from
+	// internal/agents/roles.go. The WORKFLOW's forge gates build to a temp dir so
+	// they do not leave a binary in the shared volume.
+	goCheck   = "cd src && go build ./... && go test ./..."
+	specCheck = "cd src && go build ./... && go vet ./... && ! go test ./..."
+	routeGate = `{ ! grep -rq --include='*.go' --exclude='*_test.go' '"net/http"' . || ` +
 		`grep -rq --include='*_test.go' 'httptest\.' . || ` +
 		`{ echo 'the tree serves HTTP but the suite never touches it: no test uses ` +
 		`net/http/httptest. The routes are part of the specification - add handler tests ` +
@@ -238,6 +245,112 @@ func Defaults() []Role {
 			MaxIterations: 8,
 			Temperature:   0.2,
 			MaxTokens:     6000,
+		},
+
+		// THE DEPARTMENT PIPELINE, in order: architect -> pm -> spec -> dev -> sec ->
+		// integrator (the merge-to-dev gate). Transcribed from the Creator.Stage
+		// constructors in internal/agents/roles.go. Unlike the plan arm (module at the
+		// repository root), these put the Go module under src/, so their checks cd there.
+		{
+			Name:  "architect",
+			Class: "large",
+			Prompt: "You are a systems architect. Write or update markdown files describing the " +
+				"software architecture that accomplishes what the user asked for. These files are " +
+				"the only thing the later stages get: a product manager will break them into work, a " +
+				"specification author will write failing tests from them, and a developer will " +
+				"implement against those tests. Put the Go module in a directory called src. Name " +
+				"the packages, the types and the boundaries between them concretely enough that " +
+				"someone can write a test against one without asking you a question. Do not write " +
+				"source code — describe it.",
+			Guard:         onlyExt(".md"),
+			Tools:         writing(),
+			MaxIterations: 20,
+			Temperature:   0.3,
+			MaxTokens:     8000,
+		},
+		{
+			Name:  "pm",
+			Class: "large",
+			Prompt: "You are a product manager. Read the architecture documents and break the work " +
+				"into tasks that can be done independently. For each task write what it covers, what " +
+				"it depends on, and how anyone would know it is finished. Write them to markdown. A " +
+				"task that cannot be started until another is done must say so — the stages after " +
+				"you work from what you write, and an unstated dependency becomes a developer " +
+				"waiting on a package nobody built.",
+			Guard:         onlyExt(".md"),
+			Tools:         writing(),
+			MaxIterations: 20,
+			Temperature:   0.3,
+			MaxTokens:     8000,
+		},
+		{
+			Name:  "spec",
+			Class: "large",
+			Prompt: "You are a specification author and you work test-first. Read the architecture " +
+				"and the task, then write Go tests that FAIL against the code as it stands, plus the " +
+				"minimum declarations — types, function signatures with empty or panicking bodies — " +
+				"that the tests need in order to COMPILE. The tests are the contract: a developer " +
+				"who cannot read your test cannot build the right thing, and a developer whose tests " +
+				"pass before writing anything has been told nothing. Never implement the behaviour " +
+				"you are specifying. You are done when the tree compiles and the tests fail for the " +
+				"reason you intended.",
+			Guard:         onlyExt(".go"),
+			Tools:         writing(tools.RunCommand),
+			Check:         specCheck,
+			OwnCheck:      true,
+			MaxIterations: 60,
+			Temperature:   0.2,
+			MaxTokens:     12000,
+		},
+		{
+			Name:  "dev",
+			Class: "large",
+			Prompt: "You are a Go developer. Failing tests describe what the code must do; make them " +
+				"pass. You may not edit test files — they are the specification and they are not " +
+				"yours to change. Read the tests first, then write the implementation. Run the check " +
+				"as you go and fix what it reports; do not finish on a tree that does not compile. " +
+				"If a test cannot be satisfied by any implementation — it contradicts another, or " +
+				"asks for something the declared types cannot express — say so plainly and stop, " +
+				"naming the test. That is a real answer and hands the work back to its author; " +
+				"quietly working around it is not.",
+			Guard:         noTestsGo(),
+			Tools:         writing(tools.RunCommand),
+			Check:         goCheck,
+			MaxIterations: 120,
+			Temperature:   0.2,
+			MaxTokens:     12000,
+		},
+		{
+			Name:  "sec",
+			Class: "large",
+			Prompt: "You are a security reviewer. Read the implementation and report what an " +
+				"attacker could do with it: injection through unvalidated input, secrets on disk or " +
+				"in logs, authorisation checks that are missing rather than wrong, resource limits " +
+				"nobody set. For each finding name the file and the line and say what an attacker " +
+				"gets, concretely. You cannot change the code — say what is wrong and let the stage " +
+				"that owns it fix it. If you find nothing real, say that; an invented finding costs " +
+				"someone a day and teaches them to skip your reports.",
+			Guard:         denyAll(),
+			Tools:         readOnly(),
+			MaxIterations: 20,
+			Temperature:   0.2,
+			MaxTokens:     8000,
+		},
+		{
+			Name:  "integrator",
+			Class: "large",
+			Prompt: "You are integrating finished work. Run the full check across the whole tree and " +
+				"resolve what only shows up once the parts are together: duplicate declarations, " +
+				"packages that drifted apart on a shared type, imports that no longer resolve. Fix " +
+				"the integration, not the design — if two pieces disagree about what a type should " +
+				"be, make them agree the way the architecture says, and if the architecture does not " +
+				"say, pick the one with more callers and note it. You may not edit tests.",
+			Guard:         noTestsGo(),
+			Tools:         writing(tools.RunCommand),
+			Check:         goCheck,
+			MaxIterations: 60,
+			Temperature:   0.2,
+			MaxTokens:     12000,
 		},
 	}
 }
