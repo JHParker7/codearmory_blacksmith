@@ -20,7 +20,7 @@
 
     { "action": "forge/run", "name": "expected-red", "timeout": 300,
       "with": { "image": "golang:1.25", "runner_class": "large",
-                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; cd /workspace/src 2>/dev/null || { echo 'no src/ module — the spec did not lay the module down under src/'; exit 1; }; go build -o /tmp/gobin/ ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests pass before dev'; exit 1; else echo 'OK: compiles and RED'; fi",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOBIN=/tmp/gobin; cd /workspace/src 2>/dev/null || { echo 'no src/ module — the spec did not lay the module down under src/'; exit 1; }; go install ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests pass before dev'; exit 1; else echo 'OK: compiles and RED'; fi",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
 
     { "action": "blacksmith/agent", "name": "dev", "timeout": 2400, "loop_id": "devloop",
@@ -28,7 +28,7 @@
 
     { "action": "forge/run", "name": "green", "timeout": 300, "loop_id": "devloop",
       "with": { "image": "golang:1.25", "runner_class": "large",
-                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; cd /workspace/src && go build -o /tmp/gobin/ ./... && go test ./...",
+                "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOBIN=/tmp/gobin; cd /workspace/src && go install ./... && go test ./...",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ] } },
 
     { "action": "blacksmith/agent", "name": "sec", "timeout": 1200,
