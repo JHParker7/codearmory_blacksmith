@@ -63,6 +63,14 @@ type actionRequest struct {
 	Volume     string `json:"volume"`      // the shared volume's logical name
 	Task       string `json:"task"`        // the request, the finding, the thing to do
 	Check      string `json:"check"`       // optional check-command override for this role
+	// An optional PERSISTENT Go-cache volume, mounted alongside the workspace at
+	// /gocache with GOCACHE/GOMODCACHE pointed into it. The role's per-iteration
+	// `go build`/`go test` check reads a warm build+module cache instead of
+	// recompiling from cold — the same trick codearmory-ci uses to collapse the
+	// test step from minutes to seconds. The workflow creates it with a FIXED
+	// workflow_id so it outlives the run and every stage/step re-attaches it.
+	CacheWorkflowID string `json:"cache_workflow_id"`
+	CacheVolume     string `json:"cache_volume"`
 }
 
 // actionResult is one job's terminal state, shaped for the workflows async
@@ -238,6 +246,16 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 	// working directory. No CloneURL: the checkout is already in the volume, put
 	// there by the workflow's clone step; the role operates on what the steps
 	// share.
+	// Mount the run's shared volume, and — when the workflow supplies one — a
+	// PERSISTENT Go-cache volume at /gocache, so the role's checks compile against a
+	// warm cache. sandboxEnv carries GOCACHE/GOMODCACHE onto every command the agent
+	// runs (see ForgeSandbox.Env); empty when no cache is attached.
+	volumes := []forge.VolumeMount{{WorkflowID: req.WorkflowID, Name: req.Volume, MountPath: workspaceMount, Workdir: true}}
+	var sandboxEnv map[string]string
+	if req.CacheWorkflowID != "" && req.CacheVolume != "" {
+		volumes = append(volumes, forge.VolumeMount{WorkflowID: req.CacheWorkflowID, Name: req.CacheVolume, MountPath: "/gocache"})
+		sandboxEnv = map[string]string{"GOCACHE": "/gocache/build", "GOMODCACHE": "/gocache/mod"}
+	}
 	fc := forge.Local(a.cfg.ForgeURL, tokenCredential(agentBearer, a.cfg))
 	sb, err := fc.Acquire(ctx, forge.SandboxSpec{
 		Image:           a.cfg.Repo.Image,
@@ -245,7 +263,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		TimeoutSecs:     a.cfg.Repo.TimeoutSecs,
 		IdleTimeoutSecs: a.cfg.Repo.LeaseIdleSecs,
 		MaxLifetimeSecs: a.cfg.Repo.LeaseMaxSecs,
-		Volumes:         []forge.VolumeMount{{WorkflowID: req.WorkflowID, Name: req.Volume, MountPath: workspaceMount, Workdir: true}},
+		Volumes:         volumes,
 	})
 	if err != nil {
 		fail("acquire a sandbox on volume " + req.Volume + ": " + firstLineOf(err.Error()))
@@ -271,7 +289,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 	var journal []recordedWrite
 	maker := agents.Creator{
 		Gateway:    a.gw,
-		Sandbox:    tools.ForgeSandbox{Sandbox: sb},
+		Sandbox:    tools.ForgeSandbox{Sandbox: sb, Env: sandboxEnv},
 		Check:      a.cfg.Repo.TestCommand,
 		Log:        func(line string) { slog.Info(line); tr.add(line) },
 		FileTicket: a.ticketFiler(agentBearer),

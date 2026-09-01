@@ -36,6 +36,11 @@ type Sandbox interface {
 type ForgeSandbox struct {
 	Sandbox *forge.Sandbox
 	Rec     forge.Recorder
+	// Env is exported ahead of every command — used to point GOCACHE/GOMODCACHE at a
+	// mounted persistent cache volume so a role's per-iteration `go` check reads a warm
+	// build+module cache. The cache lives OUTSIDE the reset working tree (/tmp/ws), so
+	// it survives the reset --hard/clean the sandbox does between executions.
+	Env map[string]string
 }
 
 // Run writes the whole tree into the sandbox and then runs the command, IN ONE
@@ -62,7 +67,24 @@ func (f ForgeSandbox) Run(ctx context.Context, files map[string]string, command 
 	// green on a program that does not build. The check's directory must contain
 	// exactly what the agent sees — an overlay is a different tree wearing the
 	// same name.
-	script := "rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws\n" +
+	// Export any env (GOCACHE/GOMODCACHE → the mounted cache) and ensure its dirs exist,
+	// BEFORE the working tree is laid down — the cache is outside /tmp/ws so it persists
+	// across executions and stages.
+	var prefix string
+	if len(f.Env) > 0 {
+		keys := make([]string, 0, len(f.Env))
+		for k := range f.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			prefix += "export " + k + "=" + forge.Quote(f.Env[k]) + "\n"
+			if k == "GOCACHE" || k == "GOMODCACHE" {
+				prefix += "mkdir -p " + forge.Quote(f.Env[k]) + "\n"
+			}
+		}
+	}
+	script := prefix + "rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws\n" +
 		WriteTreeScript(files) + "\n" + command + "\n"
 	if len(script) > PackThreshold {
 		script = packed(script)

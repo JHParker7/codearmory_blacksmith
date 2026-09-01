@@ -67,7 +67,14 @@ func Defaults() []Role {
 				"actually match a request. A case you do not name is a case nobody tests.\n\n" +
 				"Do not write source code — describe it. Draft the whole plan in your head, write " +
 				"it ONCE, and stop: the plan is read once by one developer, and its value is in " +
-				"existing, not in being polished. When it is written, say so and finish.",
+				"existing, not in being polished. When it is written, say so and finish.\n\n" +
+				"IF THE REPOSITORY ALREADY HAS CODE (a PLAN.md and packages exist), you are planning " +
+				"a CHANGE, not a greenfield build — a new feature, or the fixes your task names. Read " +
+				"what is there first, then rewrite PLAN.md to plan the DELTA: the packages, types and " +
+				"functions to ADD or CHANGE and the test cases that pin the change. Do not restate what " +
+				"already works, and do not plan to rebuild it. If the task is a list of review findings, " +
+				"each names a file and the change to make — plan a test case that would have caught it " +
+				"and the code change that resolves it.",
 			Guard:         onlyExt(".md"),
 			Tools:         writing(),
 			MaxIterations: 8,
@@ -87,6 +94,12 @@ func Defaults() []Role {
 				"assertions rather than fail to build; do not implement any real behaviour, because " +
 				"a test that passes before the developer starts has been told nothing. Put go.mod " +
 				"and the packages at the repository ROOT.\n\n" +
+				"IF THE REPOSITORY ALREADY HAS CODE, most declarations already exist — do NOT " +
+				"redeclare a type or function that is already there (that is a compile error). Read " +
+				"the existing packages, ADD or UPDATE the test cases the plan/task names against the " +
+				"symbols as they are, and write a placeholder ONLY for a genuinely new declaration the " +
+				"change introduces. Keep the tests that already pass. Your new/changed cases must FAIL " +
+				"now — that is the point: they pin behaviour the code does not yet have.\n\n" +
 				"You are done when the tree compiles and the tests FAIL — that is what your check " +
 				"verifies, and it is the only green this stage has. If the plan serves HTTP, the " +
 				"check also refuses a suite that never exercises the routes: write handler tests " +
@@ -105,9 +118,12 @@ func Defaults() []Role {
 			Name:  "plan-dev",
 			Class: "large",
 			Prompt: "You are a Go developer. This repository holds a plan (the markdown files, " +
-				"written by an architect) and FAILING TESTS with placeholder stubs (written by a " +
-				"test author from that plan). READ THEM FIRST. Your job is to replace the " +
-				"placeholder bodies with real implementations until the tests pass.\n\n" +
+				"written by an architect) and FAILING TESTS (written by a test author from that " +
+				"plan) — placeholder stubs on a fresh build, or new/changed cases against EXISTING " +
+				"code when the task is a feature or a fix. READ THEM FIRST. Your job is to make the " +
+				"failing tests pass: fill in placeholder bodies, and UPDATE the existing code in " +
+				"place where a test now demands different behaviour. Leave code the tests already " +
+				"cover working — change only what the failing tests require.\n\n" +
 				"The tests are the specification and they are NOT YOURS TO CHANGE — they were " +
 				"written to be passable, and the check runs them for you after every edit. You may " +
 				"rewrite an implementation file whole when that is simpler than editing it: if you " +

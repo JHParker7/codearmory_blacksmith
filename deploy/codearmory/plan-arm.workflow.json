@@ -1,16 +1,26 @@
 {
   "name": "plan-arm",
-  "description": "The migrated blacksmith plan arm as a CodeArmory workflow: req -> architect -> test-writer -> (expected-red) -> dev -> (green) -> sast/sca -> sec-review -> lint -> quality-review -> publish. A forge git CLONE brings the repo's .git into the shared volume; each blacksmith/agent ACTION commits its own work as one conventional commit per landed write (commitJournal); the forge/run STEPS do the deterministic work (checks, scanners) between them. The publish step names a run/<type>/<task-slug> branch from the highest-impact commit type (chore < fix < feat), pushes the stages' commits, and opens a git-factory PR to dev for a human to judge -- it never pushes to the ref directly or merges. Trigger with inputs {task, repo}; repo is the git-factory repo NAME under ops/.",
+  "description": "The plan pipeline: architect -> test-writer -> (expected-red) -> dev -> (green) -> publish. Works GREENFIELD or on an EXISTING branch. A forge git CLONE brings the repo's .git into the shared volume; each blacksmith/agent commits its own work as one conventional commit per landed write; the forge/run steps run the checks. With `ref` set the pipeline extends/fixes that existing branch (an open PR): the architect updates PLAN.md, the test author adds/updates the RED tests, the dev makes them pass, and publish pushes the new commits back onto `ref` so the PR updates in place. With `ref` empty it builds greenfield and publish opens a git-factory PR to dev named by the highest-impact commit type. Scanning and security/quality review are the pr-review workflow's job (it runs on the PR). Inputs {task, namespace, repo, ref?}.",
   "inputs": [
     {
       "name": "task",
       "required": true,
-      "description": "the work the arm builds"
+      "description": "the work to build, or the issues to fix"
+    },
+    {
+      "name": "namespace",
+      "required": true,
+      "description": "the repo's git-factory namespace (owner)"
     },
     {
       "name": "repo",
       "required": true,
-      "description": "the git-factory repo name (under ops/) to clone and open the dev PR against"
+      "description": "the git-factory repo name"
+    },
+    {
+      "name": "ref",
+      "required": false,
+      "description": "an existing branch to extend/fix and push back to (a PR branch); empty = greenfield + open a new dev PR"
     }
   ],
   "steps": [
@@ -25,16 +35,24 @@
       }
     },
     {
+      "name": "gocache",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "codearmory-plan-gocache",
+        "name": "gocache",
+        "size_mb": 8192,
+        "medium": "disk"
+      }
+    },
+    {
       "name": "clone",
       "action": "forge/run",
       "timeout": 300,
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "secret_refs": {
-          "GIT_URL": "git:http://codearmory-git-factory:9002/ops/${inputs.repo}.git"
-        },
-        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; CODE=$(curl -s -o /tmp/r -w '%{http_code}' -X POST \"$GF/repos\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"name\\\":\\\"$REPO\\\",\\\"visibility\\\":\\\"private\\\"}\"); case \"$CODE\" in 201|409) ;; *) echo \"repo create failed $CODE\"; cat /tmp/r; exit 1;; esac; if ! git ls-remote --exit-code --heads \"$GIT_URL\" main >/dev/null 2>&1; then D=$(mktemp -d); git -C \"$D\" init -q; git -C \"$D\" -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q --allow-empty -m 'chore: init main'; git -C \"$D\" push \"$GIT_URL\" HEAD:refs/heads/main; fi; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q main; echo 'cloned:'; git log --oneline -1",
+        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; REF='${inputs.ref}'; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; if [ -n \"$REF\" ]; then git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"$REF\"; echo \"working on existing branch $REF:\"; git log --oneline -1; else CODE=$(curl -s -o /tmp/r -w '%{http_code}' -X POST \"$GF/repos\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"name\\\":\\\"$REPO\\\",\\\"visibility\\\":\\\"private\\\"}\"); case \"$CODE\" in 201|409) ;; *) echo \"repo create failed $CODE\"; cat /tmp/r; exit 1;; esac; if ! git ls-remote --exit-code --heads \"$GIT_URL\" main >/dev/null 2>&1; then D=$(mktemp -d); git -C \"$D\" init -q; git -C \"$D\" -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q --allow-empty -m 'chore: init main'; git -C \"$D\" push \"$GIT_URL\" HEAD:refs/heads/main; fi; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q main; echo 'cloned:'; git log --oneline -1; fi",
         "volumes": [
           {
             "workflow_id": "${run_id}",
@@ -42,7 +60,10 @@
             "mount_path": "/workspace",
             "workdir": true
           }
-        ]
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
       }
     },
     {
@@ -53,7 +74,9 @@
         "role": "plan-architect",
         "workflow_id": "${run_id}",
         "volume": "ws",
-        "task": "${inputs.task}"
+        "task": "${inputs.task}",
+        "cache_workflow_id": "codearmory-plan-gocache",
+        "cache_volume": "gocache"
       }
     },
     {
@@ -64,7 +87,9 @@
         "role": "plan-test",
         "workflow_id": "${run_id}",
         "volume": "ws",
-        "task": "${inputs.task}"
+        "task": "${inputs.task}",
+        "cache_workflow_id": "codearmory-plan-gocache",
+        "cache_volume": "gocache"
       }
     },
     {
@@ -74,13 +99,18 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && go build -o /tmp/gobin/ ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests are green before dev'; exit 1; else echo 'OK: tests compile and are RED'; fi",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod && cd /workspace && go build -o /tmp/gobin/ ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests are green before dev'; exit 1; else echo 'OK: tests compile and are RED'; fi",
         "volumes": [
           {
             "workflow_id": "${run_id}",
             "name": "ws",
             "mount_path": "/workspace",
             "workdir": true
+          },
+          {
+            "workflow_id": "codearmory-plan-gocache",
+            "name": "gocache",
+            "mount_path": "/gocache"
           }
         ]
       }
@@ -93,7 +123,9 @@
         "role": "plan-dev",
         "workflow_id": "${run_id}",
         "volume": "ws",
-        "task": "${inputs.task}"
+        "task": "${inputs.task}",
+        "cache_workflow_id": "codearmory-plan-gocache",
+        "cache_volume": "gocache"
       }
     },
     {
@@ -103,91 +135,20 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && go build -o /tmp/gobin/ ./... && go test ./...",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod && cd /workspace && go build -o /tmp/gobin/ ./... && go test ./...",
         "volumes": [
           {
             "workflow_id": "${run_id}",
             "name": "ws",
             "mount_path": "/workspace",
             "workdir": true
-          }
-        ]
-      }
-    },
-    {
-      "name": "sast",
-      "action": "forge/run",
-      "timeout": 600,
-      "with": {
-        "image": "golang:1.25",
-        "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && mkdir -p scan && (go run github.com/securego/gosec/v2/cmd/gosec@latest -quiet ./... > scan/sast.txt 2>&1 || true) && echo sast-done",
-        "volumes": [
+          },
           {
-            "workflow_id": "${run_id}",
-            "name": "ws",
-            "mount_path": "/workspace",
-            "workdir": true
+            "workflow_id": "codearmory-plan-gocache",
+            "name": "gocache",
+            "mount_path": "/gocache"
           }
         ]
-      }
-    },
-    {
-      "name": "sca",
-      "action": "forge/run",
-      "timeout": 600,
-      "with": {
-        "image": "golang:1.25",
-        "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && mkdir -p scan && (go run golang.org/x/vuln/cmd/govulncheck@latest ./... > scan/sca.txt 2>&1 || true) && echo sca-done",
-        "volumes": [
-          {
-            "workflow_id": "${run_id}",
-            "name": "ws",
-            "mount_path": "/workspace",
-            "workdir": true
-          }
-        ]
-      }
-    },
-    {
-      "name": "sec-review",
-      "action": "blacksmith/agent",
-      "timeout": 900,
-      "with": {
-        "role": "plan-sec",
-        "workflow_id": "${run_id}",
-        "volume": "ws",
-        "task": "${inputs.task}"
-      }
-    },
-    {
-      "name": "lint",
-      "action": "forge/run",
-      "timeout": 600,
-      "with": {
-        "image": "golang:1.25",
-        "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && mkdir -p scan && (go run honnef.co/go/tools/cmd/staticcheck@latest ./... > scan/lint.txt 2>&1 || true) && echo lint-done",
-        "volumes": [
-          {
-            "workflow_id": "${run_id}",
-            "name": "ws",
-            "mount_path": "/workspace",
-            "workdir": true
-          }
-        ]
-      }
-    },
-    {
-      "name": "quality-review",
-      "action": "blacksmith/agent",
-      "timeout": 900,
-      "with": {
-        "role": "plan-review",
-        "workflow_id": "${run_id}",
-        "volume": "ws",
-        "task": "${inputs.task}"
       }
     },
     {
@@ -197,13 +158,18 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false && cd /workspace && echo '=== TREE ===' && find . -type f -not -path './.git/*' | sort && echo '=== go test ===' && (go test ./... 2>&1 | tail -20) && echo '=== scan ===' && (cat scan/*.txt 2>/dev/null | head -40 || true)",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod && cd /workspace && echo '=== TREE ===' && find . -type f -not -path './.git/*' | sort && echo '=== go test ===' && (go test ./... 2>&1 | tail -20)",
         "volumes": [
           {
             "workflow_id": "${run_id}",
             "name": "ws",
             "mount_path": "/workspace",
             "workdir": true
+          },
+          {
+            "workflow_id": "codearmory-plan-gocache",
+            "name": "gocache",
+            "mount_path": "/gocache"
           }
         ]
       }
@@ -215,10 +181,7 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "secret_refs": {
-          "GIT_URL": "git:http://codearmory-git-factory:9002/ops/${inputs.repo}.git"
-        },
-        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; BASE=$(git rev-parse origin/main); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no commits from the stages -- nothing to publish'; exit 0; fi; TYPES=$(git log \"$BASE\"..HEAD --format=%s | sed -E 's/^([a-z]+)(\\(.*\\))?!?:.*/\\1/' | sort -u); TYPE=chore; for t in feat fix perf refactor docs test build ci chore style revert; do if printf '%s\\n' \"$TYPES\" | grep -qx \"$t\"; then TYPE=$t; break; fi; done; SLUG=$(printf '%s' \"${inputs.task}\" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//'); [ -z \"$SLUG\" ] && SLUG=change; BR=$TYPE/${SLUG}; if ! git ls-remote --exit-code --heads \"$GIT_URL\" dev >/dev/null 2>&1; then git push \"$GIT_URL\" \"$BASE\":refs/heads/dev; fi; git push \"$GIT_URL\" HEAD:refs/heads/$BR; RID=$(curl -s \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); PR=$(curl -s -X POST \"$GF/repos/$RID/pulls\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"title\\\":\\\"$TYPE: ${inputs.task}\\\",\\\"source_ref\\\":\\\"$BR\\\",\\\"target_ref\\\":\\\"dev\\\"}\"); echo \"$PR\"; echo \"PR_URL=$GF/repos/$RID/pulls\"; echo PR_OPENED",
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; REF='${inputs.ref}'; if [ -n \"$REF\" ]; then BASE=$(git rev-parse \"origin/$REF\"); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no new commits -- nothing to push'; exit 0; fi; git push \"$GIT_URL\" HEAD:refs/heads/$REF; echo \"pushed the change to $REF\"; exit 0; fi; BASE=$(git rev-parse origin/main); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no commits from the stages -- nothing to publish'; exit 0; fi; TYPES=$(git log \"$BASE\"..HEAD --format=%s | sed -E 's/^([a-z]+)(\\(.*\\))?!?:.*/\\1/' | sort -u); TYPE=chore; for t in feat fix perf refactor docs test build ci chore style revert; do if printf '%s\\n' \"$TYPES\" | grep -qx \"$t\"; then TYPE=$t; break; fi; done; SLUG=$(printf '%s' \"${inputs.task}\" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//'); [ -z \"$SLUG\" ] && SLUG=change; BR=$TYPE/${SLUG}; if ! git ls-remote --exit-code --heads \"$GIT_URL\" dev >/dev/null 2>&1; then git push \"$GIT_URL\" \"$BASE\":refs/heads/dev; fi; git push \"$GIT_URL\" HEAD:refs/heads/$BR; RID=$(curl -s \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); PR=$(curl -s -X POST \"$GF/repos/$RID/pulls\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"title\\\":\\\"$TYPE: ${inputs.task}\\\",\\\"source_ref\\\":\\\"$BR\\\",\\\"target_ref\\\":\\\"dev\\\"}\"); echo \"$PR\"; echo PR_OPENED",
         "volumes": [
           {
             "workflow_id": "${run_id}",
@@ -226,7 +189,10 @@
             "mount_path": "/workspace",
             "workdir": true
           }
-        ]
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
       }
     }
   ]

@@ -40,6 +40,17 @@
       }
     },
     {
+      "name": "gocache",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "codearmory-plan-gocache",
+        "name": "gocache",
+        "size_mb": 8192,
+        "medium": "disk"
+      }
+    },
+    {
       "name": "clone",
       "action": "forge/run",
       "timeout": 300,
@@ -67,13 +78,18 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false; cd /workspace && mkdir -p scan; (go run honnef.co/go/tools/cmd/staticcheck@latest ./... > scan/lint.txt 2>&1 || true); (go run github.com/securego/gosec/v2/cmd/gosec@latest -quiet -fmt=json -out=scan/sast.json ./... 2>/dev/null || true); (go run golang.org/x/vuln/cmd/govulncheck@latest ./... > scan/sca.txt 2>&1 || true); echo scan-done; ls -la scan",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; cd /workspace && mkdir -p scan; (go run honnef.co/go/tools/cmd/staticcheck@latest ./... > scan/lint.txt 2>&1 || true); (go run github.com/securego/gosec/v2/cmd/gosec@latest -quiet -fmt=json -out=scan/sast.json ./... 2>/dev/null || true); (go run golang.org/x/vuln/cmd/govulncheck@latest ./... > scan/sca.txt 2>&1 || true); echo scan-done; ls -la scan",
         "volumes": [
           {
             "workflow_id": "${run_id}",
             "name": "ws",
             "mount_path": "/workspace",
             "workdir": true
+          },
+          {
+            "workflow_id": "codearmory-plan-gocache",
+            "name": "gocache",
+            "mount_path": "/gocache"
           }
         ]
       }
@@ -120,6 +136,77 @@
           }
         ]
       }
+    },
+    {
+      "name": "gate",
+      "action": "forge/run",
+      "timeout": 120,
+      "with": {
+        "image": "alpine:3.19",
+        "runner_class": "standard",
+        "run": "cd /workspace; issues=$(cat review-security.md review-quality.md 2>/dev/null); if printf '%s' \"$issues\" | grep -qiE '\\|[[:space:]]*(critical|high|medium)[[:space:]]*\\|'; then fix=true; else fix=false; fi; echo \"medium-or-above findings present: $fix\"",
+        "output_env": [
+          "fix",
+          "issues"
+        ],
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "fix",
+      "action": "workflows/trigger",
+      "timeout": 3600,
+      "with": {
+        "pipeline": "b98d5c41-1e98-4253-b295-30bf5338fc62",
+        "inputs": {
+          "task": "Fix these review findings on this pull request. The tables below name the file, the line, the severity and the change to make -- address the medium, high and critical ones; leave the low ones. Update the plan, add or update the tests that pin each fix, and make them pass:\\n\\n${steps.gate.output.issues}",
+          "namespace": "${inputs.namespace}",
+          "repo": "${inputs.repo}",
+          "ref": "${inputs.ref}"
+        }
+      }
+    }
+  ],
+  "routes": [
+    {
+      "from": "workspace",
+      "to": "clone"
+    },
+    {
+      "from": "gocache",
+      "to": "clone"
+    },
+    {
+      "from": "clone",
+      "to": "scan"
+    },
+    {
+      "from": "scan",
+      "to": "code-review"
+    },
+    {
+      "from": "code-review",
+      "to": "security-review"
+    },
+    {
+      "from": "security-review",
+      "to": "report"
+    },
+    {
+      "from": "report",
+      "to": "gate"
+    },
+    {
+      "from": "gate",
+      "to": "fix",
+      "when": "steps.gate.json.fix == 'true'"
     }
   ]
 }
