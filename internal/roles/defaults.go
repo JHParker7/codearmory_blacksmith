@@ -320,6 +320,12 @@ func Defaults() []Role {
 			Guard:         noTestsGo(),
 			Tools:         writing(tools.RunCommand),
 			Check:         goCheck,
+			// OwnCheck: this role's module is under src/, so its check runs `cd src`.
+			// Without OwnCheck the operator's AGENTS_REPO_TEST_COMMAND (a root-level
+			// `go build ./...`, for the CLI's root-module demo repo) overrides it — and
+			// from the repo root there is no module, so every check reports "no
+			// packages" and the developer flails until it burns its whole turn budget.
+			OwnCheck:      true,
 			MaxIterations: 120,
 			Temperature:   0.2,
 			MaxTokens:     12000,
@@ -352,6 +358,9 @@ func Defaults() []Role {
 			Guard:         noTestsGo(),
 			Tools:         writing(tools.RunCommand),
 			Check:         goCheck,
+			// OwnCheck for the same reason as dev: the module is under src/, so the
+			// operator's root-level test-command override must not clobber `cd src`.
+			OwnCheck:      true,
 			MaxIterations: 60,
 			Temperature:   0.2,
 			MaxTokens:     12000,
