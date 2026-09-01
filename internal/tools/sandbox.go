@@ -67,6 +67,20 @@ func (f ForgeSandbox) Run(ctx context.Context, files map[string]string, command 
 	if len(script) > PackThreshold {
 		script = packed(script)
 	}
+	// ACTIONABLE REFUSAL BEFORE FORGE'S OPAQUE ONE. Even compressed, a big enough
+	// tree overflows forge's execution-body cap (~64KB), and forge answers with a
+	// bare "400 invalid request body" that names neither the size nor the cause —
+	// the most expensive failure class here. Measured on the plan arm: a workflow
+	// step ran `go build ./...` in the shared volume, which writes the compiled
+	// binary INTO the tree; the 1.6MB binary was seeded into the next stage and its
+	// first check 400'd. So refuse first, naming the largest files, because a build
+	// artifact in a source tree is the usual cause and the fix is to keep it out
+	// (build to a temp dir).
+	if len(script) > MaxScriptBytes {
+		return Output{}, fmt.Errorf(
+			"the working tree is too large to run a command over: the materialized script is %d bytes and forge caps an execution body near 64KB. This is almost always a build artifact left in the tree, not source — the largest files are %s. Keep binaries and caches out of the workspace: build to a throwaway dir (e.g. go build -o /tmp/bin/ ./...) so the check reads a source-only tree",
+			len(script), largestFiles(files))
+	}
 	res, err := f.Sandbox.Run(ctx, f.Rec, script)
 	if err != nil {
 		return Output{}, err
@@ -81,6 +95,38 @@ func (f ForgeSandbox) Run(ctx context.Context, files map[string]string, command 
 // threshold that breaks when the deployment changes. Below it, plain scripts
 // keep the transcript readable.
 const PackThreshold = 24 * 1024
+
+// MaxScriptBytes is the largest materialized script (after packing) blacksmith
+// will submit. Comfortably under forge's ~64KB execution-body cap, with room for
+// the JSON envelope around the command. Past it, Run refuses with a message that
+// names the cause rather than letting forge answer "400 invalid request body".
+const MaxScriptBytes = 56 * 1024
+
+// largestFiles names the biggest files in a tree, for the too-large refusal. The
+// culprit is nearly always one oversized artifact, so the top few point straight
+// at it.
+func largestFiles(files map[string]string) string {
+	type fs struct {
+		path string
+		size int
+	}
+	all := make([]fs, 0, len(files))
+	for p, c := range files {
+		all = append(all, fs{p, len(c)})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].size > all[j].size })
+	var b strings.Builder
+	for i, f := range all {
+		if i >= 5 {
+			break
+		}
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%s (%dKB)", f.path, f.size/1024)
+	}
+	return b.String()
+}
 
 // packed wraps a script so it ships as one base64 line and unpacks in the box.
 //

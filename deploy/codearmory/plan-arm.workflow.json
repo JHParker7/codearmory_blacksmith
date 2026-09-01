@@ -18,14 +18,14 @@
       "with": { "role": "plan-test", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "expected-red", "action": "forge/run",
-      "with": { "run": "cd /work && go build ./... && go vet ./... && ! go test ./...",
+      "with": { "run": "cd /work && go build -o /tmp/gobin/ ./... && go vet ./... && ! go test ./...",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
     { "name": "dev", "action": "blacksmith/agent",
       "with": { "role": "plan-dev", "workflow_id": "${run_id}", "volume": "ws", "task": "${inputs.task}" } },
 
     { "name": "green", "action": "forge/run",
-      "with": { "run": "cd /work && go build ./... && go test ./...",
+      "with": { "run": "cd /work && go build -o /tmp/gobin/ ./... && go test ./...",
                 "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/work", "workdir": true } ] } },
 
     { "name": "sast", "action": "forge/run",
