@@ -75,6 +75,60 @@ type actionResult struct {
 	Error   string            `json:"error"`
 }
 
+// agentTrace collects the agent's outputs and tool calls as compact lines for the
+// workflow run view. The manifest names `stdout` as the action's output_field, so
+// whatever lands in actionResult.Stdout is what the run view shows as the step's
+// logs — an agent step used to show only its last check, which read as "nothing
+// happened" through the minutes a 60-turn role actually spends working. Each line's
+// content is capped (per segment) so a whole file write does not fill the log, and
+// the trace keeps only the last traceMaxLines so a long run cannot bloat the poll
+// response the workflow engine reads every 5s.
+type agentTrace struct {
+	lines []string
+}
+
+const traceMaxLines = 250
+
+// add caps a raw log line and appends it, dropping the oldest once over the bound.
+// The agent loop is the only caller and it is single-goroutine, so no lock.
+func (t *agentTrace) add(line string) {
+	t.lines = append(t.lines, capTraceLine(line))
+	if len(t.lines) > traceMaxLines {
+		t.lines = t.lines[len(t.lines)-traceMaxLines:]
+	}
+}
+
+func (t *agentTrace) String() string { return strings.Join(t.lines, "\n") }
+
+// withCheck renders the trace with the role's last check appended as a footer, the
+// combination that answers "what did it do, and where did it end up".
+func (t *agentTrace) withCheck(lastCheck string) string {
+	s := t.String()
+	if lc := strings.TrimSpace(lastCheck); lc != "" {
+		if s != "" {
+			s += "\n\n"
+		}
+		s += "── check ──\n" + truncate(lc, 2000)
+	}
+	return s
+}
+
+// capTraceLine trims a log line's content to traceContentCap characters per segment.
+// The loop logs lines as "<role>: <body>", body often "<call> -> <result>"; capping
+// the call and the result independently keeps both the action and its outcome
+// visible (write_file(path…) -> 115 lines now) without dumping the whole payload.
+func capTraceLine(line string) string {
+	const traceContentCap = 50
+	name, body, ok := strings.Cut(line, ": ")
+	if !ok {
+		return truncate(line, traceContentCap)
+	}
+	if call, res, ok := strings.Cut(body, " -> "); ok {
+		return name + ": " + truncate(call, traceContentCap) + " -> " + truncate(res, traceContentCap)
+	}
+	return name + ": " + truncate(body, traceContentCap)
+}
+
 // jobStore holds running and finished actions in process. A restart forgets
 // them, which is correct for a stateless harness: a lost job is re-triggered by
 // the workflow and the work is idempotent.
@@ -142,8 +196,17 @@ func (a *actionServer) submit(ctx context.Context, role string, req actionReques
 }
 
 func (a *actionServer) run(ctx context.Context, id, role string, req actionRequest, who caller) {
+	tr := &agentTrace{}
 	fail := func(msg string) {
-		a.jobs.finish(id, func(r *actionResult) { r.Status = "failed"; r.Error = msg })
+		a.jobs.finish(id, func(r *actionResult) {
+			r.Status = "failed"
+			r.Error = msg
+			// Show how far the agent got before it failed — the trace is the only
+			// window into a role that ran for minutes and then broke.
+			if s := tr.String(); s != "" {
+				r.Stdout = s
+			}
+		})
 		slog.Warn("action failed", "role", role, "job", id, "error", msg)
 	}
 
@@ -200,7 +263,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		Gateway:    a.gw,
 		Sandbox:    tools.ForgeSandbox{Sandbox: sb},
 		Check:      a.cfg.Repo.TestCommand,
-		Log:        func(line string) { slog.Info(line) },
+		Log:        func(line string) { slog.Info(line); tr.add(line) },
 		FileTicket: a.ticketFiler(agentBearer),
 		MergeFix:   func(string) (string, error) { approved = true; return "approved", nil },
 	}
@@ -238,7 +301,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 
 	a.jobs.finish(id, func(r *actionResult) {
 		r.Status = "completed"
-		r.Stdout = truncate(out.LastCheck, 4000)
+		r.Stdout = tr.withCheck(out.LastCheck)
 		r.Outputs = map[string]string{
 			"passed":   strconv.FormatBool(out.Passed),
 			"approved": strconv.FormatBool(approved),
