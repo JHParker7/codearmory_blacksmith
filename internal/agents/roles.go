@@ -291,13 +291,6 @@ func (c Creator) PlanFollowingDev(files map[string]string) *Agent {
 		MaxIterations:  150,
 		Temperature:    0.2,
 		MaxTokens:      12000,
-		// SEED THE WHOLE TREE. Measured on turncount-run1: without this the dev
-		// spent 13 of 20 turns on read_files discovering a 10-file suite and
-		// timed out one turn short of green. It reads every file regardless;
-		// handing it the tree up front removes ~13 model round-trips and keeps
-		// the honest-slow dev inside its 8-minute budget. The fix role (also a
-		// developer) already seeds for the same reason.
-		SeedKnown: true,
 	})
 }
 
