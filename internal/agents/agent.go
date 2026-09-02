@@ -451,7 +451,12 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			if err != nil {
 				return out, fmt.Errorf("%s: auto-check: %w", a.opts.Name, err)
 			}
-			a.logf("%s: auto-check -> %s", a.opts.Name, firstLine(result))
+			// WHOLE check output, not firstLine: the result is "$ <cmd>\nexit N\n<output>",
+			// and firstLine showed only the trimmed tail of the echoed command — never the
+			// test failures or the RED/green verdict, which are the lines an operator opens
+			// the run to read. trim keeps the TAIL (where the verdict and first error land)
+			// and bounds it to 6000, the same slice the model itself is fed at line 592.
+			a.logf("%s: auto-check -> %s", a.opts.Name, trim(result, 6000))
 			out.Trail = append(out.Trail, Step{Tool: tools.RunCommand, Args: "(auto)", Result: result})
 			out.LastCheck = result
 			if checkPassed(result) {
