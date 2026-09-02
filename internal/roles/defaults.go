@@ -46,6 +46,11 @@ func noTestsGo() *GuardConfig {
 }
 
 // Defaults returns a fresh copy of the seed roles.
+// boolPtr addresses a bool literal, for the nullable *bool fields (Thinking) a
+// default row sets explicitly. nil means "use the default"; a non-nil false is
+// an explicit opt-out.
+func boolPtr(b bool) *bool { return &b }
+
 func Defaults() []Role {
 	return []Role{
 		{
@@ -80,6 +85,14 @@ func Defaults() []Role {
 			MaxIterations: 8,
 			Temperature:   0.3,
 			MaxTokens:     12000,
+			// THINKING OFF for the architect specifically: it writes one large
+			// PLAN.md of prose, and with reasoning on the scratchpad ate its 12k
+			// token budget and TRUNCATED the write ("the previous attempt was cut
+			// off" — its own words), looping on the incomplete file. Prose planning
+			// has no compile errors to reason away, so the budget is better spent on
+			// the plan itself. The coding roles (plan-test, plan-dev) keep thinking
+			// on, where reasoning stops the compile-error loop.
+			Thinking: boolPtr(false),
 		},
 		{
 			Name:  "plan-test",
