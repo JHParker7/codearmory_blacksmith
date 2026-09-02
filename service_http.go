@@ -291,7 +291,17 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		Gateway:    a.gw,
 		Sandbox:    tools.ForgeSandbox{Sandbox: sb, Env: sandboxEnv},
 		Check:      a.cfg.Repo.TestCommand,
-		Log:        func(line string) { slog.Info(line); tr.add(line) },
+		// STREAM THE TRACE LIVE. Appending to tr is not enough — the running job's
+		// Stdout is what a poll returns, and it was only written on finish, so the run
+		// view showed "running" with no output for the whole stage. Push the trace into
+		// the running job on every line (jobStore.finish just applies a mutation under
+		// lock; Status stays "running") so the workflow run view streams the agent's
+		// reasoning and tool calls as they happen, not only after the role finishes.
+		Log: func(line string) {
+			slog.Info(line)
+			tr.add(line)
+			a.jobs.finish(id, func(r *actionResult) { r.Stdout = tr.String() })
+		},
 		FileTicket: a.ticketFiler(agentBearer),
 		MergeFix:   func(string) (string, error) { approved = true; return "approved", nil },
 		OnWrite: func(path, content string, deleted bool, message string) {
