@@ -41,6 +41,18 @@ type ForgeSandbox struct {
 	// build+module cache. The cache lives OUTSIDE the reset working tree (/tmp/ws), so
 	// it survives the reset --hard/clean the sandbox does between executions.
 	Env map[string]string
+
+	// RepoDir, when set, is the path in the lease to a git-backed checkout (the mounted
+	// workflow volume, put there by the clone step). When present, Run builds the check's
+	// /tmp/ws as a git WORKTREE of that repo's HEAD and then strips it to exactly the
+	// agent's files — so the check keeps .git (origin/<ref>, the pre-stage base a check
+	// needs for coverage-vs-base and a regression proof) while STILL seeing only what the
+	// agent produced. The strip is the piece the old reset+overlay lacked: a committed
+	// file the agent's tree omits is deleted, not restored (that leak — a repo's own
+	// main.go supplying a func main the agent never wrote — is what forced the files-only
+	// /tmp/ws that dropped git). Empty keeps the files-only tree (no repo to borrow .git
+	// from), so a lease without a checkout is unaffected.
+	RepoDir string
 }
 
 // Run writes the whole tree into the sandbox and then runs the command, IN ONE
@@ -84,8 +96,28 @@ func (f ForgeSandbox) Run(ctx context.Context, files map[string]string, command 
 			}
 		}
 	}
-	script := prefix + "rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws\n" +
-		WriteTreeScript(files) + "\n" + command + "\n"
+	// Prepare the check's working directory. Two shapes, both landing at /tmp/ws
+	// holding EXACTLY the agent's files:
+	//   - files-only (RepoDir empty): a fresh dir, the files ARE the tree. No git.
+	//   - worktree (RepoDir set): a detached worktree of the repo's HEAD — the
+	//     pre-stage base, since the stage commits its journal only after the loop —
+	//     stripped of every file but its own .git link, so the check has origin/<ref>
+	//     and a real HEAD to diff against while a leftover base file cannot survive
+	//     the strip. On a repo that has no commits yet, or if the worktree add fails,
+	//     it falls back to the fresh dir so a check never dies on setup.
+	var setup string
+	if f.RepoDir != "" {
+		rd := forge.Quote(f.RepoDir)
+		setup = "if git -C " + rd + " rev-parse --verify -q HEAD >/dev/null 2>&1; then " +
+			"git -C " + rd + " worktree remove --force /tmp/ws 2>/dev/null; git -C " + rd + " worktree prune 2>/dev/null; rm -rf /tmp/ws; " +
+			"if git -C " + rd + " worktree add --detach --force /tmp/ws \"$(git -C " + rd + " rev-parse HEAD)\" >/dev/null 2>&1; then " +
+			"find /tmp/ws -mindepth 1 -not -path '/tmp/ws/.git*' -delete; cd /tmp/ws; " +
+			"else rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws; fi; " +
+			"else rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws; fi\n"
+	} else {
+		setup = "rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws\n"
+	}
+	script := prefix + setup + WriteTreeScript(files) + "\n" + command + "\n"
 	if len(script) > PackThreshold {
 		script = packed(script)
 	}

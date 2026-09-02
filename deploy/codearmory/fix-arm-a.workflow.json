@@ -1,0 +1,136 @@
+{
+  "name": "fix-arm-a",
+  "timeout_secs": 5400,
+  "description": "Option A fix pipeline (prototype): fix FIRST, then write regression tests against the fixed code, then a base-vs-fix gate proves the tests catch the finding. fix-dev (reasoning ON) makes the smallest change that addresses the review finding and keeps the existing suite green; test-regression (reasoning OFF, whole-file writes) reads the real fixed code and writes *_test.go that PASS now; the gate rebuilds 'pre-fix source + new tests' and requires RED there and GREEN on the fixed tree. Inputs {task, namespace, repo, ref}: ref is the PR branch. No publish -- inspect the show diff.",
+  "inputs": [
+    {
+      "name": "task",
+      "required": true,
+      "description": "the review finding to fix"
+    },
+    {
+      "name": "namespace",
+      "required": true,
+      "description": "git-factory namespace (owner)"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "git-factory repo name"
+    },
+    {
+      "name": "ref",
+      "required": true,
+      "description": "the PR branch to fix (base for the regression gate)"
+    }
+  ],
+  "steps": [
+    {
+      "name": "workspace",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
+    },
+    {
+      "name": "gocache",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "codearmory-plan-gocache",
+        "name": "gocache",
+        "size_mb": 8192,
+        "medium": "disk"
+      }
+    },
+    {
+      "name": "clone",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"${inputs.ref}\"; echo \"working on branch ${inputs.ref}:\"; git log --oneline -1",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
+      }
+    },
+    {
+      "name": "fixdev",
+      "action": "blacksmith/agent",
+      "timeout": 2400,
+      "with": {
+        "role": "fix-dev",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "${inputs.task}",
+        "cache_workflow_id": "codearmory-plan-gocache",
+        "cache_volume": "gocache"
+      },
+      "loop_id": "fixloop"
+    },
+    {
+      "name": "testreg",
+      "action": "blacksmith/agent",
+      "timeout": 2400,
+      "with": {
+        "role": "test-regression",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "${inputs.task}",
+        "cache_workflow_id": "codearmory-plan-gocache",
+        "cache_volume": "gocache"
+      },
+      "loop_id": "tregloop"
+    },
+    {
+      "name": "show",
+      "action": "forge/run",
+      "timeout": 180,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; REF='${inputs.ref}'; BASE=$(git rev-parse \"origin/$REF\"); echo '=== STAT (base..HEAD) ==='; git diff --stat \"$BASE\" HEAD; echo '=== DIFF (base..HEAD) ==='; git diff \"$BASE\" HEAD | head -500",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          },
+          {
+            "workflow_id": "codearmory-plan-gocache",
+            "name": "gocache",
+            "mount_path": "/gocache"
+          }
+        ]
+      }
+    }
+  ],
+  "loops": [
+    {
+      "id": "fixloop",
+      "until": "steps.fixdev.status == 'completed'",
+      "limit": 3,
+      "var": "fa"
+    },
+    {
+      "id": "tregloop",
+      "until": "steps.testreg.status == 'completed'",
+      "limit": 3,
+      "var": "tra"
+    }
+  ]
+}

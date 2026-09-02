@@ -297,7 +297,10 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 	var journal []recordedWrite
 	maker := agents.Creator{
 		Gateway:    a.gw,
-		Sandbox:    tools.ForgeSandbox{Sandbox: sb, Env: sandboxEnv},
+		// RepoDir points the check at the mounted volume's git, so a role's check runs in
+		// a worktree of the pre-stage base (origin/<ref> resolvable) yet sees only the
+		// agent's files — the base a coverage-vs-base or regression-proof check needs.
+		Sandbox:    tools.ForgeSandbox{Sandbox: sb, Env: sandboxEnv, RepoDir: workspaceMount},
 		Check:      a.cfg.Repo.TestCommand,
 		// STREAM THE TRACE LIVE. Appending to tr is not enough — the running job's
 		// Stdout is what a poll returns, and it was only written on finish, so the run

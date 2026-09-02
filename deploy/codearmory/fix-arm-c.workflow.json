@@ -1,0 +1,203 @@
+{
+  "name": "fix-arm-c",
+  "timeout_secs": 6000,
+  "description": "Option C fix pipeline (linear v2): fix-dev writes the fix AND the tests (green check); a forge/run STRENGTH gate on the volume verifies coverage-not-dropped + no test deleted/skipped/reduced + new/changed behaviour tests RED on the pre-fix source (git works here, unlike the agent's files-only check sandbox); an independent test-auditor then files a PASS/FAIL on test weakening. Per-run cache. Inputs {task, namespace, repo, ref}.",
+  "inputs": [
+    {
+      "name": "task",
+      "required": true,
+      "description": "the review finding to fix"
+    },
+    {
+      "name": "namespace",
+      "required": true,
+      "description": "git-factory namespace (owner)"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "git-factory repo name"
+    },
+    {
+      "name": "ref",
+      "required": true,
+      "description": "the PR branch to fix (base for coverage + regression proof)"
+    }
+  ],
+  "steps": [
+    {
+      "name": "workspace",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
+    },
+    {
+      "name": "gocache",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "gocache",
+        "size_mb": 8192,
+        "medium": "disk"
+      }
+    },
+    {
+      "name": "clone",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"${inputs.ref}\"; echo \"working on branch ${inputs.ref}:\"; git log --oneline -1",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
+      }
+    },
+    {
+      "name": "fixdev",
+      "action": "blacksmith/agent",
+      "timeout": 3000,
+      "with": {
+        "role": "fix-dev",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "${inputs.task}",
+        "cache_workflow_id": "${run_id}",
+        "cache_volume": "gocache"
+      },
+      "loop_id": "fixloop"
+    },
+    {
+      "name": "strengthgate",
+      "action": "forge/run",
+      "timeout": 500,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set +e; export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; REF=\"${inputs.ref}\"; BASE=$(git rev-parse \"origin/$REF\"); FIX=$(git rev-parse HEAD); F=\"\"; DEL=$(git diff --diff-filter=D --name-only \"$BASE\" \"$FIX\" -- '*_test.go'); [ -z \"$DEL\" ] || F=\"$F; deleted test file(s): $DEL\"; SK=$(git diff \"$BASE\" \"$FIX\" -- '*_test.go' | grep -E '^\\+' | grep -c '\\.Skip('); [ \"${SK:-0}\" -eq 0 ] || F=\"$F; added ${SK} t.Skip()\"; BF=$(git grep -hE '^func (Test|Fuzz|Benchmark)[A-Z]' \"$BASE\" -- '*_test.go' 2>/dev/null | wc -l); FF=$(git grep -hE '^func (Test|Fuzz|Benchmark)[A-Z]' \"$FIX\" -- '*_test.go' 2>/dev/null | wc -l); [ \"${FF:-0}\" -ge \"${BF:-0}\" ] || F=\"$F; test funcs dropped ${BF} -> ${FF}\"; TF=$(git diff --name-only \"$BASE\" \"$FIX\" -- '*_test.go' | grep -v '^$'); [ -n \"$TF\" ] || F=\"$F; no *_test.go added or changed\"; rm -rf /tmp/base; git worktree prune 2>/dev/null; git worktree add -f --detach /tmp/base \"$BASE\" >/dev/null 2>&1; FCOV=$(go test ./... -coverprofile=/tmp/fc >/dev/null 2>&1 && go tool cover -func=/tmp/fc 2>/dev/null | awk '/^total:/{gsub(\"%\",\"\",$3);print $3}'); BCOV=$( ( cd /tmp/base && go test ./... -coverprofile=/tmp/bc >/dev/null 2>&1 && go tool cover -func=/tmp/bc 2>/dev/null | awk '/^total:/{gsub(\"%\",\"\",$3);print $3}' ) ); FCOV=${FCOV:-0}; BCOV=${BCOV:-0}; awk -v f=\"$FCOV\" -v b=\"$BCOV\" 'BEGIN{exit !(f+1.0>=b)}' || F=\"$F; coverage dropped ${BCOV}% -> ${FCOV}%\"; if [ -n \"$TF\" ]; then for f in $TF; do mkdir -p \"/tmp/base/$(dirname \"$f\")\"; cp \"$f\" \"/tmp/base/$f\"; done;   if ( cd /tmp/base && go build ./... >/dev/null 2>&1 && go test ./... >/tmp/rt 2>&1 ); then F=\"$F; your new/changed tests PASS on the pre-fix source (they do not pin the fix -- assert the new behaviour so they fail without it)\"; fi; fi; git worktree remove --force /tmp/base 2>/dev/null; if [ -n \"$F\" ]; then echo \"STRENGTH: FAIL (coverage ${BCOV}% -> ${FCOV}%, test funcs ${BF} -> ${FF})\" > STRENGTH.md; echo \"Fix these:$F\" | tr ';' '\\n' >> STRENGTH.md; else echo \"STRENGTH: PASS (coverage ${BCOV}% -> ${FCOV}%, test funcs ${BF} -> ${FF}, red-on-base holds: $TF)\" > STRENGTH.md; fi; git add STRENGTH.md; git -c user.email=bs@ca -c user.name=blacksmith commit -q -m 'chore(strength): verdict' || true; echo '=== STRENGTH.md ==='; cat STRENGTH.md; [ -z \"$F\" ] || { echo 'STRENGTHGATE FAIL'; exit 1; }; echo 'STRENGTHGATE OK'",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          },
+          {
+            "workflow_id": "${run_id}",
+            "name": "gocache",
+            "mount_path": "/gocache"
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
+      }
+    },
+    {
+      "name": "prepdiff",
+      "action": "forge/run",
+      "timeout": 200,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; BASE=$(git rev-parse \"origin/${inputs.ref}\"); mkdir -p .review; git diff \"$BASE\" HEAD -- '*_test.go' > .review/tests.diff; git diff \"$BASE\" HEAD -- '*.go' ':(exclude)*_test.go' > .review/code.diff; git add -A .review; git -c user.email=bs@ca -c user.name=blacksmith commit -q -m 'chore(review): audit diff snapshots' || true; echo \"tests.diff $(wc -l < .review/tests.diff) lines; code.diff $(wc -l < .review/code.diff) lines\"",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          },
+          {
+            "workflow_id": "${run_id}",
+            "name": "gocache",
+            "mount_path": "/gocache"
+          }
+        ]
+      }
+    },
+    {
+      "name": "auditor",
+      "action": "blacksmith/agent",
+      "timeout": 1200,
+      "with": {
+        "role": "test-auditor",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "Audit the test changes for the fix of this finding. Read .review/tests.diff and .review/code.diff. Finding: ${inputs.task}",
+        "cache_workflow_id": "${run_id}",
+        "cache_volume": "gocache"
+      },
+      "loop_id": "auditloop"
+    },
+    {
+      "name": "auditgate",
+      "action": "forge/run",
+      "timeout": 120,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; cd /workspace; [ -f AUDIT.md ] || { echo 'AUDIT FAIL: no AUDIT.md verdict'; exit 1; }; echo '=== AUDIT.md ==='; cat AUDIT.md; echo '==='; if head -1 AUDIT.md | grep -qE '^VERDICT: PASS'; then echo 'AUDIT OK'; exit 0; fi; echo 'AUDIT FAIL: auditor flagged weakened/bypassed tests'; exit 1",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "show",
+      "action": "forge/run",
+      "timeout": 180,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; BASE=$(git rev-parse \"origin/${inputs.ref}\"); echo '=== STAT ==='; git diff --stat \"$BASE\" HEAD -- . ':(exclude).review'; echo '=== DIFF ==='; git diff \"$BASE\" HEAD -- . ':(exclude).review' ':(exclude)STRENGTH.md' | head -450; echo '=== STRENGTH.md ==='; cat STRENGTH.md 2>/dev/null; echo '=== AUDIT.md ==='; cat AUDIT.md 2>/dev/null",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          },
+          {
+            "workflow_id": "${run_id}",
+            "name": "gocache",
+            "mount_path": "/gocache"
+          }
+        ]
+      }
+    }
+  ],
+  "loops": [
+    {
+      "id": "fixloop",
+      "until": "steps.fixdev.status == 'completed'",
+      "limit": 3,
+      "var": "fa"
+    },
+    {
+      "id": "auditloop",
+      "until": "steps.auditor.status == 'completed'",
+      "limit": 2,
+      "var": "aa"
+    }
+  ]
+}
