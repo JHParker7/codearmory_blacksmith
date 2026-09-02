@@ -50,13 +50,16 @@ type Role struct {
 	Temperature   float64 `json:"temperature"    gorm:"column:temperature"`
 	MaxTokens     int     `json:"max_tokens"     gorm:"column:max_tokens"`
 
-	// Thinking turns the model's reasoning scratchpad on for this role. Default
-	// off (false): the agents are tool-driven and never read their own scratchpad,
-	// while a thinking model spends most of a turn's tokens on it — measured ~15x
-	// more tokens per turn with it on. AutoMigrate adds this column false, so every
-	// existing role gets thinking off on the next start; an operator flips it true
-	// in the portal only for a role whose product is the reasoning itself.
-	Thinking bool `json:"thinking" gorm:"column:thinking"`
+	// Thinking controls the model's reasoning scratchpad, and is ON BY DEFAULT
+	// (NULL / nil). A role sets it false only to turn reasoning off for that role.
+	// Default-on matters: with reasoning off the coding roles ship code that does
+	// not compile (measured: a Store with `cannot assign to struct field in map`
+	// and missing imports) and loop discovering the errors one at a time — the
+	// 3-minute-dev-becomes-8-minute-timeout regression. A pointer so NULL (unset)
+	// reads as the default rather than as an explicit "off", which a plain bool
+	// column could not distinguish. The mapped request sends "high" for on (which
+	// overrides any class-level AGENTS_LARGE_REASONING_EFFORT) and "none" for off.
+	Thinking *bool `json:"thinking" gorm:"column:thinking"`
 }
 
 // TableName is explicit so the table is `roles`, not gorm's pluralized default of

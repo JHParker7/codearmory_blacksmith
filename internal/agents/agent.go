@@ -134,15 +134,20 @@ type Options struct {
 	Temperature   float64
 	MaxTokens     int
 
-	// Thinking turns the model's reasoning scratchpad ON for this stage. It is
-	// OFF by default (the zero value), because these agents are tool-driven and
-	// never read their own scratchpad — it goes only to the log — while a thinking
-	// model spends most of a turn's tokens producing it. Measured: qwen3.8 emitted
-	// ~15x fewer tokens per trivial turn with thinking off, the bulk of the
-	// per-turn wall-clock. Set true only for a stage whose value is the reasoning
-	// itself (a reviewer justifying a finding), and even then the log is the only
-	// place it lands.
-	Thinking bool
+	// Thinking controls the model's reasoning scratchpad. It is ON BY DEFAULT
+	// (nil), and off only for a role that explicitly sets it false. Default-on is
+	// deliberate and was bought with a measured failure: with reasoning off, on the
+	// exact task the dev fumbled, qwen3.8 wrote a Store whose code did NOT compile
+	// (`cannot assign to struct field in map`) and forgot imports; WITH reasoning it
+	// planned the imports and the map handling and the file compiled on the first
+	// try. Off is faster per turn (525 vs 3036 tokens) but ships broken code the dev
+	// then discovers one compile-error at a time — the loop that turned a ~3-minute
+	// dev into an 8-minute timeout. So a coding role must think; a role sets this
+	// false only when its turn genuinely needs no reasoning. A non-nil false sends
+	// reasoning_effort:"none"; the default sends "high", which OVERRIDES any
+	// class-level suppression (AGENTS_LARGE_REASONING_EFFORT) so a stale env cannot
+	// silently re-break the coding roles.
+	Thinking *bool
 
 	// SeedKnown shows the whole tree in the first prompt instead of making the
 	// agent read files in one by one. For a REVIEWER, which judges code it did
@@ -295,10 +300,12 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 	for i := 0; i < a.opts.MaxIterations; i++ {
 		out.Iterations = i + 1
 
-		// Thinking off (the default) sends reasoning_effort:"none", which turns the
-		// model's scratchpad off at the backend and cuts the bulk of a turn's decode.
-		effort := ""
-		if !a.opts.Thinking {
+		// The model THINKS by default; a role turns it off only by setting Thinking
+		// false. "high" (not "") is sent for the on case ON PURPOSE: it overrides a
+		// class-level reasoning_effort:"none", so a stale AGENTS_LARGE_REASONING_EFFORT
+		// cannot silently disable the reasoning the coding roles need to compile.
+		effort := "high"
+		if a.opts.Thinking != nil && !*a.opts.Thinking {
 			effort = "none"
 		}
 		res, err := a.gateway.Chat(ctx, a.opts.Class, model.ChatRequest{
