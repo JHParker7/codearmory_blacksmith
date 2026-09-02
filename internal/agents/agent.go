@@ -134,6 +134,16 @@ type Options struct {
 	Temperature   float64
 	MaxTokens     int
 
+	// Thinking turns the model's reasoning scratchpad ON for this stage. It is
+	// OFF by default (the zero value), because these agents are tool-driven and
+	// never read their own scratchpad — it goes only to the log — while a thinking
+	// model spends most of a turn's tokens producing it. Measured: qwen3.8 emitted
+	// ~15x fewer tokens per trivial turn with thinking off, the bulk of the
+	// per-turn wall-clock. Set true only for a stage whose value is the reasoning
+	// itself (a reviewer justifying a finding), and even then the log is the only
+	// place it lands.
+	Thinking bool
+
 	// SeedKnown shows the whole tree in the first prompt instead of making the
 	// agent read files in one by one. For a REVIEWER, which judges code it did
 	// not write, this is the difference between the department reviewer's single
@@ -285,11 +295,18 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 	for i := 0; i < a.opts.MaxIterations; i++ {
 		out.Iterations = i + 1
 
+		// Thinking off (the default) sends reasoning_effort:"none", which turns the
+		// model's scratchpad off at the backend and cuts the bulk of a turn's decode.
+		effort := ""
+		if !a.opts.Thinking {
+			effort = "none"
+		}
 		res, err := a.gateway.Chat(ctx, a.opts.Class, model.ChatRequest{
-			Messages:    a.messages(task, out.Trail, out.LastCheck),
-			Temperature: stuckTemperature(a.opts.Temperature, idle),
-			MaxTokens:   a.opts.MaxTokens,
-			Tools:       a.tools.Definitions(),
+			Messages:        a.messages(task, out.Trail, out.LastCheck),
+			Temperature:     stuckTemperature(a.opts.Temperature, idle),
+			MaxTokens:       a.opts.MaxTokens,
+			Tools:           a.tools.Definitions(),
+			ReasoningEffort: effort,
 		})
 		if err != nil {
 			return out, fmt.Errorf("%s: turn %d: %w", a.opts.Name, out.Iterations, err)

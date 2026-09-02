@@ -263,6 +263,15 @@ func (g *Gateway) buildRequest(cc ClassConfig, req ChatRequest) wireRequest {
 		temperature = cc.Temperature
 	}
 
+	// A REQUEST MAY OVERRIDE THE CLASS'S REASONING EFFORT. The class sets the
+	// default for its model; a role that wants a thinking model's scratchpad off
+	// sends "none" per request, which wins. Empty leaves the class default intact,
+	// so nothing a class or a non-agent caller relied on changes.
+	effort := cc.ReasoningEffort
+	if req.ReasoningEffort != "" {
+		effort = req.ReasoningEffort
+	}
+
 	out := wireRequest{
 		Model:           cc.Model,
 		Messages:        req.Messages,
@@ -270,7 +279,7 @@ func (g *Gateway) buildRequest(cc ClassConfig, req ChatRequest) wireRequest {
 		MaxTokens:       req.MaxTokens,
 		Stop:            req.Stop,
 		Stream:          false,
-		ReasoningEffort: cc.ReasoningEffort,
+		ReasoningEffort: effort,
 		Tools:           wireTools(tools),
 	}
 

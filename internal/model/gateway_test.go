@@ -244,6 +244,36 @@ func TestReasoningEffortComesFromTheClassAndIsOmittedWhenUnset(t *testing.T) {
 	}
 }
 
+// A REQUEST OVERRIDES THE CLASS'S REASONING EFFORT. This is the seam the agents
+// use to turn a thinking model's scratchpad off ("none") per turn, and it must
+// win over whatever the class set — otherwise the ~15x per-turn token cut this
+// bought does not happen. Empty leaves the class default untouched.
+func TestRequestReasoningEffortOverridesTheClass(t *testing.T) {
+	f, _, cc := newFakeServer(t)
+	cc.ReasoningEffort = "high"
+	g := NewGateway("h", map[Class]ClassConfig{ClassLarge: cc})
+
+	// The override wins over the class's "high".
+	if _, err := g.Chat(context.Background(), ClassLarge, ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}}, ReasoningEffort: "none",
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := f.sent()["reasoning_effort"]; got != "none" {
+		t.Errorf("reasoning_effort = %v, want none (the override)", got)
+	}
+
+	// No override leaves the class default in place.
+	if _, err := g.Chat(context.Background(), ClassLarge, ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got := f.sent()["reasoning_effort"]; got != "high" {
+		t.Errorf("reasoning_effort = %v, want high (the class default)", got)
+	}
+}
+
 // THE SCRATCHPAD ARRIVES IN FOUR PLACES and all four are real. A client reading
 // only one silently records nothing against half the stack it runs on — and
 // without the reasoning a stuck run can only be diagnosed from what the agent

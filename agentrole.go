@@ -38,5 +38,6 @@ func roleToOptions(r roles.Role) agents.Options {
 		Temperature:    r.Temperature,
 		MaxTokens:      r.MaxTokens,
 		SeedKnown:      r.SeedKnown,
+		Thinking:       r.Thinking,
 	}
 }

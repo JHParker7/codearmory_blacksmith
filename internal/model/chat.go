@@ -67,6 +67,18 @@ type ChatRequest struct {
 	MaxTokens   int
 	Stop        []string
 
+	// ReasoningEffort overrides the serving class's reasoning setting for THIS
+	// request. Empty keeps the class default; "none" turns a thinking model's
+	// scratchpad off. Measured on qwen3.8 via ollama 0.32.14: a trivial prompt
+	// generated 62 completion tokens with thinking on and 4 with
+	// reasoning_effort:"none" — a ~15x cut in per-turn decode, and far more on a
+	// real agent turn. The tool-driven agents never read their own scratchpad (it
+	// goes only to the log), so turning it off is pure latency saved. This is the
+	// one field ollama's OpenAI-compatible endpoint honors for it: top-level
+	// `think:false` and chat_template_kwargs.enable_thinking are both ignored
+	// there; only reasoning_effort passes through.
+	ReasoningEffort string
+
 	// Priority drives ADMISSION, not the request body. Critical work takes the
 	// whole box — see internal/queue.
 	Priority queue.Priority

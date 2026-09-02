@@ -49,6 +49,14 @@ type Role struct {
 	MaxIterations int     `json:"max_iterations" gorm:"column:max_iterations"`
 	Temperature   float64 `json:"temperature"    gorm:"column:temperature"`
 	MaxTokens     int     `json:"max_tokens"     gorm:"column:max_tokens"`
+
+	// Thinking turns the model's reasoning scratchpad on for this role. Default
+	// off (false): the agents are tool-driven and never read their own scratchpad,
+	// while a thinking model spends most of a turn's tokens on it — measured ~15x
+	// more tokens per turn with it on. AutoMigrate adds this column false, so every
+	// existing role gets thinking off on the next start; an operator flips it true
+	// in the portal only for a role whose product is the reasoning itself.
+	Thinking bool `json:"thinking" gorm:"column:thinking"`
 }
 
 // TableName is explicit so the table is `roles`, not gorm's pluralized default of
