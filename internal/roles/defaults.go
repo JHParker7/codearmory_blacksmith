@@ -141,6 +141,14 @@ func Defaults() []Role {
 			MaxIterations:      150,
 			Temperature:        0.2,
 			MaxTokens:          12000,
+			// SEED THE WHOLE TREE, don't make the dev read it in file by file. Measured
+			// on run turncount-run1: with discovery, plan-dev spent 13 of 20 turns on
+			// read_files against a 10-file suite and timed out its 8-min budget one turn
+			// short of green — the reroll then finished it in 5 turns on the same tree.
+			// The dev reads every file anyway; front-loading them saves ~13 model
+			// round-trips and the timeout+reroll waste. The `fix` role (also a developer)
+			// already seeds for exactly this reason.
+			SeedKnown: true,
 		},
 		{
 			Name:  "plan-sec",
