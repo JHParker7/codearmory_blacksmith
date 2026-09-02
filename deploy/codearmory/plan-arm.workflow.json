@@ -91,30 +91,8 @@
         "task": "${inputs.task}",
         "cache_workflow_id": "codearmory-plan-gocache",
         "cache_volume": "gocache"
-      }
-    },
-    {
-      "name": "expected-red",
-      "action": "forge/run",
-      "timeout": 300,
-      "with": {
-        "image": "golang:1.25",
-        "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod && cd /workspace && go build -o /tmp/gobin/ ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests are green before dev'; exit 1; else echo 'OK: tests compile and are RED'; fi",
-        "volumes": [
-          {
-            "workflow_id": "${run_id}",
-            "name": "ws",
-            "mount_path": "/workspace",
-            "workdir": true
-          },
-          {
-            "workflow_id": "codearmory-plan-gocache",
-            "name": "gocache",
-            "mount_path": "/gocache"
-          }
-        ]
-      }
+      },
+      "loop_id": "testloop"
     },
     {
       "name": "dev",
@@ -127,30 +105,8 @@
         "task": "${inputs.task}",
         "cache_workflow_id": "codearmory-plan-gocache",
         "cache_volume": "gocache"
-      }
-    },
-    {
-      "name": "green",
-      "action": "forge/run",
-      "timeout": 300,
-      "with": {
-        "image": "golang:1.25",
-        "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod && cd /workspace && go build -o /tmp/gobin/ ./... && go test ./...",
-        "volumes": [
-          {
-            "workflow_id": "${run_id}",
-            "name": "ws",
-            "mount_path": "/workspace",
-            "workdir": true
-          },
-          {
-            "workflow_id": "codearmory-plan-gocache",
-            "name": "gocache",
-            "mount_path": "/gocache"
-          }
-        ]
-      }
+      },
+      "loop_id": "devloop"
     },
     {
       "name": "show",
@@ -195,6 +151,20 @@
           "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
         }
       }
+    }
+  ],
+  "loops": [
+    {
+      "id": "testloop",
+      "until": "steps.tests.status == 'completed'",
+      "limit": 3,
+      "var": "ta"
+    },
+    {
+      "id": "devloop",
+      "until": "steps.dev.status == 'completed'",
+      "limit": 3,
+      "var": "da"
     }
   ]
 }
