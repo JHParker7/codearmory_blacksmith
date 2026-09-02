@@ -1,7 +1,7 @@
 {
   "name": "plan-arm",
   "timeout_secs": 5400,
-  "description": "The plan pipeline: architect -> test-writer -> (expected-red) -> dev -> (green) -> publish. Works GREENFIELD or on an EXISTING branch. A forge git CLONE brings the repo's .git into the shared volume; each blacksmith/agent commits its own work as one conventional commit per landed write; the forge/run steps run the checks. With `ref` set the pipeline extends/fixes that existing branch (an open PR): the architect updates PLAN.md, the test author adds/updates the RED tests, the dev makes them pass, and publish pushes the new commits back onto `ref` so the PR updates in place. With `ref` empty it builds greenfield and publish opens a git-factory PR to dev named by the highest-impact commit type. Scanning and security/quality review are the pr-review workflow's job (it runs on the PR). Inputs {task, namespace, repo, ref?}.",
+  "description": "The build pipeline: test-writer -> dev -> publish (the architect/PLAN.md stage is GONE \u2014 req-test works from the request directly). req-test (reasoning OFF) writes the FAILING tests from the request; req-dev (reasoning ON) reasons the implementation to green. Works GREENFIELD or on an EXISTING branch: a forge git CLONE brings the repo into the shared volume; with `ref` set the pipeline extends/fixes that branch (test author adds RED tests, dev makes them pass) and publish pushes the new commits back onto `ref` so the PR updates in place; with `ref` empty it builds greenfield and publish opens a git-factory PR to dev. Gates live in the roles (req-test OwnCheck = RED, req-dev check = green). Scanning + review are the pr-review workflow's job. Inputs {task, namespace, repo, ref?}.",
   "inputs": [
     {
       "name": "task",
@@ -68,24 +68,11 @@
       }
     },
     {
-      "name": "architect",
-      "action": "blacksmith/agent",
-      "timeout": 1200,
-      "with": {
-        "role": "plan-architect",
-        "workflow_id": "${run_id}",
-        "volume": "ws",
-        "task": "${inputs.task}",
-        "cache_workflow_id": "codearmory-plan-gocache",
-        "cache_volume": "gocache"
-      }
-    },
-    {
       "name": "tests",
       "action": "blacksmith/agent",
       "timeout": 1800,
       "with": {
-        "role": "plan-test",
+        "role": "req-test",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "${inputs.task}",
@@ -99,7 +86,7 @@
       "action": "blacksmith/agent",
       "timeout": 2400,
       "with": {
-        "role": "plan-dev",
+        "role": "req-dev",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "${inputs.task}",

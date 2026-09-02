@@ -775,15 +775,12 @@ func stuckTemperature(base float64, idle int) float64 {
 	return min(max(base, 0.15*float64(idle)), 1.0)
 }
 
-// reasoningLine flattens a reasoning trace to one log line: the head and the
-// tail, because the head says what the model is worried about and the tail is
-// where the decision lands, and a diagnosis usually needs both.
+// reasoningLine flattens a reasoning trace to one line, WHOLE — the run view is
+// where an operator reads what the model actually reasoned, so a head-and-tail
+// stub hid the middle where the reasoning usually goes wrong. Only the internal
+// newlines are collapsed (one entry, one line); the content is not truncated.
 func reasoningLine(r string) string {
-	flat := strings.Join(strings.Fields(r), " ")
-	if len(flat) <= 300 {
-		return flat
-	}
-	return flat[:180] + " … " + flat[len(flat)-100:]
+	return strings.Join(strings.Fields(r), " ")
 }
 
 // argHead is the head of a tool call's arguments, for the log. The HEAD, unlike

@@ -106,7 +106,11 @@ func (t *agentTrace) add(line string) {
 	}
 }
 
-func (t *agentTrace) String() string { return strings.Join(t.lines, "\n") }
+// String joins entries with a BLANK line between them: a run's turns are now
+// whole (full reasoning, full check output, some multi-line), so a single "\n"
+// ran them together illegibly — the blank line is the visual break between one
+// turn and the next.
+func (t *agentTrace) String() string { return strings.Join(t.lines, "\n\n") }
 
 // withCheck renders the trace with the role's last check appended as a footer, the
 // combination that answers "what did it do, and where did it end up".
@@ -121,23 +125,27 @@ func (t *agentTrace) withCheck(lastCheck string) string {
 	return s
 }
 
-// capTraceLine trims a log line's content to traceContentCap characters per segment.
-// The loop logs lines as "<role>: <body>", body often "<call> -> <result>"; capping
-// the call and the result independently keeps both the action and its outcome
-// visible without dumping the whole payload. The cap is wide enough to show a real
-// result — a multi-line output like list_files collapses to one space-separated line
-// (truncate flattens whitespace), so at 50 it read as just the first filename and
-// looked like the tree held nothing else; 200 shows the actual list.
+// capTraceLine caps ONLY a write_file's call content, and leaves everything else
+// WHOLE. The loop logs lines as "<role>: <body>", body often "<call> -> <result>".
+// The one segment big enough to swamp the log is a write_file's call, which carries
+// the entire file body; the reasoning, the command output, and every result are what
+// an operator actually reads in the run view, so they are kept in full — a capped
+// check output or a stubbed thought was the whole complaint. Only write_file's call
+// is flattened and clipped; its short "Edited: …" result and all other lines pass
+// through untouched (including their newlines).
 func capTraceLine(line string) string {
-	const traceContentCap = 200
+	const writeContentCap = 200
 	name, body, ok := strings.Cut(line, ": ")
 	if !ok {
-		return truncate(line, traceContentCap)
+		return line
 	}
 	if call, res, ok := strings.Cut(body, " -> "); ok {
-		return name + ": " + truncate(call, traceContentCap) + " -> " + truncate(res, traceContentCap)
+		if strings.HasPrefix(call, "write_file(") {
+			call = truncate(call, writeContentCap)
+		}
+		return name + ": " + call + " -> " + res
 	}
-	return name + ": " + truncate(body, traceContentCap)
+	return line
 }
 
 // jobStore holds running and finished actions in process. A restart forgets

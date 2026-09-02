@@ -6,44 +6,58 @@ import (
 )
 
 // The agent trace is what a workflow run view shows for an agent step (the
-// manifest names `stdout` as the output_field). These tests lock the two
-// properties that keep it useful: content is capped so one file write cannot
-// fill the log, and the trace is bounded so a 60-turn role cannot bloat the
-// poll response the engine reads every few seconds.
+// manifest names `stdout` as the output_field). These tests lock the contract
+// the run view depends on: ONLY a write_file's call (a whole file body) is
+// capped, everything else — reasoning, command/check output, results — is kept
+// WHOLE (that content is what an operator reads), and the trace is still bounded
+// so a 60-turn role cannot bloat the poll response the engine reads every few
+// seconds.
 
-func TestCapTraceLineCapsEachSegmentTo200(t *testing.T) {
-	longPath := strings.Repeat("x", 200)
-	longRes := strings.Repeat("y", 200)
-	line := "spec: write_file({\"path\":\"" + longPath + "\"}) -> " + longRes
+func TestCapTraceLineCapsWriteFileCall(t *testing.T) {
+	body := strings.Repeat("y", 5000)
+	line := "spec: write_file({\"path\":\"task.go\",\"replace\":\"" + body + "\"}) -> Edited: task.go"
 
 	got := capTraceLine(line)
 
-	name, body, ok := strings.Cut(got, ": ")
+	name, rest, ok := strings.Cut(got, ": ")
 	if !ok || name != "spec" {
 		t.Fatalf("lost the role prefix: %q", got)
 	}
-	call, res, ok := strings.Cut(body, " -> ")
+	call, res, ok := strings.Cut(rest, " -> ")
 	if !ok {
 		t.Fatalf("lost the call -> result split: %q", got)
 	}
-	// truncate(s, 200) yields at most 200 runes (199 + the ellipsis).
 	if n := len([]rune(call)); n > 200 {
-		t.Errorf("call segment not capped to 200: got %d runes (%q)", n, call)
+		t.Errorf("write_file call not capped to 200: got %d runes", n)
 	}
-	if n := len([]rune(res)); n > 200 {
-		t.Errorf("result segment not capped to 200: got %d runes (%q)", n, res)
+	if res != "Edited: task.go" {
+		t.Errorf("result should pass through whole: %q", res)
 	}
 }
 
-func TestCapTraceLineNoArrow(t *testing.T) {
-	line := "architect: thinking: " + strings.Repeat("z", 200)
-	got := capTraceLine(line)
-	if !strings.HasPrefix(got, "architect: ") {
-		t.Fatalf("lost the role prefix: %q", got)
+func TestCapTraceLineKeepsNonWriteWhole(t *testing.T) {
+	// An auto-check line: the check output is exactly what the operator reads, so
+	// it must survive whole even when long.
+	out := strings.Repeat("z", 3000)
+	line := "req-dev: auto-check -> $ go test ./...\n" + out
+	if got := capTraceLine(line); got != line {
+		t.Errorf("non-write line was altered:\nwant %q\ngot  %q", line, got)
 	}
-	body := strings.TrimPrefix(got, "architect: ")
-	if n := len([]rune(body)); n > 200 {
-		t.Errorf("body not capped to 200: got %d runes (%q)", n, body)
+}
+
+func TestCapTraceLineKeepsReasoningWhole(t *testing.T) {
+	line := "architect: thinking: " + strings.Repeat("z", 3000)
+	if got := capTraceLine(line); got != line {
+		t.Errorf("reasoning was capped; want whole:\ngot %q", got)
+	}
+}
+
+func TestAgentTraceStringSeparatesEntries(t *testing.T) {
+	tr := &agentTrace{}
+	tr.add("dev: thinking: first")
+	tr.add("dev: run_command({}) -> ok")
+	if !strings.Contains(tr.String(), "first\n\ndev:") {
+		t.Errorf("entries not separated by a blank line: %q", tr.String())
 	}
 }
 
