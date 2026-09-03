@@ -68,11 +68,25 @@ type Workspace struct {
 	// from the compiler, against the real tree. For a stage whose tests are its
 	// own to edit, the drop check stays, because nothing else would say a word.
 	looseRewrites bool
+
+	// editInPlace refuses a whole-file write over a file that ALREADY has content,
+	// forcing a targeted old_str/decl/line edit. For a role that only fixes existing
+	// code — a linter or security finding — a whole-file rewrite is never needed (the
+	// file is right there to edit) and it is the single most expensive thing the model
+	// does: it regenerates the entire file as output tokens. Measured on this ollama:
+	// 174s on one whole-file rewrite turn vs ~20s for a targeted edit of the same file.
+	// A NEW file is still written whole — there is no content to anchor a targeted edit
+	// against — so this does not stop a role from adding a file.
+	editInPlace bool
 }
 
 // AllowWholeRewrites lifts the dropped-declaration refusal. See looseRewrites
 // for when that is sound.
 func (w *Workspace) AllowWholeRewrites() { w.looseRewrites = true }
+
+// ForceTargetedEdits refuses a whole-file write over an existing non-empty file, so a
+// role that only edits existing code cannot pay the whole-file-rewrite cost.
+func (w *Workspace) ForceTargetedEdits() { w.editInPlace = true }
 
 // Writes is how many edits this workspace has accepted.
 func (w *Workspace) Writes() int { return w.writes }
@@ -229,6 +243,13 @@ func (w *Workspace) ApplyEdit(e edit.Edit) (string, error) {
 	// wrong.
 	var defenced bool
 	if mode, _ := e.Address(); mode == "whole file" && existed && strings.TrimSpace(before) != "" {
+		if w.editInPlace {
+			return "", fmt.Errorf(
+				"%s already exists — change it with a TARGETED edit (an old_str anchor of a "+
+					"few lines that matches the code you are changing, plus its replacement), not a "+
+					"whole-file rewrite. A whole-file write is only for creating a file that does not "+
+					"exist yet.", e.Path)
+		}
 		if isSource(e.Path) {
 			// Parse first (repairing a fence if that is what is wrong), because
 			// the name comparison needs a tree on both sides.

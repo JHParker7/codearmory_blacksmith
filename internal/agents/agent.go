@@ -107,6 +107,14 @@ type Options struct {
 	// function fails the next check by name instead of vanishing silently.
 	RewriteWhole bool
 
+	// EditInPlace refuses a whole-file write over an existing non-empty file, forcing
+	// a targeted edit. For a role that only fixes existing code (a linter or security
+	// finding), a whole-file rewrite is never needed and is the model's single most
+	// expensive move (it re-emits the whole file as tokens). A new file is still
+	// written whole. Mutually sensible with, not opposed to, RewriteWhole: a role
+	// setting this edits code it did not author.
+	EditInPlace bool
+
 	// AttemptTimeout bounds ONE ATTEMPT at this stage in wall-clock time, and
 	// Respins is how many fresh starts follow a timeout. Zero timeout means
 	// unbounded; zero respins means a timeout simply fails the stage.
@@ -149,6 +157,13 @@ type Options struct {
 	// silently re-break the coding roles.
 	Thinking *bool
 
+	// ReasoningEffort, when set, is the exact reasoning_effort level sent to the model
+	// (xhigh/medium/low/none for qwen3.8), overriding the Thinking bool's high/none. It
+	// exists because the bool's two settings are the two WORST: "high" is qwen's xhigh
+	// (it spirals — 16K chars, no answer), "none" loops on its own compile errors. "low"
+	// and "medium" are the correct, fast middle a coding role wants. Empty keeps the bool.
+	ReasoningEffort string
+
 	// SeedKnown shows the whole tree in the first prompt instead of making the
 	// agent read files in one by one. For a REVIEWER, which judges code it did
 	// not write, this is the difference between the department reviewer's single
@@ -180,6 +195,9 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 	space := tools.NewWorkspace(files, o.Guard)
 	if o.RewriteWhole {
 		space.AllowWholeRewrites()
+	}
+	if o.EditInPlace {
+		space.ForceTargetedEdits()
 	}
 	if o.SeedKnown {
 		space.SeedKnown()
@@ -307,6 +325,14 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 		effort := "high"
 		if a.opts.Thinking != nil && !*a.opts.Thinking {
 			effort = "none"
+		}
+		// An explicit level overrides the on/off bool. MEASURED why it matters: qwen3.8
+		// treats the default "high" as its "xhigh" — 16K chars of reasoning that spiraled
+		// past the token cap without answering (77s, no output). "low" answered the same
+		// fix correctly in 7.6s with 1.5K chars of reasoning — enough to self-correct a
+		// compile error in the loop, which "none" cannot (it loops on the error instead).
+		if a.opts.ReasoningEffort != "" {
+			effort = a.opts.ReasoningEffort
 		}
 		res, err := a.gateway.Chat(ctx, a.opts.Class, model.ChatRequest{
 			Messages:        a.messages(task, out.Trail, out.LastCheck),

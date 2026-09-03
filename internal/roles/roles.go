@@ -41,6 +41,8 @@ type Role struct {
 	Check      string       `json:"check"       gorm:"column:check_cmd"`
 
 	RewriteWhole       bool `json:"rewrite_whole"        gorm:"column:rewrite_whole"`
+	EditInPlace        bool   `json:"edit_in_place"        gorm:"column:edit_in_place"`
+	ReasoningEffort    string `json:"reasoning_effort"     gorm:"column:reasoning_effort"`
 	AttemptTimeoutSecs int  `json:"attempt_timeout_secs" gorm:"column:attempt_timeout_secs"`
 	Respins            int  `json:"respins"              gorm:"column:respins"`
 	OwnCheck           bool `json:"own_check"            gorm:"column:own_check"`

@@ -31,6 +31,8 @@ func roleToOptions(r roles.Role) agents.Options {
 		TicketKind:     r.TicketKind,
 		Check:          r.Check,
 		RewriteWhole:   r.RewriteWhole,
+		EditInPlace:     r.EditInPlace,
+		ReasoningEffort: r.ReasoningEffort,
 		AttemptTimeout: time.Duration(r.AttemptTimeoutSecs) * time.Second,
 		Respins:        r.Respins,
 		OwnCheck:       r.OwnCheck,

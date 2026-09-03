@@ -1,0 +1,112 @@
+{
+  "name": "agent-harness",
+  "timeout_secs": 3600,
+  "description": "Isolated single-agent harness: clone -> one agent -> show. No loop, no composition, so a failure is unambiguously the agent. Inputs {role, task, namespace, repo, ref}.",
+  "inputs": [
+    {
+      "name": "role",
+      "required": true,
+      "description": "the blacksmith role to run"
+    },
+    {
+      "name": "task",
+      "required": true,
+      "description": "the task/finding"
+    },
+    {
+      "name": "namespace",
+      "required": true,
+      "description": "git-factory namespace"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "git-factory repo"
+    },
+    {
+      "name": "ref",
+      "required": true,
+      "description": "branch to work on"
+    }
+  ],
+  "steps": [
+    {
+      "name": "workspace",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
+    },
+    {
+      "name": "gocache",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "gocache",
+        "size_mb": 8192,
+        "medium": "disk"
+      }
+    },
+    {
+      "name": "clone",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"${inputs.ref}\"; echo cloned; git log --oneline -1",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
+      }
+    },
+    {
+      "name": "agent",
+      "action": "blacksmith/agent",
+      "timeout": 2400,
+      "with": {
+        "role": "${inputs.role}",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "${inputs.task}",
+        "cache_workflow_id": "${run_id}",
+        "cache_volume": "gocache"
+      }
+    },
+    {
+      "name": "show",
+      "action": "forge/run",
+      "timeout": 180,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; BASE=$(git rev-parse \"origin/${inputs.ref}\"); echo '=== STAT ==='; git diff --stat \"$BASE\" HEAD; echo '=== DIFF ==='; git diff \"$BASE\" HEAD | head -300",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          },
+          {
+            "workflow_id": "${run_id}",
+            "name": "gocache",
+            "mount_path": "/gocache"
+          }
+        ]
+      }
+    }
+  ]
+}
