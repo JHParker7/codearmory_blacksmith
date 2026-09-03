@@ -108,10 +108,14 @@ func (f ForgeSandbox) Run(ctx context.Context, files map[string]string, command 
 	var setup string
 	if f.RepoDir != "" {
 		rd := forge.Quote(f.RepoDir)
+		// Every cleanup is `|| true`: a worktree remove/prune/delete legitimately fails
+		// on the first check of a stage (nothing registered yet), and the lease prelude
+		// runs under set -e, so an unguarded failure would abort the check with exit 128
+		// BEFORE it runs — a check that dies with no output the model can act on.
 		setup = "if git -C " + rd + " rev-parse --verify -q HEAD >/dev/null 2>&1; then " +
-			"git -C " + rd + " worktree remove --force /tmp/ws 2>/dev/null; git -C " + rd + " worktree prune 2>/dev/null; rm -rf /tmp/ws; " +
+			"git -C " + rd + " worktree remove --force /tmp/ws >/dev/null 2>&1 || true; git -C " + rd + " worktree prune >/dev/null 2>&1 || true; rm -rf /tmp/ws; " +
 			"if git -C " + rd + " worktree add --detach --force /tmp/ws \"$(git -C " + rd + " rev-parse HEAD)\" >/dev/null 2>&1; then " +
-			"find /tmp/ws -mindepth 1 -not -path '/tmp/ws/.git*' -delete; cd /tmp/ws; " +
+			"find /tmp/ws -mindepth 1 -not -path '/tmp/ws/.git*' -delete 2>/dev/null || true; cd /tmp/ws; " +
 			"else rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws; fi; " +
 			"else rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws; fi\n"
 	} else {

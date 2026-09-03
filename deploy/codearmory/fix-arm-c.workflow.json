@@ -1,7 +1,7 @@
 {
   "name": "fix-arm-c",
   "timeout_secs": 6000,
-  "description": "Option C fix pipeline (linear v2): fix-dev writes the fix AND the tests (green check); a forge/run STRENGTH gate on the volume verifies coverage-not-dropped + no test deleted/skipped/reduced + new/changed behaviour tests RED on the pre-fix source (git works here, unlike the agent's files-only check sandbox); an independent test-auditor then files a PASS/FAIL on test weakening. Per-run cache. Inputs {task, namespace, repo, ref}.",
+  "description": "Option C fix pipeline (v3): fix-dev writes the fix AND the tests, gated by its OWN strong check -- green + coverage-not-dropped + no test deleted/skipped/reduced + new/changed behaviour tests RED on the pre-fix source -- which now runs in a git worktree of the base, so a failure feeds straight back into the agent loop. An independent test-auditor then files a PASS/FAIL on test weakening the mechanical check can't see. Per-run cache. Inputs {task, namespace, repo, ref}.",
   "inputs": [
     {
       "name": "task",
@@ -80,32 +80,6 @@
         "cache_volume": "gocache"
       },
       "loop_id": "fixloop"
-    },
-    {
-      "name": "strengthgate",
-      "action": "forge/run",
-      "timeout": 500,
-      "with": {
-        "image": "golang:1.25",
-        "runner_class": "large",
-        "run": "set +e; export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; REF=\"${inputs.ref}\"; BASE=$(git rev-parse \"origin/$REF\"); FIX=$(git rev-parse HEAD); F=\"\"; DEL=$(git diff --diff-filter=D --name-only \"$BASE\" \"$FIX\" -- '*_test.go'); [ -z \"$DEL\" ] || F=\"$F; deleted test file(s): $DEL\"; SK=$(git diff \"$BASE\" \"$FIX\" -- '*_test.go' | grep -E '^\\+' | grep -c '\\.Skip('); [ \"${SK:-0}\" -eq 0 ] || F=\"$F; added ${SK} t.Skip()\"; BF=$(git grep -hE '^func (Test|Fuzz|Benchmark)[A-Z]' \"$BASE\" -- '*_test.go' 2>/dev/null | wc -l); FF=$(git grep -hE '^func (Test|Fuzz|Benchmark)[A-Z]' \"$FIX\" -- '*_test.go' 2>/dev/null | wc -l); [ \"${FF:-0}\" -ge \"${BF:-0}\" ] || F=\"$F; test funcs dropped ${BF} -> ${FF}\"; TF=$(git diff --name-only \"$BASE\" \"$FIX\" -- '*_test.go' | grep -v '^$'); [ -n \"$TF\" ] || F=\"$F; no *_test.go added or changed\"; rm -rf /tmp/base; git worktree prune 2>/dev/null; git worktree add -f --detach /tmp/base \"$BASE\" >/dev/null 2>&1; FCOV=$(go test ./... -coverprofile=/tmp/fc >/dev/null 2>&1 && go tool cover -func=/tmp/fc 2>/dev/null | awk '/^total:/{gsub(\"%\",\"\",$3);print $3}'); BCOV=$( ( cd /tmp/base && go test ./... -coverprofile=/tmp/bc >/dev/null 2>&1 && go tool cover -func=/tmp/bc 2>/dev/null | awk '/^total:/{gsub(\"%\",\"\",$3);print $3}' ) ); FCOV=${FCOV:-0}; BCOV=${BCOV:-0}; awk -v f=\"$FCOV\" -v b=\"$BCOV\" 'BEGIN{exit !(f+1.0>=b)}' || F=\"$F; coverage dropped ${BCOV}% -> ${FCOV}%\"; if [ -n \"$TF\" ]; then for f in $TF; do mkdir -p \"/tmp/base/$(dirname \"$f\")\"; cp \"$f\" \"/tmp/base/$f\"; done;   if ( cd /tmp/base && go build ./... >/dev/null 2>&1 && go test ./... >/tmp/rt 2>&1 ); then F=\"$F; your new/changed tests PASS on the pre-fix source (they do not pin the fix -- assert the new behaviour so they fail without it)\"; fi; fi; git worktree remove --force /tmp/base 2>/dev/null; if [ -n \"$F\" ]; then echo \"STRENGTH: FAIL (coverage ${BCOV}% -> ${FCOV}%, test funcs ${BF} -> ${FF})\" > STRENGTH.md; echo \"Fix these:$F\" | tr ';' '\\n' >> STRENGTH.md; else echo \"STRENGTH: PASS (coverage ${BCOV}% -> ${FCOV}%, test funcs ${BF} -> ${FF}, red-on-base holds: $TF)\" > STRENGTH.md; fi; git add STRENGTH.md; git -c user.email=bs@ca -c user.name=blacksmith commit -q -m 'chore(strength): verdict' || true; echo '=== STRENGTH.md ==='; cat STRENGTH.md; [ -z \"$F\" ] || { echo 'STRENGTHGATE FAIL'; exit 1; }; echo 'STRENGTHGATE OK'",
-        "volumes": [
-          {
-            "workflow_id": "${run_id}",
-            "name": "ws",
-            "mount_path": "/workspace",
-            "workdir": true
-          },
-          {
-            "workflow_id": "${run_id}",
-            "name": "gocache",
-            "mount_path": "/gocache"
-          }
-        ],
-        "secret_refs": {
-          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
-        }
-      }
     },
     {
       "name": "prepdiff",
