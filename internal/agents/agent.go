@@ -328,6 +328,10 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 		if r := res.Reasoning; r != "" {
 			a.logf("%s: thinking: %s", a.opts.Name, reasoningLine(r))
 		}
+		// [timing] one line per turn splitting a slow turn into "the model was slow"
+		// (latency) vs "the model waited for a slot" (queued) — ms precision the
+		// second-resolution slog timestamps cannot give.
+		a.logf("%s: [t] turn %d model latency=%dms queued=%dms", a.opts.Name, out.Iterations, res.Latency.Milliseconds(), res.Queued.Milliseconds())
 
 		// NO TOOL CALL MEANS IT ANSWERED — but an answer only finishes a stage
 		// that has nothing else outstanding, and there are three ways to owe more:
@@ -380,7 +384,9 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 
 		var wrote, ranCheck bool
 		for _, call := range res.Calls {
+			toolStart := time.Now()
 			result, err := a.tools.Invoke(ctx, call.Name, call.Arguments)
+			toolMS := time.Since(toolStart).Milliseconds()
 			if err != nil {
 				// The sandbox is unreachable or similar. Not something the model can
 				// reason its way out of, so it ends the stage rather than becoming a
@@ -391,7 +397,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			// write's JSON is its path. A stage refusing the same edit for fifteen
 			// minutes was undiagnosable from the log alone: it showed the refusal
 			// and never what was being refused.
-			a.logf("%s: %s(%s) -> %s", a.opts.Name, call.Name, argHead(call.Arguments), firstLine(result))
+			a.logf("%s: %s(%s) -> %s [%dms]", a.opts.Name, call.Name, argHead(call.Arguments), firstLine(result), toolMS)
 			out.Trail = append(out.Trail, Step{
 				Tool:   call.Name,
 				Args:   trim(call.Arguments, 300),
@@ -447,7 +453,9 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 		// burst of files costs one execution; turns whose writes were all refused
 		// run nothing, so a refusal loop cannot burn the sandbox.
 		if wrote && !ranCheck && a.opts.Check != "" {
+			checkStart := time.Now()
 			result, err := a.tools.Invoke(ctx, tools.RunCommand, "{}")
+			checkMS := time.Since(checkStart).Milliseconds()
 			if err != nil {
 				return out, fmt.Errorf("%s: auto-check: %w", a.opts.Name, err)
 			}
@@ -456,7 +464,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			// test failures or the RED/green verdict, which are the lines an operator opens
 			// the run to read. trim keeps the TAIL (where the verdict and first error land)
 			// and bounds it to 6000, the same slice the model itself is fed at line 592.
-			a.logf("%s: auto-check -> %s", a.opts.Name, trim(result, 6000))
+			a.logf("%s: auto-check -> %s [%dms]", a.opts.Name, trim(result, 6000), checkMS)
 			out.Trail = append(out.Trail, Step{Tool: tools.RunCommand, Args: "(auto)", Result: result})
 			out.LastCheck = result
 			if checkPassed(result) {

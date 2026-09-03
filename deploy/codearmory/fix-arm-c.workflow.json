@@ -79,7 +79,7 @@
         "cache_workflow_id": "${run_id}",
         "cache_volume": "gocache"
       },
-      "loop_id": "fixloop"
+      "loop_id": "reviewloop"
     },
     {
       "name": "prepdiff",
@@ -102,7 +102,8 @@
             "mount_path": "/gocache"
           }
         ]
-      }
+      },
+      "loop_id": "reviewloop"
     },
     {
       "name": "auditor",
@@ -116,7 +117,7 @@
         "cache_workflow_id": "${run_id}",
         "cache_volume": "gocache"
       },
-      "loop_id": "auditloop"
+      "loop_id": "reviewloop"
     },
     {
       "name": "auditgate",
@@ -134,7 +135,8 @@
             "workdir": true
           }
         ]
-      }
+      },
+      "loop_id": "reviewloop"
     },
     {
       "name": "show",
@@ -162,16 +164,10 @@
   ],
   "loops": [
     {
-      "id": "fixloop",
-      "until": "steps.fixdev.status == 'completed'",
+      "id": "reviewloop",
+      "until": "steps.auditgate.status == 'completed'",
       "limit": 3,
-      "var": "fa"
-    },
-    {
-      "id": "auditloop",
-      "until": "steps.auditor.status == 'completed'",
-      "limit": 2,
-      "var": "aa"
+      "var": "ra"
     }
   ]
 }
