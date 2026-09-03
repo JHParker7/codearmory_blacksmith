@@ -123,7 +123,7 @@ func (f ForgeSandbox) Run(ctx context.Context, files map[string]string, command 
 	}
 	script := prefix + setup + WriteTreeScript(files) + "\n" + command + "\n"
 	if len(script) > PackThreshold {
-		script = packed(script)
+		script = Pack(script)
 	}
 	// ACTIONABLE REFUSAL BEFORE FORGE'S OPAQUE ONE. Even compressed, a big enough
 	// tree overflows forge's execution-body cap (~64KB), and forge answers with a
@@ -186,13 +186,16 @@ func largestFiles(files map[string]string) string {
 	return b.String()
 }
 
-// packed wraps a script so it ships as one base64 line and unpacks in the box.
+// Pack wraps a script so it ships as one base64 line and unpacks in the box —
+// the way past forge's ~64KB execution-body cap for anything large (a tree write,
+// or a commit-journal replay). Source gzips ~4-5x, so a script that would overflow
+// the raw body fits comfortably packed.
 //
 // The alphabet is why this is safe where interpolation was not: base64 emits no
 // apostrophes, so the payload cannot close its own quote. `set -e` is restated
 // inside because the leased prelude's one applies to the OUTER script, and the
 // tree writes were relying on it.
-func packed(script string) string {
+func Pack(script string) string {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	zw.Write([]byte("set -e\n" + script))

@@ -145,7 +145,7 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; BASE=$(git rev-parse \"origin/${inputs.ref}\"); echo '=== STAT ==='; git diff --stat \"$BASE\" HEAD -- . ':(exclude).review'; echo '=== DIFF ==='; git diff \"$BASE\" HEAD -- . ':(exclude).review' ':(exclude)STRENGTH.md' | head -450; echo '=== STRENGTH.md ==='; cat STRENGTH.md 2>/dev/null; echo '=== AUDIT.md ==='; cat AUDIT.md 2>/dev/null",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; BASE=$(git rev-parse \"origin/${inputs.ref}\"); echo '=== STAT ==='; git diff --stat \"$BASE\" HEAD -- . ':(exclude).review'; echo '=== DIFF ==='; git diff \"$BASE\" HEAD -- . ':(exclude).review' ':(exclude)STRENGTH.md' | head -450; echo '=== STRENGTH.md ==='; cat STRENGTH.md 2>/dev/null || true; echo '=== AUDIT.md ==='; cat AUDIT.md 2>/dev/null || true",
         "volumes": [
           {
             "workflow_id": "${run_id}",
@@ -159,6 +159,27 @@
             "mount_path": "/gocache"
           }
         ]
+      }
+    },
+    {
+      "name": "publish",
+      "action": "forge/run",
+      "timeout": 200,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; REF='${inputs.ref}'; git rm -q -r --ignore-unmatch .review AUDIT.md STRENGTH.md >/dev/null 2>&1 || true; git -c user.email=bs@ca -c user.name=blacksmith commit -q -am 'chore: drop review artifacts' >/dev/null 2>&1 || true; BASE=$(git rev-parse \"origin/$REF\"); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no fix commits -- nothing to push'; exit 0; fi; git push \"$GIT_URL\" HEAD:refs/heads/$REF; echo \"pushed the fix to $REF\"",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
       }
     }
   ],

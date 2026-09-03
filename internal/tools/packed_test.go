@@ -29,7 +29,7 @@ func TestAPackedScriptLandsTheSameTree(t *testing.T) {
 	if len(script) <= PackThreshold {
 		t.Fatalf("the fixture does not clear the threshold: %d bytes", len(script))
 	}
-	p := packed(script)
+	p := Pack(script)
 	if len(p) >= len(script) {
 		t.Fatalf("packing did not shrink the script: %d -> %d", len(script), len(p))
 	}
@@ -60,7 +60,7 @@ func TestAFailingCommandFailsThroughThePacking(t *testing.T) {
 
 	cmd := exec.Command("sh")
 	cmd.Dir = t.TempDir()
-	cmd.Stdin = strings.NewReader(packed(script))
+	cmd.Stdin = strings.NewReader(Pack(script))
 	err := cmd.Run()
 	if err == nil {
 		t.Fatal("a failing command came back green through the packing")

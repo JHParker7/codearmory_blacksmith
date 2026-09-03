@@ -512,7 +512,20 @@ func commitJournal(ctx context.Context, sb *forge.Sandbox, journal []recordedWri
 		msg := ccNormalize(ccWithScope(w.message, ccScope(w.path)))
 		fmt.Fprintf(&b, "git add -A && git -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q -m %s || true\n", forge.Quote(msg))
 	}
-	res, err := sb.Run(ctx, nil, b.String())
+	// PACK a large replay, exactly as the check path does. A converging fix can make
+	// dozens of writes (measured: 33 over 20 turns, incl. whole-file test rewrites),
+	// and the raw replay script then overflows forge's ~64KB execution-body cap — a
+	// bare "400 invalid request body" that discarded a whole green stage's work. Source
+	// gzips ~4-5x, so the packed form fits.
+	script := b.String()
+	if len(script) > tools.PackThreshold {
+		script = tools.Pack(script)
+	}
+	if len(script) > tools.MaxScriptBytes {
+		return false, fmt.Errorf(
+			"the role's edits are too large to commit in one forge execution (%d bytes even packed; the cap is ~64KB) — the fix changed too much at once", len(script))
+	}
+	res, err := sb.Run(ctx, nil, script)
 	if err != nil {
 		return false, err
 	}
