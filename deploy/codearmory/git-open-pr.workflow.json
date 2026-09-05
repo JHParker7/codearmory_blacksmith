@@ -1,0 +1,64 @@
+{
+  "name": "git-open-pr",
+  "timeout_secs": 300,
+  "description": "Open a git-factory pull request, authored by the codearmory-bot account. Wrapper around a single forge/run step so it reuses the proven curl credential path instead of a native run-role token (which can't carry cross-namespace repo grants). Inputs: namespace, repo, title_b64, body_b64 (base64 so arbitrary text survives the shell), source_ref (the branch), target_ref (base, e.g. dev). Outputs pr_number.",
+  "inputs": [
+    {
+      "name": "namespace",
+      "required": true,
+      "description": "repo owner namespace (e.g. ops)"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "repo name within the namespace"
+    },
+    {
+      "name": "title_b64",
+      "required": true,
+      "description": "base64 of the PR title"
+    },
+    {
+      "name": "body_b64",
+      "required": true,
+      "description": "base64 of the PR body (markdown)"
+    },
+    {
+      "name": "source_ref",
+      "required": true,
+      "description": "the branch being merged"
+    },
+    {
+      "name": "target_ref",
+      "required": false,
+      "description": "base branch merged into (default dev)",
+      "default": "dev"
+    }
+  ],
+  "steps": [
+    {
+      "name": "open",
+      "action": "forge/run",
+      "timeout": 240,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "secret_refs": {
+          "BOT_PW": "secret:codearmory-bot-password"
+        },
+        "run": "set -e; export HOME=/tmp GOFLAGS=-buildvcs=false; mkdir -p /tmp/.openpr; GK=http://codearmory-gatekeeper:8081; GF=http://codearmory-git-factory:9002; BOT_USER=codearmory-bot; printf '%s' '${inputs.title_b64}' | base64 -d > /tmp/.openpr/title.txt; printf '%s' '${inputs.body_b64}' | base64 -d > /tmp/.openpr/body.txt; LOGIN=$(curl -s --max-time 30 --retry 3 --retry-delay 2 -X POST \"$GK/login\" -H 'content-type: application/json' -d \"{\\\"username\\\":\\\"$BOT_USER\\\",\\\"password\\\":\\\"$BOT_PW\\\"}\"); SESS=$(printf '%s' \"$LOGIN\" | sed -E 's/.*\"token\":\"([^\"]+)\".*/\\1/'); [ -n \"$SESS\" ] && [ \"$SESS\" != \"$LOGIN\" ] || { echo \"bot login failed\"; exit 1; }; RID=$(curl -s --max-time 30 --retry 3 -X POST \"$GF/repos/by-path\" -H \"authorization: Bearer $SESS\" -H 'content-type: application/json' -d \"{\\\"namespace\\\":\\\"${inputs.namespace}\\\",\\\"name\\\":\\\"${inputs.repo}\\\"}\" | sed -E 's/.*\"id\":\"([^\"]+)\".*/\\1/'); [ -n \"$RID\" ] || { echo 'resolve repo failed'; exit 1; }; echo 'Ly8gbWtib2R5OiBKU09OLWVuY29kZXMgYSBQUiBjcmVhdGUgYm9keSBmcm9tIHRpdGxlL2JvZHkgZmlsZXMgKyByZWZzLCBzYWZlbHkuCi8vIEl0IG9ubHkgZG9lcyBmaWxlIEkvTyArIGpzb24uTWFyc2hhbCDigJQgTkVWRVIgbmV0d29yayDigJQgYmVjYXVzZSBpbiB0aGUgZm9yZ2UKLy8gc2FuZGJveCBHbydzIGh0dHAgY2xpZW50IGNhbm5vdCByZWFjaCBnaXQtZmFjdG9yeSAobWVhc3VyZWQgb24gdGhlIHByLXJldmlldwovLyByZXBvcnQgc3RlcDsgY3VybCBjYW4sIEdvIGNhbm5vdCkuIGN1cmwgZG9lcyBldmVyeSBIVFRQIGNhbGw7IHRoaXMganVzdCBtYWtlcwovLyB0aGUgb25lIHBheWxvYWQgc2hlbGwgY2FuJ3QgcXVvdGUgY29ycmVjdGx5IChhIGJvZHkgd2l0aCBxdW90ZXMvbmV3bGluZXMpLgpwYWNrYWdlIG1haW4KCmltcG9ydCAoCgkiZW5jb2RpbmcvanNvbiIKCSJvcyIKKQoKZnVuYyBtYWluKCkgewoJLy8gYXJnczogPHRpdGxlLWZpbGU+IDxib2R5LWZpbGU+IDxzb3VyY2VfcmVmPiA8dGFyZ2V0X3JlZj4gPG91dC1maWxlPgoJaWYgbGVuKG9zLkFyZ3MpICE9IDYgewoJCW9zLlN0ZGVyci5Xcml0ZVN0cmluZygidXNhZ2U6IG1rYm9keSA8dGl0bGUtZmlsZT4gPGJvZHktZmlsZT4gPHNvdXJjZV9yZWY+IDx0YXJnZXRfcmVmPiA8b3V0LWZpbGU+XG4iKQoJCW9zLkV4aXQoMikKCX0KCXRpdGxlLCBfIDo9IG9zLlJlYWRGaWxlKG9zLkFyZ3NbMV0pCglib2R5LCBfIDo9IG9zLlJlYWRGaWxlKG9zLkFyZ3NbMl0pCglwYXlsb2FkIDo9IG1hcFtzdHJpbmddc3RyaW5newoJCSJ0aXRsZSI6ICAgICAgc3RyaW5nKHRpdGxlKSwKCQkiYm9keSI6ICAgICAgIHN0cmluZyhib2R5KSwKCQkic291cmNlX3JlZiI6IG9zLkFyZ3NbM10sCgkJInRhcmdldF9yZWYiOiBvcy5BcmdzWzRdLAoJfQoJYiwgZXJyIDo9IGpzb24uTWFyc2hhbChwYXlsb2FkKQoJaWYgZXJyICE9IG5pbCB7CgkJb3MuU3RkZXJyLldyaXRlU3RyaW5nKCJtYXJzaGFsOiAiICsgZXJyLkVycm9yKCkgKyAiXG4iKQoJCW9zLkV4aXQoMSkKCX0KCWlmIGVyciA6PSBvcy5Xcml0ZUZpbGUob3MuQXJnc1s1XSwgYiwgMG82MDApOyBlcnIgIT0gbmlsIHsKCQlvcy5TdGRlcnIuV3JpdGVTdHJpbmcoIndyaXRlOiAiICsgZXJyLkVycm9yKCkgKyAiXG4iKQoJCW9zLkV4aXQoMSkKCX0KfQo=' | base64 -d > /tmp/.openpr/mkbody.go; go run /tmp/.openpr/mkbody.go /tmp/.openpr/title.txt /tmp/.openpr/body.txt '${inputs.source_ref}' '${inputs.target_ref}' /tmp/.openpr/pr.json; CODE=$(curl -s -o /tmp/.openpr/resp.json --max-time 60 --retry 3 --retry-all-errors -w '%{http_code}' -X POST \"$GF/repos/$RID/pulls\" -H \"authorization: Bearer $SESS\" -H 'content-type: application/json' -d @/tmp/.openpr/pr.json); cat /tmp/.openpr/resp.json; echo; case \"$CODE\" in 2*) ;; *) echo \"create PR failed: $CODE\"; exit 1;; esac; PR_NUMBER=$(sed -E 's/.*\"number\":([0-9]+).*/\\1/' /tmp/.openpr/resp.json); AUTHOR=$(sed -E 's/.*\"author\":\"([^\"]+)\".*/\\1/' /tmp/.openpr/resp.json); export PR_NUMBER; echo \"opened PR #$PR_NUMBER author=$AUTHOR\"; echo \"PR_NUMBER=$PR_NUMBER\"",
+        "output_env": [
+          "PR_NUMBER"
+        ]
+      }
+    }
+  ],
+  "maps": [],
+  "routes": [],
+  "outputs": [
+    {
+      "name": "pr_number",
+      "value": "${steps.open.output.PR_NUMBER}"
+    }
+  ]
+}
