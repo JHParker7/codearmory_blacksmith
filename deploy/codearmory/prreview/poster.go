@@ -49,12 +49,20 @@ func main() {
 		}
 	}
 
+	// PR_COMMENT_AUTHOR, when set, attributes these automated comments to a bot display
+	// identity via git-factory's createPullComment author override (allowlisted
+	// server-side). Empty leaves authorship as the posting credential's user.
+	author := os.Getenv("PR_COMMENT_AUTHOR")
 	n := 0
 	for _, body := range bodies {
 		n++
-		payload, _ := json.Marshal(map[string]string{"body": body})
+		payload := map[string]string{"body": body}
+		if author != "" {
+			payload["author"] = author
+		}
+		payloadBytes, _ := json.Marshal(payload)
 		out := filepath.Join(outDir, fmt.Sprintf("comment-%d.json", n))
-		if err := os.WriteFile(out, payload, 0o644); err != nil {
+		if err := os.WriteFile(out, payloadBytes, 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "poster: write", out, err)
 			continue
 		}
