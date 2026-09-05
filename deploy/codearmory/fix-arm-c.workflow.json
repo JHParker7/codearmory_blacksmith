@@ -93,7 +93,7 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; BASE=$(git rev-parse \"origin/${inputs.ref}\"); mkdir -p .review; git diff \"$BASE\" HEAD -- '*_test.go' > .review/tests.diff; git diff \"$BASE\" HEAD -- '*.go' ':(exclude)*_test.go' > .review/code.diff; git add -A .review; git -c user.email=bs@ca -c user.name=blacksmith commit -q -m 'chore(review): audit diff snapshots' || true; echo \"tests.diff $(wc -l < .review/tests.diff) lines; code.diff $(wc -l < .review/code.diff) lines\"",
+        "run": "export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; BASE=$(git rev-parse \"origin/${inputs.ref}\"); mkdir -p .review; git diff \"$BASE\" HEAD -- '*_test.go' > .review/tests.diff; git diff \"$BASE\" HEAD -- '*.go' ':(exclude)*_test.go' > .review/code.diff; git add -A .review; git -c user.email=prepdiff@forge.cicd -c user.name=prepdiff commit -q -m 'chore(review): audit diff snapshots' || true; echo \"tests.diff $(wc -l < .review/tests.diff) lines; code.diff $(wc -l < .review/code.diff) lines\"",
         "volumes": [
           {
             "workflow_id": "${run_id}",
@@ -173,7 +173,7 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; REF='${inputs.ref}'; git rm -q -r --ignore-unmatch .review AUDIT.md STRENGTH.md >/dev/null 2>&1 || true; git -c user.email=bs@ca -c user.name=blacksmith commit -q -am 'chore: drop review artifacts' >/dev/null 2>&1 || true; BASE=$(git rev-parse \"origin/$REF\"); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no fix commits -- nothing to push'; exit 0; fi; git push \"$GIT_URL\" HEAD:refs/heads/$REF; echo \"pushed the fix to $REF\"",
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; REF='${inputs.ref}'; git rm -q -r --ignore-unmatch .review AUDIT.md STRENGTH.md >/dev/null 2>&1 || true; git -c user.email=publish@forge.cicd -c user.name=publish commit -q -am 'chore: drop review artifacts' >/dev/null 2>&1 || true; BASE=$(git rev-parse \"origin/$REF\"); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no fix commits -- nothing to push'; exit 0; fi; git push \"$GIT_URL\" HEAD:refs/heads/$REF; echo \"pushed the fix to $REF\"",
         "volumes": [
           {
             "workflow_id": "${run_id}",

@@ -347,7 +347,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 	// on top of the .git the workflow's clone step laid down. The next steps (a
 	// check, a scanner, the push) mount the same volume; publish reads these
 	// commits' types to name the branch by impact and pushes them as the dev PR.
-	changed, err := commitJournal(ctx, sb, journal)
+	changed, err := commitJournal(ctx, sb, journal, role)
 	if err != nil {
 		fail("commit the role's edits into the volume: " + firstLineOf(err.Error()))
 		return
@@ -491,10 +491,19 @@ type recordedWrite struct {
 // (chore < fix < feat) and just pushes what the stages committed. A read-only
 // role (a reviewer) journals nothing and commits nothing. Returns whether
 // anything was written back.
-func commitJournal(ctx context.Context, sb *forge.Sandbox, journal []recordedWrite) (bool, error) {
+func commitJournal(ctx context.Context, sb *forge.Sandbox, journal []recordedWrite, role string) (bool, error) {
 	if len(journal) == 0 {
 		return false, nil
 	}
+	// AUTHOR THE COMMITS AS THE AGENT ROLE, under an @blacksmith.agent identity. This is
+	// how a reader (and the PR view) tells an agent's commit from a human's — by the
+	// authored identity, not a parsed name. The local part is the role (fix-dev, req-dev,
+	// …); the .agent domain suffix marks it automated (forge CI/CD steps use .cicd).
+	author := "blacksmith"
+	if role != "" {
+		author = role
+	}
+	email := author + "@blacksmith.agent"
 	var b strings.Builder
 	b.WriteString("cd " + workspaceMount + "\n")
 	b.WriteString("export HOME=/tmp\n")
@@ -510,7 +519,7 @@ func commitJournal(ctx context.Context, sb *forge.Sandbox, journal []recordedWri
 		// A no-op write (identical content) stages nothing; `|| true` lets the
 		// replay continue past a commit git declines for lack of changes.
 		msg := ccNormalize(ccWithScope(w.message, ccScope(w.path)))
-		fmt.Fprintf(&b, "git add -A && git -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q -m %s || true\n", forge.Quote(msg))
+		fmt.Fprintf(&b, "git add -A && git -c user.email=%s -c user.name=%s commit -q -m %s || true\n", forge.Quote(email), forge.Quote(author), forge.Quote(msg))
 	}
 	// PACK a large replay, exactly as the check path does. A converging fix can make
 	// dozens of writes (measured: 33 over 20 turns, incl. whole-file test rewrites),

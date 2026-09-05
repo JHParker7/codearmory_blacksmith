@@ -178,6 +178,64 @@
           "number": "${inputs.number}"
         }
       }
+    },
+    {
+      "name": "refresh",
+      "action": "forge/run",
+      "timeout": 200,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; git fetch -q \"$GIT_URL\" \"${inputs.ref}\"; git reset --hard FETCH_HEAD; echo \"refreshed to $(git rev-parse --short HEAD)\"",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "summary",
+      "action": "blacksmith/agent",
+      "timeout": 1200,
+      "with": {
+        "role": "pr-summary",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "Summarise pull request #${inputs.number} and give a merge recommendation."
+      }
+    },
+    {
+      "name": "release",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "run": "set +e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false; git config --global --add safe.directory '*'; cd /workspace; NUM='${inputs.number}'; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; RID=$(curl -s --max-time 30 --retry 3 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); LASTTAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null); if [ -n \"$LASTTAG\" ]; then VBASE=${LASTTAG#v}; RANGE=\"$LASTTAG..HEAD\"; else VBASE=0.0.0; B=$(git merge-base origin/dev HEAD 2>/dev/null || git rev-list --max-parents=0 HEAD | tail -1); RANGE=\"$B..HEAD\"; fi; MAJ=${VBASE%%.*}; r=${VBASE#*.}; MIN=${r%%.*}; PAT=${r#*.}; S=$(git log $RANGE --format='%s'); if printf '%s' \"$S\" | grep -qE '^[a-z]+(\\(.+\\))?!:|BREAKING CHANGE'; then MAJ=$((MAJ+1)); MIN=0; PAT=0; elif printf '%s' \"$S\" | grep -qE '^feat(\\(.+\\))?:'; then MIN=$((MIN+1)); PAT=0; elif printf '%s' \"$S\" | grep -qE '^fix(\\(.+\\))?:'; then PAT=$((PAT+1)); fi; VER=\"v$MAJ.$MIN.$PAT\"; FEATS=$(git log $RANGE --format='- %s' | grep -E '^- feat' || true); FIXES=$(git log $RANGE --format='- %s' | grep -E '^- fix' || true); OTHER=$(git log $RANGE --format='- %s' | grep -vE '^- (feat|fix|chore\\(review\\)|chore\\(strength\\)|chore: drop review|docs\\(audit\\)|test\\(audit\\))' || true); { printf '## \ud83d\udce6 Release %s\\n\\n' \"$VER\";   [ -f SUMMARY.md ] && { cat SUMMARY.md; printf '\\n\\n'; };   printf '## Changelog\\n\\n';   [ -n \"$FEATS\" ] && printf '### Features\\n%s\\n\\n' \"$FEATS\";   [ -n \"$FIXES\" ] && printf '### Fixes\\n%s\\n\\n' \"$FIXES\";   [ -n \"$OTHER\" ] && printf '### Other\\n%s\\n' \"$OTHER\"; } > /tmp/rel.md; echo 'Ly8ganNvbndyYXA6IHJlYWRzIGEgYm9keSB0ZXh0IGZpbGUgYW5kIGVtaXRzIHsiYm9keSI6IDxqc29uLWVuY29kZWQgY29udGVudHM+fSB0bwovLyBzdGRvdXQuIFRoZSBjb21tZW50IGJvZHkgaXMgYnVpbHQgZnJvbSBnaXQgZGF0YSAoY29tbWl0IHNoYSArIHN1YmplY3QpIHdyaXR0ZW4gdG8KLy8gYSBmaWxlIOKAlCBzbyBpdCBpcyBzaGVsbC1zYWZlIChuZXZlciBpbnRlcnBvbGF0ZWQpIGFuZCBKU09OLXNhZmUgKGpzb24uTWFyc2hhbAovLyBlc2NhcGVzIHF1b3Rlcy9uZXdsaW5lcy9iYWNrdGlja3MpLiBjdXJsIHRoZW4gUE9TVHMgdGhlIHJlc3VsdCB0byBnaXQtZmFjdG9yeS4KcGFja2FnZSBtYWluCgppbXBvcnQgKAoJImVuY29kaW5nL2pzb24iCgkib3MiCikKCmZ1bmMgbWFpbigpIHsKCWIsIGVyciA6PSBvcy5SZWFkRmlsZShvcy5BcmdzWzFdKQoJaWYgZXJyICE9IG5pbCB7CgkJb3MuRXhpdCgxKQoJfQoJZW5jLCBfIDo9IGpzb24uTWFyc2hhbChtYXBbc3RyaW5nXXN0cmluZ3siYm9keSI6IHN0cmluZyhiKX0pCglvcy5TdGRvdXQuV3JpdGUoZW5jKQp9Cg==' | base64 -d > /tmp/main.go; mkdir -p /tmp/jw && mv /tmp/main.go /tmp/jw/ && cd /tmp/jw && printf 'module jw\\n\\ngo 1.25\\n' > go.mod && go run . /tmp/rel.md > /tmp/rel.json; cd /workspace; [ -n \"$RID\" ] && [ -n \"$NUM\" ] && { code=$(curl -s -o /tmp/resp --max-time 60 --retry 3 -w '%{http_code}' -X POST \"$GF/repos/$RID/pulls/$NUM/comments\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d @/tmp/rel.json || echo 000); echo \"release comment ($VER) -> $code\"; } || echo 'no RID/NUM -- skipping release comment'; exit 0",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          },
+          {
+            "workflow_id": "codearmory-plan-gocache",
+            "name": "gocache",
+            "mount_path": "/gocache"
+          }
+        ]
+      }
     }
   ],
   "maps": [
@@ -222,6 +280,18 @@
     {
       "from": "extract",
       "to": "fix"
+    },
+    {
+      "from": "fix",
+      "to": "refresh"
+    },
+    {
+      "from": "refresh",
+      "to": "summary"
+    },
+    {
+      "from": "summary",
+      "to": "release"
     }
   ]
 }
