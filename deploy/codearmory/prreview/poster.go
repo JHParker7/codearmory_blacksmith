@@ -28,11 +28,16 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "poster: usage: poster <scanDir> <outDir> [reviewFile...]")
+	if len(os.Args) < 5 {
+		fmt.Fprintln(os.Stderr, "poster: usage: poster <scanDir> <outDir> <findings.json|-> <outcomes.json|-> [reviewFile...]")
 		os.Exit(1)
 	}
 	scanDir, outDir := os.Args[1], os.Args[2]
+	// fixedByLoc: finding location -> was it fixed. Built by zipping findings.json (the
+	// order the fix map iterated) with the map's aggregated per-fix outcomes. Empty when
+	// either arg is "-" (then no Fixed column is added).
+	fixedByLoc := buildFixed(os.Args[3], os.Args[4])
+	reviewFiles := os.Args[5:]
 
 	// The scan comment: one block, three tables (or a clean bill of health each).
 	var b strings.Builder
@@ -42,10 +47,11 @@ func main() {
 	b.WriteString(vulnTable(filepath.Join(scanDir, "sca.txt")))
 
 	bodies := []string{b.String()}
-	// The reviewer findings files, posted verbatim (they are already markdown tables).
-	for _, f := range os.Args[3:] {
+	// The reviewer findings files. Each is a markdown table; inject a "Fixed?" column
+	// telling whether the auto-fixer resolved that finding (matched by location).
+	for _, f := range reviewFiles {
 		if body := strings.TrimSpace(readFile(f)); body != "" {
-			bodies = append(bodies, body)
+			bodies = append(bodies, injectFixedColumn(body, fixedByLoc))
 		}
 	}
 
@@ -56,13 +62,13 @@ func main() {
 	n := 0
 	for _, body := range bodies {
 		n++
-		payload := map[string]string{"body": body}
+		payloadMap := map[string]string{"body": body}
 		if author != "" {
-			payload["author"] = author
+			payloadMap["author"] = author
 		}
-		payloadBytes, _ := json.Marshal(payload)
+		payload, _ := json.Marshal(payloadMap)
 		out := filepath.Join(outDir, fmt.Sprintf("comment-%d.json", n))
-		if err := os.WriteFile(out, payloadBytes, 0o644); err != nil {
+		if err := os.WriteFile(out, payload, 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "poster: write", out, err)
 			continue
 		}
@@ -165,4 +171,89 @@ func cell(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", "")
 	return strings.TrimSpace(s)
+}
+
+// --- Fixed? column support ---
+
+// buildFixed zips findings.json (the order the fix map iterated) with the map's
+// aggregated per-fix outcomes, producing location -> fixed. Both args may be "-"
+// (no data -> empty map -> no Fixed column). Parsing is tolerant of the outcome
+// element shape (a bare 1, "1", or {"fixed":"1"}) — fixed iff it carries a 1.
+func buildFixed(findingsPath, outcomesPath string) map[string]bool {
+	m := map[string]bool{}
+	if findingsPath == "-" || outcomesPath == "-" {
+		return m
+	}
+	var findings []struct {
+		Severity string `json:"severity"`
+		Location string `json:"location"`
+	}
+	if err := json.Unmarshal([]byte(readFile(findingsPath)), &findings); err != nil {
+		return m
+	}
+	var outcomes []json.RawMessage
+	if err := json.Unmarshal([]byte(readFile(outcomesPath)), &outcomes); err != nil {
+		return m
+	}
+	for i, f := range findings {
+		if i >= len(outcomes) {
+			break
+		}
+		s := string(outcomes[i])
+		fixed := strings.Contains(s, "1") && !strings.Contains(s, `"fixed":"0"`) && s != "0" && s != `"0"`
+		m[normLoc(f.Location)] = fixed
+	}
+	return m
+}
+
+// normLoc normalises a finding location for matching between findings.json and a
+// review-table cell (which may wrap it in backticks or add parenthetical notes).
+func normLoc(s string) string {
+	s = strings.ReplaceAll(s, "`", "")
+	if i := strings.Index(s, " ("); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(strings.ToLower(s))
+}
+
+// injectFixedColumn adds a "Fixed?" column to each markdown table in a reviewer's
+// findings file: the header gets the column, the separator a "---", each data row a
+// ✅/⚠️ (or — when the location isn't in the fix set) by matching the row's Location
+// cell (2nd column) against fixedByLoc.
+func injectFixedColumn(md string, fixedByLoc map[string]bool) string {
+	if len(fixedByLoc) == 0 {
+		return md
+	}
+	var out []string
+	for _, ln := range strings.Split(md, "\n") {
+		t := strings.TrimSpace(ln)
+		if !strings.HasPrefix(t, "|") {
+			out = append(out, ln)
+			continue
+		}
+		cells := strings.Split(strings.Trim(t, "|"), "|")
+		for i := range cells {
+			cells[i] = strings.TrimSpace(cells[i])
+		}
+		low := strings.ToLower(strings.Join(cells, "|"))
+		switch {
+		case strings.Contains(low, "severity") && strings.Contains(low, "location"):
+			out = append(out, "| "+strings.Join(cells, " | ")+" | Fixed? |")
+		case strings.HasPrefix(cells[0], "---") || cells[0] == "":
+			out = append(out, "|"+strings.Repeat("---|", len(cells)+1))
+		default:
+			mark := "—"
+			if len(cells) >= 2 {
+				if f, ok := fixedByLoc[normLoc(cells[1])]; ok {
+					if f {
+						mark = "✅ fixed"
+					} else {
+						mark = "⚠️ open"
+					}
+				}
+			}
+			out = append(out, "| "+strings.Join(cells, " | ")+" | "+mark+" |")
+		}
+	}
+	return strings.Join(out, "\n")
 }
