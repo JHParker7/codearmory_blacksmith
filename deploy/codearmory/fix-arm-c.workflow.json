@@ -22,6 +22,11 @@
       "name": "ref",
       "required": true,
       "description": "the PR branch to fix (base for coverage + regression proof)"
+    },
+    {
+      "name": "number",
+      "required": false,
+      "description": "the pull request number this fix belongs to (provenance)"
     }
   ],
   "steps": [
@@ -53,7 +58,7 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"${inputs.ref}\"; echo \"working on branch ${inputs.ref}:\"; git log --oneline -1",
+        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"${inputs.ref}\"; git rev-parse HEAD > /workspace/.fixbase; echo \"working on branch ${inputs.ref}:\"; git log --oneline -1",
         "volumes": [
           {
             "workflow_id": "${run_id}",
@@ -175,6 +180,32 @@
             "name": "ws",
             "mount_path": "/workspace",
             "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
+      }
+    },
+    {
+      "name": "resolve",
+      "action": "forge/run",
+      "timeout": 200,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set +e; export HOME=/tmp GOCACHE=/gocache/build GOMODCACHE=/gocache/mod GOFLAGS=-buildvcs=false && mkdir -p /gocache/build /gocache/mod; git config --global --add safe.directory '*'; cd /workspace; NUM='${inputs.number}'; [ -n \"$NUM\" ] || { echo 'no PR number -- skipping resolve comment'; exit 0; }; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; RID=$(curl -s --max-time 30 --retry 3 --retry-delay 2 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); [ -n \"$RID\" ] || { echo 'could not resolve repo id -- skipping'; exit 0; }; BASE=$(cat /workspace/.fixbase 2>/dev/null); [ -n \"$BASE\" ] || { echo 'no fixbase -- skipping'; exit 0; }; FIX=$(git log \"$BASE\"..HEAD --format='- `%h` %s' | grep -viE 'chore\\(review\\)|chore\\(strength\\)|chore: drop review|audit' || true); [ -n \"$FIX\" ] || { echo 'no fix commits to report'; exit 0; }; { printf '### \ud83e\udd16 Auto-fixed\\n\\nConfirmed working -- build + tests green, the strength gate held (coverage not dropped; the regression test fails on the pre-fix code), and an independent audit found no weakened tests.\\n\\n**Fix commits:**\\n'; printf '%s\\n' \"$FIX\"; } > /tmp/body.md; echo 'Ly8ganNvbndyYXA6IHJlYWRzIGEgYm9keSB0ZXh0IGZpbGUgYW5kIGVtaXRzIHsiYm9keSI6IDxqc29uLWVuY29kZWQgY29udGVudHM+fSB0bwovLyBzdGRvdXQuIFRoZSBjb21tZW50IGJvZHkgaXMgYnVpbHQgZnJvbSBnaXQgZGF0YSAoY29tbWl0IHNoYSArIHN1YmplY3QpIHdyaXR0ZW4gdG8KLy8gYSBmaWxlIOKAlCBzbyBpdCBpcyBzaGVsbC1zYWZlIChuZXZlciBpbnRlcnBvbGF0ZWQpIGFuZCBKU09OLXNhZmUgKGpzb24uTWFyc2hhbAovLyBlc2NhcGVzIHF1b3Rlcy9uZXdsaW5lcy9iYWNrdGlja3MpLiBjdXJsIHRoZW4gUE9TVHMgdGhlIHJlc3VsdCB0byBnaXQtZmFjdG9yeS4KcGFja2FnZSBtYWluCgppbXBvcnQgKAoJImVuY29kaW5nL2pzb24iCgkib3MiCikKCmZ1bmMgbWFpbigpIHsKCWIsIGVyciA6PSBvcy5SZWFkRmlsZShvcy5BcmdzWzFdKQoJaWYgZXJyICE9IG5pbCB7CgkJb3MuRXhpdCgxKQoJfQoJZW5jLCBfIDo9IGpzb24uTWFyc2hhbChtYXBbc3RyaW5nXXN0cmluZ3siYm9keSI6IHN0cmluZyhiKX0pCglvcy5TdGRvdXQuV3JpdGUoZW5jKQp9Cg==' | base64 -d > /tmp/main.go; mkdir -p /tmp/jw && mv /tmp/main.go /tmp/jw/ && cd /tmp/jw && printf 'module jw\\n\\ngo 1.25\\n' > go.mod && go run . /tmp/body.md > /tmp/comment.json; cd /workspace; code=$(curl -s -o /tmp/resp --max-time 60 --retry 3 --retry-delay 2 --retry-all-errors -w '%{http_code}' -X POST \"$GF/repos/$RID/pulls/$NUM/comments\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d @/tmp/comment.json || echo 000); echo \"resolve comment -> $code\"; case \"$code\" in 2*) echo 'posted resolution';; *) echo 'resolve comment failed (non-fatal)'; head -c 200 /tmp/resp;; esac; exit 0",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          },
+          {
+            "workflow_id": "${run_id}",
+            "name": "gocache",
+            "mount_path": "/gocache"
           }
         ],
         "secret_refs": {

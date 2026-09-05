@@ -138,16 +138,15 @@
       }
     },
     {
-      "name": "gate",
+      "name": "extract",
       "action": "forge/run",
-      "timeout": 120,
+      "timeout": 300,
       "with": {
-        "image": "alpine:3.19",
-        "runner_class": "standard",
-        "run": "cd /workspace; issues=$(cat review-security.md review-quality.md 2>/dev/null); if printf '%s' \"$issues\" | grep -qiE '\\|[[:space:]]*(critical|high|medium)[[:space:]]*\\|'; then fix=true; else fix=false; fi; echo \"medium-or-above findings present: $fix\"",
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOFLAGS=-buildvcs=false; mkdir -p /gocache/build /gocache/mod /tmp/ext; export GOCACHE=/gocache/build GOMODCACHE=/gocache/mod; echo 'Ly8gZmluZGluZ3MgZXh0cmFjdG9yOiByZWFkcyB0aGUgcmV2aWV3ZXJzJyBtYXJrZG93biB0YWJsZXMgKHJldmlldy1zZWN1cml0eS5tZCwKLy8gcmV2aWV3LXF1YWxpdHkubWQpIGFuZCBlbWl0cyBhIEpTT04gYXJyYXkgb2YgZmluZGluZ3MgdG8gPG91dD4uIEVhY2ggZmluZGluZwovLyBiZWNvbWVzIG9uZSBmaXgtYXJtLWMgdGFzay4gUnVuOiBleHRyYWN0b3IgPHNlY3VyaXR5Lm1kPiA8cXVhbGl0eS5tZD4gPG91dC5qc29uPgovLwovLyBXaHkgYSBHbyBwcm9ncmFtIGFuZCBub3Qgc2hlbGw6IHRoZSBmaW5kaW5nIGNlbGxzIGNvbnRhaW4gYXJiaXRyYXJ5IHByb3NlLAovLyBwaXBlcyBhbmQgcXVvdGVzOyBvbmx5IHJlYWwgSlNPTiBlbmNvZGluZyBzdXJ2aXZlcyBiZWluZyBmZWQgdG8gYSB3b3JrZmxvdyBtYXAKLy8gYXMgdmFsdWVzX2Zyb20uIFRoZSB0YWJsZSBzaGFwZSBpcyBmaXhlZCBieSB0aGUgcmV2aWV3ZXIgcHJvbXB0OgovLyB8IFNldmVyaXR5IHwgTG9jYXRpb24gfCBJc3N1ZSB8IFJlY29tbWVuZGF0aW9uIHwKcGFja2FnZSBtYWluCgppbXBvcnQgKAoJImVuY29kaW5nL2pzb24iCgkib3MiCgkic3RyaW5ncyIKKQoKdHlwZSBGaW5kaW5nIHN0cnVjdCB7CglTZXZlcml0eSBzdHJpbmcgYGpzb246InNldmVyaXR5ImAKCUxvY2F0aW9uIHN0cmluZyBganNvbjoibG9jYXRpb24iYAoJVGFzayAgICAgc3RyaW5nIGBqc29uOiJ0YXNrImAKfQoKZnVuYyBtYWluKCkgewoJdmFyIG91dCBbXUZpbmRpbmcKCWZvciBfLCBwYXRoIDo9IHJhbmdlIG9zLkFyZ3NbMSA6IGxlbihvcy5BcmdzKS0xXSB7CgkJYiwgZXJyIDo9IG9zLlJlYWRGaWxlKHBhdGgpCgkJaWYgZXJyICE9IG5pbCB7CgkJCWNvbnRpbnVlCgkJfQoJCWZvciBfLCBsaW5lIDo9IHJhbmdlIHN0cmluZ3MuU3BsaXQoc3RyaW5nKGIpLCAiXG4iKSB7CgkJCWxpbmUgPSBzdHJpbmdzLlRyaW1TcGFjZShsaW5lKQoJCQlpZiAhc3RyaW5ncy5IYXNQcmVmaXgobGluZSwgInwiKSB7CgkJCQljb250aW51ZQoJCQl9CgkJCS8vIFNwbGl0IHRoZSByb3cgaW50byBjZWxscywgZHJvcHBpbmcgdGhlIGxlYWRpbmcvdHJhaWxpbmcgZW1wdGllcy4KCQkJY2VsbHMgOj0gc3RyaW5ncy5TcGxpdChzdHJpbmdzLlRyaW0obGluZSwgInwiKSwgInwiKQoJCQlpZiBsZW4oY2VsbHMpIDwgNCB7CgkJCQljb250aW51ZQoJCQl9CgkJCWZvciBpIDo9IHJhbmdlIGNlbGxzIHsKCQkJCWNlbGxzW2ldID0gc3RyaW5ncy5UcmltU3BhY2UoY2VsbHNbaV0pCgkJCX0KCQkJc2V2IDo9IHN0cmluZ3MuVG9Mb3dlcihjZWxsc1swXSkKCQkJLy8gU2tpcCBoZWFkZXIgYW5kIHNlcGFyYXRvciByb3dzOyBrZWVwIG9ubHkgcmVhbCBzZXZlcml0aWVzLgoJCQlpZiBzZXYgIT0gImxvdyIgJiYgc2V2ICE9ICJtZWRpdW0iICYmIHNldiAhPSAiaGlnaCIgJiYgc2V2ICE9ICJjcml0aWNhbCIgewoJCQkJY29udGludWUKCQkJfQoJCQlsb2MsIGlzc3VlLCByZWMgOj0gY2VsbHNbMV0sIGNlbGxzWzJdLCBjZWxsc1szXQoJCQl0YXNrIDo9ICJGaXggdGhpcyByZXZpZXcgZmluZGluZyBpbiB0aGUgY29kZSAoYXQgIiArIGxvYyArICIpLiBJc3N1ZTogIiArIGlzc3VlICsgIi4gUmVjb21tZW5kYXRpb246ICIgKyByZWMKCQkJb3V0ID0gYXBwZW5kKG91dCwgRmluZGluZ3tTZXZlcml0eTogc2V2LCBMb2NhdGlvbjogbG9jLCBUYXNrOiB0YXNrfSkKCQl9Cgl9CglpZiBvdXQgPT0gbmlsIHsKCQlvdXQgPSBbXUZpbmRpbmd7fQoJfQoJLy8gVGhlIGZ1bGwgb2JqZWN0cyBnbyB0byB0aGUgcmVjb3JkIGZpbGUgKGZpbmRpbmdzLmpzb24sIGNvbW1pdHRlZCkgZm9yIHRoZSBQUgoJLy8gdmlldydzIGF1dG8tZml4ZWQgbWFya2Vycy4gU1RET1VUIGlzIHRoZSBtYXAncyB2YWx1ZXNfZnJvbTogYSBKU09OIGFycmF5IG9mIHRoZQoJLy8gdGFzayBTVFJJTkdTIChwYXJzZU1hdHJpeExpc3Qgd2FudHMgc2NhbGFycywgYW5kIGEgc2VxdWVudGlhbCBtYXAgaXRlcmF0ZXMgdGhlc2UKCS8vIG9uZSBmaXgtYXJtLWMgcGVyIGZpbmRpbmcpLgoJZnVsbCwgXyA6PSBqc29uLk1hcnNoYWwob3V0KQoJb3MuV3JpdGVGaWxlKG9zLkFyZ3NbbGVuKG9zLkFyZ3MpLTFdLCBmdWxsLCAwNjQ0KQoJdGFza3MgOj0gbWFrZShbXXN0cmluZywgbGVuKG91dCkpCglmb3IgaSwgZiA6PSByYW5nZSBvdXQgewoJCXRhc2tzW2ldID0gZi5UYXNrCgl9CglhcnIsIF8gOj0ganNvbi5NYXJzaGFsKHRhc2tzKQoJb3MuU3Rkb3V0LldyaXRlKGFycikKfQo=' | base64 -d > /tmp/ext/main.go; cd /tmp/ext && printf 'module ext\\n\\ngo 1.25\\n' > go.mod; tasks=$(go run . /workspace/review-security.md /workspace/review-quality.md /workspace/findings.json); export tasks; echo \"tasks=$tasks\"",
         "output_env": [
-          "fix",
-          "issues"
+          "tasks"
         ],
         "volumes": [
           {
@@ -155,6 +154,11 @@
             "name": "ws",
             "mount_path": "/workspace",
             "workdir": true
+          },
+          {
+            "workflow_id": "codearmory-plan-gocache",
+            "name": "gocache",
+            "mount_path": "/gocache"
           }
         ]
       }
@@ -163,15 +167,27 @@
       "name": "fix",
       "action": "workflows/trigger",
       "timeout": 3600,
+      "map_id": "fixmap",
       "with": {
-        "pipeline": "b98d5c41-1e98-4253-b295-30bf5338fc62",
+        "pipeline": "0a01968e-0424-4963-ad1e-98b002404884",
         "inputs": {
-          "task": "Fix these review findings on this pull request. The tables below name the file, the line, the severity and the change to make -- address the medium, high and critical ones; leave the low ones. Update the plan, add or update the tests that pin each fix, and make them pass:\\n\\n${steps.gate.output.issues}",
+          "task": "${map.finding}",
           "namespace": "${inputs.namespace}",
           "repo": "${inputs.repo}",
-          "ref": "${inputs.ref}"
+          "ref": "${inputs.ref}",
+          "number": "${inputs.number}"
         }
       }
+    }
+  ],
+  "maps": [
+    {
+      "id": "fixmap",
+      "var": "finding",
+      "values_from": "${steps.extract.output.tasks}",
+      "sequential": true,
+      "allow_empty": true,
+      "failure_tolerance": 100
     }
   ],
   "routes": [
@@ -201,12 +217,11 @@
     },
     {
       "from": "report",
-      "to": "gate"
+      "to": "extract"
     },
     {
-      "from": "gate",
-      "to": "fix",
-      "when": "steps.gate.json.fix == 'true'"
+      "from": "extract",
+      "to": "fix"
     }
   ]
 }
