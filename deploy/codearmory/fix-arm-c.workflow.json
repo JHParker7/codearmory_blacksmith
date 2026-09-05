@@ -1,5 +1,5 @@
 {
-  "name": "fix-arm-c",
+  "name": "autofix",
   "timeout_secs": 6000,
   "description": "Option C fix pipeline (v3): fix-dev writes the fix AND the tests, gated by its OWN strong check -- green + coverage-not-dropped + no test deleted/skipped/reduced + new/changed behaviour tests RED on the pre-fix source -- which now runs in a git worktree of the base, so a failure feeds straight back into the agent loop. An independent test-auditor then files a PASS/FAIL on test weakening the mechanical check can't see. Per-run cache. Inputs {task, namespace, repo, ref}.",
   "inputs": [
@@ -77,7 +77,7 @@
       "action": "blacksmith/agent",
       "timeout": 3000,
       "with": {
-        "role": "fix-dev",
+        "role": "fixer",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "${inputs.task}",

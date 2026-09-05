@@ -1,5 +1,5 @@
 {
-  "name": "plan-arm",
+  "name": "build",
   "timeout_secs": 5400,
   "description": "The build pipeline: test-writer -> dev -> publish (the architect/PLAN.md stage is GONE \u2014 req-test works from the request directly). req-test (reasoning OFF) writes the FAILING tests from the request; req-dev (reasoning ON) reasons the implementation to green. Works GREENFIELD or on an EXISTING branch: a forge git CLONE brings the repo into the shared volume; with `ref` set the pipeline extends/fixes that branch (test author adds RED tests, dev makes them pass) and publish pushes the new commits back onto `ref` so the PR updates in place; with `ref` empty it builds greenfield and publish opens a git-factory PR to dev. Gates live in the roles (req-test OwnCheck = RED, req-dev check = green). Scanning + review are the pr-review workflow's job. Inputs {task, namespace, repo, ref?}.",
   "inputs": [
@@ -72,7 +72,7 @@
       "action": "blacksmith/agent",
       "timeout": 1800,
       "with": {
-        "role": "req-test",
+        "role": "test-writer",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "${inputs.task}",
@@ -86,7 +86,7 @@
       "action": "blacksmith/agent",
       "timeout": 2400,
       "with": {
-        "role": "req-dev",
+        "role": "developer",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "${inputs.task}",
