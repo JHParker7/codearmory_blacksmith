@@ -49,11 +49,15 @@ RUN npm install -g --silent @qwen-code/qwen-code@0.21.13
 # (HTML, pure JS — no headless browser). The archify_diagram tool runs
 # `node /opt/archify/bin/archify.mjs deliver <type> ir.json out.html` in the
 # sandbox, so the architect emits an IR and the diagram is compiled
-# deterministically rather than hand-drawn as ASCII. Cloned + installed here (not
-# fetched per run) for the same reason goimports and the scanners are — a per-run
-# fetch through the sandbox proxy is the degradation this whole image guards against.
-RUN git clone --depth 1 https://github.com/tt-a1i/archify /opt/archify \
-    && cd /opt/archify && (npm install --silent --omit=dev || npm install --silent)
+# deterministically rather than hand-drawn as ASCII.
+#
+# VENDORED, not cloned at build time: archify has ZERO npm dependencies (pure JS,
+# node >=18, which is already installed above), so the whole tool is just its
+# source. It is copied from agentimg/archify/ (the tt-a1i/archify repo's inner
+# archify/ code dir) rather than git-cloned — a clone in the build sandbox failed
+# with no network, and baking it in matches this image's rule that nothing the
+# pipeline needs is fetched per run.
+COPY archify /opt/archify
 
 # THE SECURITY SCANNERS, pinned like everything else. gosec is the SAST pass
 # and govulncheck the SCA pass; both run in the sandbox between the developer
