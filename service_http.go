@@ -396,16 +396,16 @@ func agentPermissions(project string) []gatekeeper.Permission {
 		{Service: "tickets", Action: "createTicket", Resource: "tickets/tickets"},
 		{Service: "tickets", Action: "createComment", Resource: "tickets/tickets/*"},
 	}
-	// The architect writes the project's wiki via the wiki_page tool. The wiki authorizes
-	// on the OWNER-LED resource {project}/wiki/pages/{id}, so the scoped role must carry
-	// that exact shape (a bare wiki/pages grant would never match — the same owner-led vs
-	// service-led mismatch that first bit the git-factory native actions). Attenuated
-	// against the user, who holds these on their own namespace via the wiki default grants.
+	// The architect writes the project's wiki via the wiki_page tool. The wiki now
+	// authorizes on the reserved project namespace "project/<slug>/wiki/pages[/id]"
+	// (the same top-level scope every service uses), so the scoped role carries that
+	// shape. Attenuated against the user: a project MEMBER holds "project/<slug>/*"
+	// via the project's tier role, which covers these — no per-user wiki grant needed.
 	if project != "" {
 		perms = append(perms,
-			gatekeeper.Permission{Service: "wiki", Action: "writePage", Resource: project + "/wiki/pages/*"},
-			gatekeeper.Permission{Service: "wiki", Action: "getPage", Resource: project + "/wiki/pages/*"},
-			gatekeeper.Permission{Service: "wiki", Action: "listPage", Resource: project + "/wiki/pages"},
+			gatekeeper.Permission{Service: "wiki", Action: "writePage", Resource: "project/" + project + "/wiki/pages/*"},
+			gatekeeper.Permission{Service: "wiki", Action: "getPage", Resource: "project/" + project + "/wiki/pages/*"},
+			gatekeeper.Permission{Service: "wiki", Action: "listPage", Resource: "project/" + project + "/wiki/pages"},
 		)
 	}
 	return perms
