@@ -237,7 +237,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 	agentBearer := who.bearer
 	var roleID, sessionID string
 	if a.gk != nil && who.sub.UserID != "" {
-		rid, err := a.gk.MintRole(ctx, id, who.sub.UserID, who.sub.OrgID, agentPermissions())
+		rid, err := a.gk.MintRole(ctx, id, who.sub.UserID, who.sub.OrgID, agentPermissions(req.Project))
 		if err != nil {
 			fail("mint the agent's scoped role: " + firstLineOf(err.Error()))
 			return
@@ -371,8 +371,8 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 // agentPermissions is the set an agent run requests. gatekeeper intersects it
 // with the user's own grants, so this is a ceiling, not a grant: the agent may
 // file findings and run in its sandbox, and only against what the user can.
-func agentPermissions() []gatekeeper.Permission {
-	return []gatekeeper.Permission{
+func agentPermissions(project string) []gatekeeper.Permission {
+	perms := []gatekeeper.Permission{
 		// The role runs its ENTIRE tool loop inside ONE forge lease: acquire it
 		// (createLease), wait for its sandbox to boot (getLease), run every command
 		// in it — the seed, the edits, each check — as executions bound to the lease
@@ -396,6 +396,19 @@ func agentPermissions() []gatekeeper.Permission {
 		{Service: "tickets", Action: "createTicket", Resource: "tickets/tickets"},
 		{Service: "tickets", Action: "createComment", Resource: "tickets/tickets/*"},
 	}
+	// The architect writes the project's wiki via the wiki_page tool. The wiki authorizes
+	// on the OWNER-LED resource {project}/wiki/pages/{id}, so the scoped role must carry
+	// that exact shape (a bare wiki/pages grant would never match — the same owner-led vs
+	// service-led mismatch that first bit the git-factory native actions). Attenuated
+	// against the user, who holds these on their own namespace via the wiki default grants.
+	if project != "" {
+		perms = append(perms,
+			gatekeeper.Permission{Service: "wiki", Action: "writePage", Resource: project + "/wiki/pages/*"},
+			gatekeeper.Permission{Service: "wiki", Action: "getPage", Resource: project + "/wiki/pages/*"},
+			gatekeeper.Permission{Service: "wiki", Action: "listPage", Resource: project + "/wiki/pages"},
+		)
+	}
+	return perms
 }
 
 // ticketFiler files a finding on the board AS THE AGENT'S IDENTITY, so a finding
