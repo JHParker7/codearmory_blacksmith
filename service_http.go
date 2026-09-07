@@ -63,6 +63,7 @@ type actionRequest struct {
 	Volume     string `json:"volume"`      // the shared volume's logical name
 	Task       string `json:"task"`        // the request, the finding, the thing to do
 	Check      string `json:"check"`       // optional check-command override for this role
+	Project    string `json:"project"`     // the wiki project the architect writes to (wiki_page tool)
 	// An optional PERSISTENT Go-cache volume, mounted alongside the workspace at
 	// /gocache with GOCACHE/GOMODCACHE pointed into it. The role's per-iteration
 	// `go build`/`go test` check reads a warm build+module cache instead of
@@ -296,12 +297,12 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 	// impact and just pushes what the stages committed.
 	var journal []recordedWrite
 	maker := agents.Creator{
-		Gateway:    a.gw,
+		Gateway: a.gw,
 		// RepoDir points the check at the mounted volume's git, so a role's check runs in
 		// a worktree of the pre-stage base (origin/<ref> resolvable) yet sees only the
 		// agent's files — the base a coverage-vs-base or regression-proof check needs.
-		Sandbox:    tools.ForgeSandbox{Sandbox: sb, Env: sandboxEnv, RepoDir: workspaceMount},
-		Check:      a.cfg.Repo.TestCommand,
+		Sandbox: tools.ForgeSandbox{Sandbox: sb, Env: sandboxEnv, RepoDir: workspaceMount},
+		Check:   a.cfg.Repo.TestCommand,
 		// STREAM THE TRACE LIVE. Appending to tr is not enough — the running job's
 		// Stdout is what a poll returns, and it was only written on finish, so the run
 		// view showed "running" with no output for the whole stage. Push the trace into
@@ -314,6 +315,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 			a.jobs.finish(id, func(r *actionResult) { r.Stdout = tr.String() })
 		},
 		FileTicket: a.ticketFiler(agentBearer),
+		WritePage:  a.wikiWriter(agentBearer, req.Project),
 		MergeFix:   func(string) (string, error) { approved = true; return "approved", nil },
 		OnWrite: func(path, content string, deleted bool, message string) {
 			journal = append(journal, recordedWrite{path: path, content: content, deleted: deleted, message: message})
@@ -419,6 +421,38 @@ func (a *actionServer) ticketFiler(bearer string) func(kind, title, body, severi
 			return "", err
 		}
 		return t.ID, nil
+	}
+}
+
+// wikiWriter builds the architect's WritePage sink: a closure that PUTs one page to the
+// wiki service for `project`, authenticating as the agent's own run token (so the wiki's
+// own writePage permission gates it). Nil when no wiki is configured or no project was
+// given — the tool then tells the model it is not wired rather than pretending.
+func (a *actionServer) wikiWriter(bearer, project string) func(id, pageType, stack, format, title, content string) (string, error) {
+	if a.cfg.WikiURL == "" || project == "" || bearer == "" {
+		return nil
+	}
+	base := strings.TrimRight(a.cfg.WikiURL, "/")
+	return func(id, pageType, stack, format, title, content string) (string, error) {
+		body, _ := json.Marshal(map[string]string{
+			"type": pageType, "stack": stack, "format": format, "title": title, "content": content,
+		})
+		req, err := http.NewRequest(http.MethodPut, base+"/projects/"+project+"/pages/"+id, strings.NewReader(string(body)))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+			return "", fmt.Errorf("wiki %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		}
+		return "published to " + project, nil
 	}
 }
 

@@ -154,6 +154,7 @@ func Load() (Config, error) {
 		ForgePassword: e.secret("AGENTS_FORGE_PASSWORD"),
 
 		TicketsURL: e.str("AGENTS_TICKETS_URL", ""),
+		WikiURL:    e.str("AGENTS_WIKI_URL", ""),
 		BoardID:    e.str("AGENTS_BOARD_ID", ""),
 
 		GatekeeperURL: e.str("AGENTS_GATEKEEPER_URL", ""),

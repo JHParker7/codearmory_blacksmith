@@ -25,6 +25,7 @@ const (
 	RunCommand  = "run_command"
 	FileTicket  = "file_ticket"
 	MergeFix    = "merge_fix"
+	WikiPage    = "wiki_page"
 )
 
 // Limits on what one call may carry.
@@ -90,6 +91,13 @@ type Set struct {
 	// TicketKind labels every finding this stage files. Empty for stages that
 	// file none.
 	TicketKind string
+
+	// WritePage is the architect's tool sink: it creates or updates ONE page of the
+	// project's wiki (the source of truth), returning a confirmation. HOST-SIDE like
+	// FileTicket — the wiki lives behind the gatekeeper, not in the tree — so an
+	// architect given only read tools + this one CANNOT touch code: it has no way to
+	// write a file at all, only to publish a wiki page. Nil means no wiki is wired.
+	WritePage func(id, pageType, stack, format, title, content string) (string, error)
 
 	// MergeFix is the review agent's APPROVAL: it merges the fix under review
 	// into the integration branch and returns what happened. Called at most
@@ -262,6 +270,21 @@ func (s *Set) Definitions() []model.Tool {
 			Description: "Run this stage's check in the sandbox and return its output: " +
 				"exit status, stdout and stderr. Takes no arguments — the command is fixed.",
 			Parameters: object(nil),
+		},
+		WikiPage: {
+			Name: WikiPage,
+			Description: "Create or update ONE page of the project's wiki — the source of truth the " +
+				"developers and reviewers read. Call it once per page (e.g. overview, architecture, an " +
+				"API contract, data model, decisions). This is your ONLY way to produce output; you " +
+				"cannot write files. Send the full page content each time — it replaces the page.",
+			Parameters: object(map[string]any{
+				"id":      map[string]any{"type": "string", "maxLength": MaxPathChars, "description": `Stable slug, e.g. "contract-api" or "overview".`},
+				"type":    map[string]any{"type": "string", "enum": []string{"overview", "architecture", "contract", "model", "service", "component", "decision", "ticket"}, "description": "The page kind."},
+				"stack":   map[string]any{"type": "string", "enum": []string{"shared", "frontend", "backend", "infra"}, "description": "Who owns/consumes it."},
+				"format":  map[string]any{"type": "string", "enum": []string{"md", "openapi", "sql", "ts", "yaml"}, "description": "Content format; openapi for an API contract, md otherwise."},
+				"title":   map[string]any{"type": "string", "maxLength": MaxSummaryChars, "description": "Human-readable title."},
+				"content": map[string]any{"type": "string", "description": "The full page content."},
+			}, "id", "type", "title", "content"),
 		},
 	}
 
@@ -458,6 +481,30 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 				". The fix stays on its branch for a person.", nil
 		}
 		return "Approved and merged to dev: " + out, nil
+
+	case WikiPage:
+		var a struct {
+			ID      string `json:"id"`
+			Type    string `json:"type"`
+			Stack   string `json:"stack"`
+			Format  string `json:"format"`
+			Title   string `json:"title"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(args), &a); err != nil {
+			return badArgs(name, err), nil
+		}
+		if s.WritePage == nil {
+			return "Error: no wiki is wired at this stage, so a page cannot be written.", nil
+		}
+		if strings.TrimSpace(a.ID) == "" || strings.TrimSpace(a.Title) == "" || strings.TrimSpace(a.Content) == "" {
+			return "Error: a wiki page needs an id, a title, and content.", nil
+		}
+		res, err := s.WritePage(a.ID, a.Type, a.Stack, a.Format, a.Title, a.Content)
+		if err != nil {
+			return "Error: the wiki refused the page: " + err.Error(), nil
+		}
+		return "Wrote wiki page " + a.ID + ": " + res, nil
 
 	case RunCommand:
 		if s.Sandbox == nil {

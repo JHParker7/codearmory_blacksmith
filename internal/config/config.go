@@ -259,6 +259,10 @@ type Config struct {
 	// claim protocol the single ordering authority it needs.
 	TicketsURL string
 
+	// WikiURL, when set, is the project wiki service the architect's wiki_page tool
+	// writes to (via conductor/in-cluster DNS). Empty disables the tool.
+	WikiURL string
+
 	// GatekeeperURL and ServiceKey are how the ACTION SERVICE authenticates as a
 	// CodeArmory service: GatekeeperURL is gatekeeper's base URL, ServiceKey is
 	// blacksmith's east-west key (rotated), used to validate a caller's bearer and

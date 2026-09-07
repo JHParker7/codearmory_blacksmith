@@ -64,6 +64,11 @@ type Creator struct {
 
 	// MergeFix merges an approved fix into dev, for the review stage.
 	MergeFix func(reason string) (string, error)
+
+	// WritePage publishes one wiki page, for the architect stage. Host-side (the wiki
+	// is behind the gatekeeper), so an architect wired with this and only read tools
+	// produces its whole output through it and never writes a file.
+	WritePage func(id, pageType, stack, format, title, content string) (string, error)
 }
 
 // Options is what makes one stage different from another.
@@ -214,6 +219,7 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			FileTicket: c.FileTicket,
 			TicketKind: o.TicketKind,
 			MergeFix:   c.MergeFix,
+			WritePage:  c.WritePage,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,
