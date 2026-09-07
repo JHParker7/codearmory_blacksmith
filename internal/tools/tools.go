@@ -17,15 +17,16 @@ import (
 // sends back, and a typo in a string literal on one side of that comparison is a
 // tool that silently never fires.
 const (
-	ReadFiles   = "read_files"
-	WriteFile   = "write_file"
-	UndoEdit    = "undo_edit"
-	ListFiles   = "list_files"
-	SearchFiles = "search_files"
-	RunCommand  = "run_command"
-	FileTicket  = "file_ticket"
-	MergeFix    = "merge_fix"
-	WikiPage    = "wiki_page"
+	ReadFiles      = "read_files"
+	WriteFile      = "write_file"
+	UndoEdit       = "undo_edit"
+	ListFiles      = "list_files"
+	SearchFiles    = "search_files"
+	RunCommand     = "run_command"
+	FileTicket     = "file_ticket"
+	MergeFix       = "merge_fix"
+	WikiPage       = "wiki_page"
+	ArchifyDiagram = "archify_diagram"
 )
 
 // Limits on what one call may carry.
@@ -286,6 +287,21 @@ func (s *Set) Definitions() []model.Tool {
 				"content": map[string]any{"type": "string", "description": "The full page content."},
 			}, "id", "type", "title", "content"),
 		},
+		ArchifyDiagram: {
+			Name: ArchifyDiagram,
+			Description: "Render an architecture DIAGRAM into the wiki. Give a typed JSON IR (archify's " +
+				"format) and it is compiled deterministically into a diagram and published as a wiki " +
+				"page — do NOT draw ASCII art. The IR has {\"meta\":{...},\"diagram\":{\"type\":<kind>," +
+				"\"title\":...,\"nodes\":[{\"id\",\"label\"}...],\"edges\":[{\"from\",\"to\"}...]}}. If the " +
+				"IR is invalid the tool returns the diagnostics so you can fix it and call again.",
+			Parameters: object(map[string]any{
+				"id":    map[string]any{"type": "string", "maxLength": MaxPathChars, "description": `Stable slug for the diagram page, e.g. "system-architecture".`},
+				"type":  map[string]any{"type": "string", "enum": []string{"architecture", "workflow", "sequence", "data-flow", "lifecycle"}, "description": "The diagram kind (must match the IR's diagram.type)."},
+				"stack": map[string]any{"type": "string", "enum": []string{"shared", "frontend", "backend", "infra"}, "description": "Who owns/consumes it."},
+				"title": map[string]any{"type": "string", "maxLength": MaxSummaryChars, "description": "Human-readable title."},
+				"ir":    map[string]any{"type": "string", "description": "The archify typed JSON IR, as a JSON string."},
+			}, "id", "type", "title", "ir"),
+		},
 	}
 
 	names := s.Names
@@ -506,6 +522,54 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 		}
 		return "Wrote wiki page " + a.ID + ": " + res, nil
 
+	case ArchifyDiagram:
+		var a struct {
+			ID    string `json:"id"`
+			Type  string `json:"type"`
+			Stack string `json:"stack"`
+			Title string `json:"title"`
+			IR    string `json:"ir"`
+		}
+		if err := json.Unmarshal([]byte(args), &a); err != nil {
+			return badArgs(name, err), nil
+		}
+		if s.Sandbox == nil {
+			return "Error: no sandbox is attached at this stage, so the diagram cannot be rendered.", nil
+		}
+		if s.WritePage == nil {
+			return "Error: no wiki is wired at this stage, so the diagram cannot be published.", nil
+		}
+		if strings.TrimSpace(a.ID) == "" || strings.TrimSpace(a.Title) == "" || strings.TrimSpace(a.IR) == "" {
+			return "Error: a diagram needs an id, a title, and the IR.", nil
+		}
+		dtype := archifyType(a.Type)
+		// Render the IR in the sandbox (archify is baked into the runner image). The
+		// IR is the only file the render needs, so seed it alone into a fresh tree.
+		// deliver writes a self-contained HTML; we cat it back over stdout. On failure
+		// the "|| { … }" branch prints a marker plus the validate diagnostics so the
+		// model can repair the IR — the same expected-red/repair loop the rest of the
+		// pipeline uses.
+		cmd := "node /opt/archify/bin/archify.mjs deliver " + dtype +
+			" archify_ir.json archify_out.html 2>archify_err.txt && cat archify_out.html || " +
+			"{ echo '__ARCHIFY_FAIL__'; cat archify_err.txt 2>/dev/null; node /opt/archify/bin/archify.mjs validate " + dtype + " archify_ir.json --json 2>/dev/null; }"
+		out, err := s.Sandbox.Run(ctx, map[string]string{"archify_ir.json": a.IR}, cmd)
+		if err != nil {
+			return "", fmt.Errorf("rendering diagram %q: %w", a.ID, err)
+		}
+		if strings.Contains(out.Stdout, "__ARCHIFY_FAIL__") {
+			return "Error: archify rejected the IR — fix it and call archify_diagram again:\n" +
+				strings.TrimSpace(strings.ReplaceAll(out.Stdout, "__ARCHIFY_FAIL__", "")), nil
+		}
+		html := strings.TrimSpace(out.Stdout)
+		if html == "" {
+			return "Error: archify produced no output; check the IR shape and retry.", nil
+		}
+		res, err := s.WritePage(a.ID, "component", a.Stack, "html", a.Title, html)
+		if err != nil {
+			return "Error: the wiki refused the diagram page: " + err.Error(), nil
+		}
+		return "Rendered diagram " + a.ID + " (" + dtype + ") and published it: " + res, nil
+
 	case RunCommand:
 		if s.Sandbox == nil {
 			return "Error: no sandbox is attached at this stage, so nothing can be run.", nil
@@ -520,6 +584,16 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 		return fmt.Sprintf("$ %s\nexit %d\n%s%s", s.Check, out.ExitCode, out.Stdout, out.Stderr), nil
 	}
 	return "", fmt.Errorf("unhandled tool %q", name)
+}
+
+// archifyType clamps the diagram kind to one archify renders, defaulting to
+// architecture — a bad enum from the model must not reach the CLI as an argument.
+func archifyType(t string) string {
+	switch t {
+	case "architecture", "workflow", "sequence", "data-flow", "lifecycle":
+		return t
+	}
+	return "architecture"
 }
 
 func (s *Set) readFiles(paths []string) string {

@@ -45,6 +45,16 @@ RUN go install golang.org/x/tools/cmd/goimports@v0.28.0
 # AGENTS_DEV_ENGINE=qwen-code. Pinned to the version the working image carried.
 RUN npm install -g --silent @qwen-code/qwen-code@0.21.13
 
+# ARCHIFY renders the architect's typed JSON IR into a self-contained diagram
+# (HTML, pure JS — no headless browser). The archify_diagram tool runs
+# `node /opt/archify/bin/archify.mjs deliver <type> ir.json out.html` in the
+# sandbox, so the architect emits an IR and the diagram is compiled
+# deterministically rather than hand-drawn as ASCII. Cloned + installed here (not
+# fetched per run) for the same reason goimports and the scanners are — a per-run
+# fetch through the sandbox proxy is the degradation this whole image guards against.
+RUN git clone --depth 1 https://github.com/tt-a1i/archify /opt/archify \
+    && cd /opt/archify && (npm install --silent --omit=dev || npm install --silent)
+
 # THE SECURITY SCANNERS, pinned like everything else. gosec is the SAST pass
 # and govulncheck the SCA pass; both run in the sandbox between the developer
 # and the security reviewer, and their output lands under scan/ as LEADS the
@@ -63,4 +73,5 @@ RUN go install honnef.co/go/tools/cmd/staticcheck@2025.1
 # Fail the build rather than ship an image missing what the pipeline asks for.
 # The whole reason this file exists is that a missing tool degraded quietly.
 RUN command -v goimports && command -v qwen && command -v git && command -v node \
-    && command -v gosec && command -v govulncheck && command -v staticcheck
+    && command -v gosec && command -v govulncheck && command -v staticcheck \
+    && test -f /opt/archify/bin/archify.mjs
