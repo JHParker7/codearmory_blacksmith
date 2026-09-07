@@ -26,6 +26,7 @@ const (
 	FileTicket     = "file_ticket"
 	MergeFix       = "merge_fix"
 	WikiPage       = "wiki_page"
+	WikiRead       = "wiki_read"
 	ArchifyDiagram = "archify_diagram"
 )
 
@@ -99,6 +100,11 @@ type Set struct {
 	// architect given only read tools + this one CANNOT touch code: it has no way to
 	// write a file at all, only to publish a wiki page. Nil means no wiki is wired.
 	WritePage func(id, pageType, stack, format, title, content string) (string, error)
+
+	// ReadWiki returns the whole project wiki as one document, for a stage that
+	// reads the source of truth (pm/dev/frontend) rather than writes it. Nil means
+	// no wiki is wired, and the tool says so.
+	ReadWiki func() (string, error)
 
 	// MergeFix is the review agent's APPROVAL: it merges the fix under review
 	// into the integration branch and returns what happened. Called at most
@@ -286,6 +292,14 @@ func (s *Set) Definitions() []model.Tool {
 				"title":   map[string]any{"type": "string", "maxLength": MaxSummaryChars, "description": "Human-readable title."},
 				"content": map[string]any{"type": "string", "description": "The full page content."},
 			}, "id", "type", "title", "content"),
+		},
+		WikiRead: {
+			Name: WikiRead,
+			Description: "Read the project's WIKI — the source of truth the architect wrote (overview, " +
+				"architecture, the API contract, data model, decisions). Returns every page's content in " +
+				"one call. Read it FIRST to ground your work in what was decided; do not invent a design " +
+				"the wiki already specifies.",
+			Parameters: object(map[string]any{}),
 		},
 		ArchifyDiagram: {
 			Name: ArchifyDiagram,
@@ -529,6 +543,16 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 			return "Error: the wiki refused the page: " + err.Error(), nil
 		}
 		return "Wrote wiki page " + a.ID + ": " + res, nil
+
+	case WikiRead:
+		if s.ReadWiki == nil {
+			return "Error: no wiki is wired at this stage, so it cannot be read.", nil
+		}
+		doc, err := s.ReadWiki()
+		if err != nil {
+			return "Error: the wiki could not be read: " + err.Error(), nil
+		}
+		return doc, nil
 
 	case ArchifyDiagram:
 		var a struct {

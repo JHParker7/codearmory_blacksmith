@@ -316,6 +316,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		},
 		FileTicket: a.ticketFiler(agentBearer),
 		WritePage:  a.wikiWriter(agentBearer, req.Project),
+		ReadWiki:   a.wikiReader(agentBearer, req.Project),
 		MergeFix:   func(string) (string, error) { approved = true; return "approved", nil },
 		OnWrite: func(path, content string, deleted bool, message string) {
 			journal = append(journal, recordedWrite{path: path, content: content, deleted: deleted, message: message})
@@ -466,6 +467,71 @@ func (a *actionServer) wikiWriter(bearer, project string) func(id, pageType, sta
 			return "", fmt.Errorf("wiki %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 		}
 		return "published to " + project, nil
+	}
+}
+
+// wikiReader builds the ReadWiki sink: a closure that fetches the WHOLE project
+// wiki — the manifest then each page's content — and returns it as one document,
+// so a pm/dev/frontend stage reads the source of truth the architect wrote. Reads
+// as the agent's own run token (the wiki's getPage/listPage permission gates it).
+// Nil when no wiki is configured or no project was given.
+func (a *actionServer) wikiReader(bearer, project string) func() (string, error) {
+	if a.cfg.WikiURL == "" || project == "" || bearer == "" {
+		return nil
+	}
+	base := strings.TrimRight(a.cfg.WikiURL, "/")
+	get := func(path string) ([]byte, error) {
+		req, err := http.NewRequest(http.MethodGet, base+path, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("wiki %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		}
+		return raw, nil
+	}
+	return func() (string, error) {
+		raw, err := get("/projects/" + project + "/pages")
+		if err != nil {
+			return "", err
+		}
+		var manifest struct {
+			Pages []struct {
+				ID, Title, Type, Stack, Format string
+			} `json:"pages"`
+		}
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			return "", err
+		}
+		if len(manifest.Pages) == 0 {
+			return "The project wiki has no pages yet.", nil
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "# Project wiki: %s (%d pages)\n\n", project, len(manifest.Pages))
+		for _, p := range manifest.Pages {
+			pageRaw, perr := get("/projects/" + project + "/pages/" + p.ID)
+			content := ""
+			if perr == nil {
+				var page struct {
+					Content string `json:"content"`
+				}
+				_ = json.Unmarshal(pageRaw, &page)
+				content = page.Content
+			}
+			// A diagram page is a rendered HTML doc, not prose — name it, don't dump it.
+			if p.Format == "html" {
+				content = "(rendered diagram — see the wiki UI)"
+			}
+			fmt.Fprintf(&b, "## %s  [id=%s type=%s stack=%s]\n\n%s\n\n---\n\n", p.Title, p.ID, p.Type, p.Stack, content)
+		}
+		return b.String(), nil
 	}
 }
 

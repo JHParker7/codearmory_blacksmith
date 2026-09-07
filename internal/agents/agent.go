@@ -69,6 +69,11 @@ type Creator struct {
 	// is behind the gatekeeper), so an architect wired with this and only read tools
 	// produces its whole output through it and never writes a file.
 	WritePage func(id, pageType, stack, format, title, content string) (string, error)
+
+	// ReadWiki returns the whole project wiki (every page's content) as one
+	// document, for a stage that CONSUMES the source of truth (pm, dev, frontend)
+	// rather than writes it. Nil when no wiki is wired.
+	ReadWiki func() (string, error)
 }
 
 // Options is what makes one stage different from another.
@@ -220,6 +225,7 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			TicketKind: o.TicketKind,
 			MergeFix:   c.MergeFix,
 			WritePage:  c.WritePage,
+			ReadWiki:   c.ReadWiki,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,
