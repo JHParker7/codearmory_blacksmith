@@ -289,11 +289,19 @@ func (s *Set) Definitions() []model.Tool {
 		},
 		ArchifyDiagram: {
 			Name: ArchifyDiagram,
-			Description: "Render an architecture DIAGRAM into the wiki. Give a typed JSON IR (archify's " +
-				"format) and it is compiled deterministically into a diagram and published as a wiki " +
-				"page — do NOT draw ASCII art. The IR has {\"meta\":{...},\"diagram\":{\"type\":<kind>," +
-				"\"title\":...,\"nodes\":[{\"id\",\"label\"}...],\"edges\":[{\"from\",\"to\"}...]}}. If the " +
-				"IR is invalid the tool returns the diagnostics so you can fix it and call again.",
+			Description: "Render an architecture DIAGRAM into the wiki — do NOT draw ASCII art. Give the " +
+				"archify typed JSON IR and it is compiled deterministically and published. For an " +
+				"architecture diagram the IR is EXACTLY this shape: " +
+				`{"schema_version":1,"diagram_type":"architecture","meta":{"title":"..."},` +
+				`"layout":{"mode":"grid","cols":3},` +
+				`"components":[{"id":"client","type":"external","label":"Client","row":0,"col":0},` +
+				`{"id":"api","type":"backend","label":"API","row":0,"col":1},` +
+				`{"id":"db","type":"database","label":"Store","row":0,"col":2}],` +
+				`"connections":[{"id":"c1","from":"client","to":"api"},{"id":"c2","from":"api","to":"db"}]}. ` +
+				"RULES: every component needs a `type` from [frontend,backend,database,cloud,security," +
+				"messagebus,external] and a `row`+`col` (grid position, 0-based); pick cols to fit; " +
+				"connections have id/from/to and NO label (a label fails layout). If the IR is invalid the " +
+				"tool returns archify's exact diagnostics — fix the IR and call again.",
 			Parameters: object(map[string]any{
 				"id":    map[string]any{"type": "string", "maxLength": MaxPathChars, "description": `Stable slug for the diagram page, e.g. "system-architecture".`},
 				"type":  map[string]any{"type": "string", "enum": []string{"architecture", "workflow", "sequence", "data-flow", "lifecycle"}, "description": "The diagram kind (must match the IR's diagram.type)."},
@@ -550,8 +558,8 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 		// model can repair the IR — the same expected-red/repair loop the rest of the
 		// pipeline uses.
 		cmd := "node /opt/archify/bin/archify.mjs deliver " + dtype +
-			" archify_ir.json archify_out.html 2>archify_err.txt && cat archify_out.html || " +
-			"{ echo '__ARCHIFY_FAIL__'; cat archify_err.txt 2>/dev/null; node /opt/archify/bin/archify.mjs validate " + dtype + " archify_ir.json --json 2>/dev/null; }"
+			" archify_ir.json archify_out.html > archify.log 2>&1 && cat archify_out.html || " +
+			"{ echo '__ARCHIFY_FAIL__'; cat archify.log; }"
 		out, err := s.Sandbox.Run(ctx, map[string]string{"archify_ir.json": a.IR}, cmd)
 		if err != nil {
 			return "", fmt.Errorf("rendering diagram %q: %w", a.ID, err)
