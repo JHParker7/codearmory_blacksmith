@@ -108,6 +108,7 @@ func (s *Store) List(ctx context.Context, opts ticket.ListOpts) ([]ticket.Ticket
 		"board_id": opts.BoardID,
 		"status":   opts.Status,
 		"priority": opts.Priority,
+		"project":  opts.Project,
 	} {
 		if value != "" {
 			q.Set(name, value)

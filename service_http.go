@@ -314,9 +314,10 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 			tr.add(line)
 			a.jobs.finish(id, func(r *actionResult) { r.Stdout = tr.String() })
 		},
-		FileTicket: a.ticketFiler(agentBearer),
-		WritePage:  a.wikiWriter(agentBearer, req.Project),
-		ReadWiki:   a.wikiReader(agentBearer, req.Project),
+		FileTicket:  a.ticketFiler(agentBearer, req.Project),
+		WritePage:   a.wikiWriter(agentBearer, req.Project),
+		ReadWiki:    a.wikiReader(agentBearer, req.Project),
+		ReadTickets: a.ticketsReader(agentBearer, req.Project),
 		MergeFix:   func(string) (string, error) { approved = true; return "approved", nil },
 		OnWrite: func(path, content string, deleted bool, message string) {
 			journal = append(journal, recordedWrite{path: path, content: content, deleted: deleted, message: message})
@@ -393,9 +394,14 @@ func agentPermissions(project string) []gatekeeper.Permission {
 		{Service: "forge", Action: "createExecution", Resource: "forge/executions"},
 		{Service: "forge", Action: "getExecution", Resource: "forge/executions/*"},
 		// A reviewer files findings on the board AS THE USER — never committed to the
-		// tree — so an agent can only file where the user could.
+		// tree — so an agent can only file where the user could. listTicket/getTicket
+		// let a builder READ the task breakdown the PM filed (the read_tickets tool);
+		// the tickets service scopes a listing to created_by/org, so this only ever
+		// surfaces the pipeline owner's own tickets, not the whole board.
 		{Service: "tickets", Action: "createTicket", Resource: "tickets/tickets"},
 		{Service: "tickets", Action: "createComment", Resource: "tickets/tickets/*"},
+		{Service: "tickets", Action: "listTicket", Resource: "tickets/tickets"},
+		{Service: "tickets", Action: "getTicket", Resource: "tickets/tickets/*"},
 	}
 	// The architect writes the project's wiki via the wiki_page tool. The wiki now
 	// authorizes on the reserved project namespace "project/<slug>/wiki/pages[/id]"
@@ -415,7 +421,7 @@ func agentPermissions(project string) []gatekeeper.Permission {
 // ticketFiler files a finding on the board AS THE AGENT'S IDENTITY, so a finding
 // can only land where the user could file one. No board configured is a no-op,
 // like the standalone harness.
-func (a *actionServer) ticketFiler(bearer string) func(kind, title, body, severity string) (string, error) {
+func (a *actionServer) ticketFiler(bearer, project string) func(kind, title, body, severity string) (string, error) {
 	if a.cfg.TicketsURL == "" {
 		return nil
 	}
@@ -425,16 +431,63 @@ func (a *actionServer) ticketFiler(bearer string) func(kind, title, body, severi
 		return nil
 	}
 	return func(kind, title, body, severity string) (string, error) {
+		// The kind prefix labels a REVIEWER's finding ("security: ..."). A PM filing
+		// its task breakdown carries no kind, and prefixing ": title" there is just
+		// noise — so only prefix when a stage actually set one.
+		full := title
+		if strings.TrimSpace(kind) != "" {
+			full = kind + ": " + title
+		}
 		t, err := store.Create(context.Background(), ticket.Ticket{
-			Title:       kind + ": " + title,
+			Title:       full,
 			Description: body,
 			Status:      ticket.StatusOpen,
 			Priority:    severity,
+			// Tag the project so the ticket appears under it in the portal and in a
+			// project-scoped listing (the read_tickets tool a builder uses). Empty
+			// for a project-less run, which files an unfiled ticket exactly as before.
+			Project: project,
 		})
 		if err != nil {
 			return "", err
 		}
 		return t.ID, nil
+	}
+}
+
+// ticketsReader builds the read_tickets sink: it lists the project's OPEN board
+// tickets as one document, so a builder (dev/frontend/backend) picks up the task
+// breakdown the PM filed rather than reading task pages out of the wiki. It reads
+// AS THE AGENT'S IDENTITY, so it only sees what the user could — which, since the
+// PM and the builder run under the same pipeline owner, is the tasks the PM just
+// filed. No board configured is a no-op, like the standalone harness.
+func (a *actionServer) ticketsReader(bearer, project string) func() (string, error) {
+	if a.cfg.TicketsURL == "" {
+		return nil
+	}
+	store, err := platform.Local(a.cfg.TicketsURL, transport.Static(bearer))
+	if err != nil {
+		slog.Warn("action: could not build a tickets client for the agent", "error", err)
+		return nil
+	}
+	return func() (string, error) {
+		ts, err := store.List(context.Background(), ticket.ListOpts{Project: project, Status: ticket.StatusOpen})
+		if err != nil {
+			return "", err
+		}
+		if len(ts) == 0 {
+			return "No open tickets are filed for this project. Ground your work in the wiki (read_wiki) and the task you were given.", nil
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "# Open tickets for project %q (%d)\n\n", project, len(ts))
+		for _, t := range ts {
+			pr := t.Priority
+			if pr == "" {
+				pr = "unset"
+			}
+			fmt.Fprintf(&b, "## [%s] %s\n(id %s)\n\n%s\n\n", pr, t.Title, t.ID, strings.TrimSpace(t.Description))
+		}
+		return b.String(), nil
 	}
 }
 

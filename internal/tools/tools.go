@@ -27,6 +27,7 @@ const (
 	MergeFix       = "merge_fix"
 	WikiPage       = "wiki_page"
 	WikiRead       = "wiki_read"
+	ReadTickets    = "read_tickets"
 	ArchifyDiagram = "archify_diagram"
 )
 
@@ -105,6 +106,14 @@ type Set struct {
 	// reads the source of truth (pm/dev/frontend) rather than writes it. Nil means
 	// no wiki is wired, and the tool says so.
 	ReadWiki func() (string, error)
+
+	// ReadTickets returns the project's open board tickets as one document, for a
+	// stage that picks up work the PM filed (dev/frontend/backend). HOST-SIDE like
+	// ReadWiki — the board lives behind the gatekeeper, not in the tree. This is the
+	// counterpart to FileTicket: the PM files the task breakdown as real board
+	// tickets, and a builder reads them here rather than from wiki pages. Nil means
+	// no board is wired, and the tool says so.
+	ReadTickets func() (string, error)
 
 	// MergeFix is the review agent's APPROVAL: it merges the fix under review
 	// into the integration branch and returns what happened. Called at most
@@ -299,6 +308,14 @@ func (s *Set) Definitions() []model.Tool {
 				"architecture, the API contract, data model, decisions). Returns every page's content in " +
 				"one call. Read it FIRST to ground your work in what was decided; do not invent a design " +
 				"the wiki already specifies.",
+			Parameters: object(map[string]any{}),
+		},
+		ReadTickets: {
+			Name: ReadTickets,
+			Description: "Read the project's open BOARD TICKETS — the task breakdown the product manager " +
+				"filed for this work. Returns every open ticket (title, priority, description) in one call. " +
+				"Read it to find WHAT to build and its acceptance criteria; the wiki says how the system is " +
+				"designed, the tickets say which pieces are yours to do.",
 			Parameters: object(map[string]any{}),
 		},
 		ArchifyDiagram: {
@@ -551,6 +568,16 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 		doc, err := s.ReadWiki()
 		if err != nil {
 			return "Error: the wiki could not be read: " + err.Error(), nil
+		}
+		return doc, nil
+
+	case ReadTickets:
+		if s.ReadTickets == nil {
+			return "Error: no ticket board is wired at this stage, so it cannot be read.", nil
+		}
+		doc, err := s.ReadTickets()
+		if err != nil {
+			return "Error: the board could not be read: " + err.Error(), nil
 		}
 		return doc, nil
 

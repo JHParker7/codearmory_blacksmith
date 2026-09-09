@@ -25,7 +25,15 @@ type Ticket struct {
 	Description string  `json:"description"`
 	Status      string  `json:"status"`
 	Priority    string  `json:"priority"`
-	CreatedBy   string  `json:"created_by"`
+
+	// Project is the free-text project slug the platform filters a listing by. It
+	// carries NO authorization weight (access is still created_by/org), but it is
+	// what makes a ticket appear under a project in the portal and in a
+	// project-scoped listing — so the PM tags every task it files with it and a
+	// builder lists by it. Empty means "unfiled".
+	Project string `json:"project,omitempty"`
+
+	CreatedBy string `json:"created_by"`
 	BoardID     *string `json:"board_id,omitempty"`
 	AssigneeID  *string `json:"assignee_id,omitempty"`
 	ParentID    *string `json:"parent_id,omitempty"`
@@ -114,6 +122,7 @@ type ListOpts struct {
 	BoardID  string
 	Status   string
 	Priority string
+	Project  string
 }
 
 // Ptr is the idiom for the optional string fields above, so callers are not

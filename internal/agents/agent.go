@@ -74,6 +74,11 @@ type Creator struct {
 	// document, for a stage that CONSUMES the source of truth (pm, dev, frontend)
 	// rather than writes it. Nil when no wiki is wired.
 	ReadWiki func() (string, error)
+
+	// ReadTickets returns the project's open board tickets as one document, for a
+	// stage that PICKS UP the PM's task breakdown (dev, frontend, backend). The
+	// counterpart to FileTicket. Nil when no board is wired.
+	ReadTickets func() (string, error)
 }
 
 // Options is what makes one stage different from another.
@@ -224,8 +229,9 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			FileTicket: c.FileTicket,
 			TicketKind: o.TicketKind,
 			MergeFix:   c.MergeFix,
-			WritePage:  c.WritePage,
-			ReadWiki:   c.ReadWiki,
+			WritePage:   c.WritePage,
+			ReadWiki:    c.ReadWiki,
+			ReadTickets: c.ReadTickets,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,
