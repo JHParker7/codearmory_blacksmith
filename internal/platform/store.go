@@ -185,6 +185,10 @@ type createRequest struct {
 	// the whole reason a request survives being broken down.
 	ParentID string `json:"parent_id,omitempty"`
 	BoardID  string `json:"board_id,omitempty"`
+	// Project is the free-text project slug the tickets service filters a listing
+	// by. Without it a filed ticket lands unfiled and no project-scoped listing
+	// (the read_tickets tool) can find it.
+	Project string `json:"project,omitempty"`
 }
 
 // Create opens a ticket.
@@ -193,6 +197,7 @@ func (s *Store) Create(ctx context.Context, t ticket.Ticket) (ticket.Ticket, err
 		Title: t.Title, Description: t.Description,
 		Status: t.Status, Priority: t.Priority,
 		ParentID: t.Parent(), BoardID: t.Board(),
+		Project: t.Project,
 	}
 	var out ticket.Ticket
 	err := s.http.Do(ctx, transport.Request{

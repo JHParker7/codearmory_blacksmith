@@ -496,7 +496,7 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 		// working code on disk. One check per WRITING turn, not per write, so a
 		// burst of files costs one execution; turns whose writes were all refused
 		// run nothing, so a refusal loop cannot burn the sandbox.
-		if wrote && !ranCheck && a.opts.Check != "" {
+		if wrote && !ranCheck && a.opts.Check != "" && a.offersTool(tools.RunCommand) {
 			checkStart := time.Now()
 			result, err := a.tools.Invoke(ctx, tools.RunCommand, "{}")
 			checkMS := time.Since(checkStart).Milliseconds()
