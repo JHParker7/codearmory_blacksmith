@@ -26,6 +26,7 @@ import (
 	"github.com/code-armory-app/blacksmith/internal/agents"
 	"github.com/code-armory-app/blacksmith/internal/config"
 	"github.com/code-armory-app/blacksmith/internal/model"
+	"github.com/code-armory-app/blacksmith/internal/transport"
 )
 
 // uiEvent is one thing the running pipeline tells the screen.
@@ -183,6 +184,21 @@ type tuiModel struct {
 	focus  focus
 	sel    int          // selected row in board.tickets
 	detail *boardDetail // the ticket being read, nil while loading or closed
+
+	// Portal-parity sections (tui_sections.go). The board is section 0, so the
+	// zero value leaves the original single-screen behaviour untouched; 1-4 switch.
+	section    section
+	api        *platformAPI
+	pipes      map[string]string // workflow_id -> name, for run rows
+	runs       []Run
+	repos      []Repo
+	roles      []Role
+	secSel     int    // selected row within the active section
+	secErr     string // a section-level fetch error
+	secLoading bool
+	roleDetail *Role  // the agent whose full prompt is open, nil otherwise
+	pullsFor   string // repo id whose PRs are shown; "" = repo list
+	pulls      []Pull
 }
 
 func newRunView(task, dir string, stages []string) *runView {
@@ -299,7 +315,27 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	default: // focusBoard
+	default: // focusBoard, and the portal-parity sections (tui_sections.go)
+		// Number keys switch section from the board or any section; the board is 1.
+		switch msg.String() {
+		case "1":
+			nm, cmd := m.enterSection(secBoard)
+			return nm, cmd
+		case "2":
+			nm, cmd := m.enterSection(secRuns)
+			return nm, cmd
+		case "3":
+			nm, cmd := m.enterSection(secRepos)
+			return nm, cmd
+		case "4":
+			nm, cmd := m.enterSection(secAgents)
+			return nm, cmd
+		}
+		// In a non-board section the keys drive that section's list/detail.
+		if m.section != secBoard {
+			nm, cmd := m.sectionKey(msg)
+			return nm, cmd
+		}
 		switch msg.String() {
 		case "q":
 			return m, tea.Quit
@@ -383,6 +419,51 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case detailMsg:
 		d := boardDetail(msg)
 		m.detail = &d
+		return m, nil
+
+	case runsMsg:
+		m.secLoading = false
+		if msg.err != "" {
+			m.secErr = msg.err
+		} else {
+			m.runs, m.pipes = msg.runs, msg.pipes
+		}
+		return m, nil
+
+	case reposMsg:
+		m.secLoading = false
+		if msg.err != "" {
+			m.secErr = msg.err
+		} else {
+			m.repos = msg.repos
+		}
+		return m, nil
+
+	case rolesMsg:
+		m.secLoading = false
+		if msg.err != "" {
+			m.secErr = msg.err
+		} else {
+			m.roles = msg.roles
+		}
+		return m, nil
+
+	case pullsMsg:
+		m.secLoading = false
+		if msg.err != "" {
+			m.secErr = msg.err
+		} else if m.pullsFor == msg.repoID {
+			m.pulls = msg.pulls
+		}
+		return m, nil
+
+	case roleMsg:
+		if msg.err != "" {
+			m.secErr = msg.err
+		} else {
+			r := msg.role
+			m.roleDetail = &r
+		}
 		return m, nil
 
 	case uiEvent:
@@ -517,6 +598,9 @@ func elapsed(sv stageView) string {
 }
 
 func (m tuiModel) View() string {
+	if m.section != secBoard {
+		return m.sectionView()
+	}
 	if m.focus == focusDetail {
 		return m.detailView()
 	}
@@ -584,7 +668,7 @@ func (m tuiModel) View() string {
 		b.WriteString(promptStyle.Render("request> ") + m.input + "▌\n")
 		b.WriteString(dimStyle.Render("enter submits · esc cancels") + "\n")
 	} else {
-		b.WriteString(dimStyle.Render("↑↓ move · enter open · r new request · q quit") + "\n")
+		b.WriteString(dimStyle.Render("↑↓ move · enter open · r new request · 2 runs · 3 repos · 4 agents · q quit") + "\n")
 	}
 	if m.err != "" {
 		b.WriteString(failStyle.Render(m.err) + "\n")
@@ -741,7 +825,11 @@ func runTUI(base string) error {
 	inTUI = true
 	defer func() { inTUI = false }()
 	sess := &session{maker: maker, stages: stages, base: base, events: events, seed: seed}
-	m := tuiModel{sess: sess, ctx: ctx}
+	// The platform read-client powers the portal-parity sections (runs/repos/agents).
+	// It reuses the platform base URL + token; a host without one shows "no platform
+	// configured" in those sections rather than failing to open.
+	api := newPlatformAPI(cfg.PlatformURL, transport.Static(cfg.PlatformToken))
+	m := tuiModel{sess: sess, ctx: ctx, api: api}
 
 	// The boot is DEFINED here and STARTED by the first submission — see
 	// session.ensureBoot for why eager acquisition was wrong twice over.
