@@ -1,0 +1,32 @@
+{
+  "name": "build-dev-on-merge",
+  "enabled": true,
+  "description": "When a PR merges to dev, build the alpha image (build-dev pipeline).",
+  "match": {
+    "all": [
+      {
+        "field": "type",
+        "op": "eq",
+        "value": "repo.pull_request.merged"
+      },
+      {
+        "field": "data.target_ref",
+        "op": "eq",
+        "value": "dev"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "kind": "run_pipeline",
+      "config": {
+        "pipeline_id": "<FILL_AFTER_PIPELINE_REGISTERED>",
+        "inputs": {
+          "namespace": "{{ data.namespace }}",
+          "repo": "{{ data.name }}",
+          "ref": "{{ data.target_ref }}"
+        }
+      }
+    }
+  ]
+}
