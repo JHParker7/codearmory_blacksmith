@@ -1,6 +1,6 @@
 {
   "name": "build-dev",
-  "description": "On merge to dev: compute the next semantic version, build the project image with the devops-authored Dockerfile, and push it to the local dev registry tagged <version>a (alpha).",
+  "description": "On merge to dev: compute the next semantic version, build the project image with the devops-authored Dockerfile, and push it to the sandbox-reachable dev registry (registry-mirror) tagged <version>a (alpha).",
   "timeout_secs": 1800,
   "inputs": [
     {
@@ -92,11 +92,14 @@
             "mount_path": "/workspace"
           }
         ],
+        "secret_refs": {
+          "REGISTRY_AUTH": "secret:registry-local-auth"
+        },
         "build": {
           "context": "/workspace",
           "dockerfile": "Dockerfile",
           "destinations": [
-            "registry-local.codearmory.svc.cluster.local:5000/${inputs.repo}:${steps.version.output.TAG}"
+            "codearmory-registry-mirror:5000/${inputs.repo}:${steps.version.output.TAG}"
           ],
           "no_push": false
         }
@@ -107,10 +110,10 @@
       "action": "forge/run",
       "timeout": 60,
       "with": {
-        "image": "alpine",
+        "image": "alpine:3.19",
         "runner_class": "standard",
         "timeout": 60,
-        "run": "echo \"built and pushed: registry-local.codearmory.svc.cluster.local:5000/${inputs.repo}:${steps.version.output.TAG}\""
+        "run": "echo \"built and pushed: codearmory-registry-mirror:5000/${inputs.repo}:${steps.version.output.TAG}\""
       }
     }
   ]
