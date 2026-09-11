@@ -83,7 +83,7 @@
       "action": "forge/build-image",
       "timeout": 1200,
       "with": {
-        "runner_class": "xlarge",
+        "runner_class": "build",
         "timeout": 1200,
         "volumes": [
           {
