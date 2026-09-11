@@ -335,6 +335,66 @@ func Defaults() []Role {
 			MaxTokens:     6000,
 		},
 
+		{
+			// Deploy-manifest author for the integration arm. Writes a docker-compose
+			// that runs the built image plus the dependencies the code actually uses,
+			// so an integration run can stand the whole stack up in one kata sandbox
+			// (nested docker). Format matches the deploy target (compose for the
+			// single-sandbox docker path); a helm variant is a sibling role when the
+			// target is a cluster. Writes ONLY the compose file — see [[forge-privileged-kata-switch]].
+			Name:  "compose",
+			Class: "large",
+			Prompt: "You are a DevOps engineer. The whole source tree, including the Dockerfile, is IN " +
+				"FRONT OF YOU. Write a docker-compose.yml that runs THIS service plus the backing " +
+				"dependencies it ACTUALLY needs. Read the code and config to learn what it connects to (a " +
+				"database, cache, queue, object store) and the env vars/credentials it reads for them; do " +
+				"not invent a dependency the code never uses, and do not leave out one it requires.\n\n" +
+				"Rules: name the app service `app` and build it from the local Dockerfile (build context " +
+				"'.'); publish it on HOST PORT 8080 mapped to whatever port the app listens on (\"8080:" +
+				"<container-port>\"), so an integration test always reaches it at http://localhost:8080; " +
+				"give the app a healthcheck hitting its real health endpoint; pass the env the app needs to " +
+				"reach each dependency. For each dependency use its official image at a pinned tag, set the " +
+				"env/credentials the app expects, give it a healthcheck, and make the app depends_on each " +
+				"with condition service_healthy so tests run only once everything is up. No host paths. " +
+				"Write ONLY docker-compose.yml, in one write_file call, then stop.",
+			Guard:         onlyBasenames("docker-compose.yml", "compose.yaml"),
+			Tools:         writing(),
+			OwnCheck:      true,
+			SeedKnown:     true,
+			MaxIterations: 8,
+			Temperature:   0.2,
+			MaxTokens:     6000,
+		},
+		{
+			// Black-box integration-test author for the integration arm. Writes a
+			// shell script that drives the RUNNING service over HTTP (the container as
+			// deployed), not the code — so it verifies the image actually works once
+			// stood up by compose. Guarded to the one test file so it cannot touch app code.
+			Name:  "integration-test",
+			Class: "large",
+			Prompt: "You are a QA engineer writing BLACK-BOX integration tests for this service AS IT RUNS " +
+				"as a container. The whole source tree is IN FRONT OF YOU — read the routes/handlers and " +
+				"what each returns, but test only the HTTP surface, never the code or a database directly.\n\n" +
+				"Write ONE POSIX shell script, tests/integration.sh, that tests the RUNNING service over " +
+				"HTTP at the base URL in env var TARGET_URL (default http://localhost:8080). It must: (1) " +
+				"first wait for readiness by polling the health endpoint for up to ~30s, failing with a " +
+				"clear message if it never comes up; (2) use curl to exercise the REAL endpoints — happy " +
+				"paths AND the key error cases the code handles (missing/invalid input, not-found ids, " +
+				"unauthorized); (3) assert on HTTP status codes and on response bodies (grep for the fields " +
+				"the handler returns); (4) on the FIRST failed assertion print 'FAIL: <endpoint> — " +
+				"<expected vs got>' and exit non-zero; (5) exit 0 only if every assertion passed, printing " +
+				"'integration tests passed'. Be robust: set -u, capture status via curl -o /tmp/body -w " +
+				"'%{http_code}'. Depend on nothing beyond curl and the shell. Write ONLY tests/integration.sh, " +
+				"in one write_file call, then stop.",
+			Guard:         onlyBasenames("integration.sh"),
+			Tools:         writing(),
+			OwnCheck:      true,
+			SeedKnown:     true,
+			MaxIterations: 8,
+			Temperature:   0.2,
+			MaxTokens:     6000,
+		},
+
 		// THE DEPARTMENT PIPELINE, in order: architect -> pm -> spec -> dev -> sec ->
 		// integrator (the merge-to-dev gate). Transcribed from the Creator.Stage
 		// constructors in internal/agents/roles.go. Unlike the plan arm (module at the
