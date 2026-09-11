@@ -1,0 +1,118 @@
+{
+  "name": "devops",
+  "timeout_secs": 2400,
+  "description": "Devops arm (live capture of pipeline f8f8ba3e; runs the devops agent via blacksmith/agent, so the host blacksmith service must be up). Clones a repo, has the devops agent write a real source-grounded Dockerfile, TESTS it with a kaniko --no-push build (validates it builds; nothing is pushed), then publishes: if `ref` is set it pushes HEAD straight to that branch (e.g. dev); if `ref` is blank it seeds the repo and opens a bot-authored PR to dev. The image is built and pushed by the build-dev pipeline (on PR merge to dev, or triggered directly). Inputs {task, project, namespace, repo, ref}.",
+  "inputs": [
+    {
+      "name": "task",
+      "default": "Write a Dockerfile for this service.",
+      "description": "context for the devops agent"
+    },
+    {
+      "name": "project",
+      "default": "ops"
+    },
+    {
+      "name": "namespace",
+      "default": "ops"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "the git-factory repo to image"
+    },
+    {
+      "name": "ref",
+      "description": "existing branch to push to (blank = open a PR to dev)"
+    }
+  ],
+  "steps": [
+    {
+      "name": "workspace",
+      "description": "",
+      "action": "forge/create-volume",
+      "with": {
+        "medium": "memory",
+        "name": "ws",
+        "workflow_id": "${run_id}"
+      },
+      "timeout": 120
+    },
+    {
+      "name": "clone",
+      "description": "",
+      "action": "forge/run",
+      "with": {
+        "image": "golang:1.25",
+        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; GF=http://codearmory-git-factory:9002; __i=0; while [ \"$(timeout 12 curl -s -o /dev/null -w '%{http_code}' \"$GF/healthz\" 2>/dev/null)\" = \"000\" ]; do __i=$((__i+1)); [ \"$__i\" -ge 10 ] && { echo 'git-factory unreachable after retries'; exit 1; }; echo \"waiting for git-factory ($__i)\"; sleep 5; done; git config --global http.lowSpeedLimit 1000; git config --global http.lowSpeedTime 30; REF='${inputs.ref}'; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; if [ -n \"$REF\" ]; then git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"$REF\"; echo \"working on existing branch $REF:\"; git log --oneline -1; else CODE=$(curl -s -o /tmp/r -w '%{http_code}' -X POST \"$GF/repos\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"name\\\":\\\"$REPO\\\",\\\"visibility\\\":\\\"private\\\",\\\"project\\\":\\\"${inputs.project}\\\"}\"); case \"$CODE\" in 201|409) ;; *) echo \"repo create failed $CODE\"; cat /tmp/r; exit 1;; esac; if ! git ls-remote --exit-code --heads \"$GIT_URL\" main >/dev/null 2>&1; then D=$(mktemp -d); git -C \"$D\" init -q; git -C \"$D\" -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q --allow-empty -m 'chore: init main'; git -C \"$D\" push \"$GIT_URL\" HEAD:refs/heads/main; fi; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q main; echo 'cloned:'; git log --oneline -1; fi",
+        "runner_class": "large",
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "volumes": [
+          {
+            "mount_path": "/workspace",
+            "name": "ws",
+            "workdir": true,
+            "workflow_id": "${run_id}"
+          }
+        ]
+      },
+      "timeout": 300
+    },
+    {
+      "name": "devops",
+      "description": "",
+      "action": "blacksmith/agent",
+      "with": {
+        "project": "${inputs.project}",
+        "role": "devops",
+        "task": "${inputs.task}",
+        "volume": "ws",
+        "workflow_id": "${run_id}"
+      },
+      "timeout": 1200
+    },
+    {
+      "name": "test",
+      "description": "",
+      "action": "forge/run",
+      "with": {
+        "image": "gcr.io/kaniko-project/executor:debug",
+        "run": "/kaniko/executor --context dir:///workspace --dockerfile Dockerfile --no-push && echo DOCKERFILE_OK || { echo DOCKERFILE_BUILD_FAILED; exit 1; }",
+        "runner_class": "build",
+        "volumes": [
+          {
+            "mount_path": "/workspace",
+            "name": "ws",
+            "workdir": true,
+            "workflow_id": "${run_id}"
+          }
+        ]
+      },
+      "timeout": 1200
+    },
+    {
+      "name": "publish",
+      "description": "",
+      "action": "forge/run",
+      "with": {
+        "image": "golang:1.25",
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; GF=http://codearmory-git-factory:9002; __i=0; while [ \"$(timeout 12 curl -s -o /dev/null -w '%{http_code}' \"$GF/healthz\" 2>/dev/null)\" = \"000\" ]; do __i=$((__i+1)); [ \"$__i\" -ge 10 ] && { echo 'git-factory unreachable after retries'; exit 1; }; echo \"waiting for git-factory ($__i)\"; sleep 5; done; git config --global http.lowSpeedLimit 1000; git config --global http.lowSpeedTime 30; cd /workspace; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; REF='${inputs.ref}'; if [ -n \"$REF\" ]; then BASE=$(git rev-parse \"origin/$REF\"); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no new commits -- nothing to push'; exit 0; fi; git push \"$GIT_URL\" HEAD:refs/heads/$REF; echo \"pushed the change to $REF\"; exit 0; fi; BASE=$(git rev-parse origin/main); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no commits from the stages -- nothing to publish'; exit 0; fi; TYPES=$(git log \"$BASE\"..HEAD --format=%s | sed -E 's/^([a-z]+)(\\(.*\\))?!?:.*/\\1/' | sort -u); TYPE=chore; for t in feat fix perf refactor docs test build ci chore style revert; do if printf '%s\\n' \"$TYPES\" | grep -qx \"$t\"; then TYPE=$t; break; fi; done; S=$(git log \"$BASE\"..HEAD --format=%s); if printf '%s' \"$S\" | grep -qE '^[a-z]+(\\(.+\\))?!:|BREAKING CHANGE'; then VS='v1.0'; else VS='v0.1'; fi; SLUG=$(printf '%s' \"${inputs.task}\" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed -E 's/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//'); [ -z \"$SLUG\" ] && SLUG=change; BR=$TYPE/${SLUG}; if ! git ls-remote --exit-code --heads \"$GIT_URL\" dev >/dev/null 2>&1; then git push \"$GIT_URL\" \"$BASE\":refs/heads/dev; fi; git push \"$GIT_URL\" HEAD:refs/heads/$BR; RID=$(curl -s \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); PR=$(curl -s -X POST \"$GF/repos/$RID/pulls\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"title\\\":\\\"$VS $TYPE: ${inputs.task}\\\",\\\"source_ref\\\":\\\"$BR\\\",\\\"target_ref\\\":\\\"dev\\\",\\\"author\\\":\\\"f8406f21-36b7-4398-b898-a76b36899ac0\\\"}\"); echo \"$PR\"; echo PR_OPENED",
+        "runner_class": "large",
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "volumes": [
+          {
+            "mount_path": "/workspace",
+            "name": "ws",
+            "workdir": true,
+            "workflow_id": "${run_id}"
+          }
+        ]
+      },
+      "timeout": 300
+    }
+  ]
+}
