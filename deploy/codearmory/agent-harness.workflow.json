@@ -1,5 +1,6 @@
 {
   "name": "agent-harness",
+  "project": "ops",
   "timeout_secs": 3600,
   "description": "Isolated single-agent harness: clone -> one agent -> show. No loop, no composition, so a failure is unambiguously the agent. Inputs {role, task, namespace, repo, ref}.",
   "inputs": [

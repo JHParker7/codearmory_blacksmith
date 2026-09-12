@@ -1,5 +1,6 @@
 {
   "name": "agent-chain",
+  "project": "ops",
   "description": "Request-triggered orchestrator: architect->spec->dev (test-first) ->devops (writes a real Dockerfile) ->publish a PR to dev on git-factory. The opened PR auto-reviews (pr-review-on-open) and on merge auto-builds the image (build-dev). Rebuilt 2026-09-12 to replace the lost DB-only agent-chain; backend/frontend/wiki stages of the original are folded into the dev+devops stages (those roles/pipelines and the wiki were not reproducible on the fresh cluster).",
   "timeout_secs": 5400,
   "inputs": [

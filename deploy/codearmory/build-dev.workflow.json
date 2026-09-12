@@ -1,5 +1,6 @@
 {
   "name": "build-dev",
+  "project": "ops",
   "description": "On merge to dev: compute the next semantic version, build the project image with the devops-authored Dockerfile, and push it to the sandbox-reachable dev registry (registry-mirror) tagged <version>a (alpha).",
   "timeout_secs": 1800,
   "inputs": [

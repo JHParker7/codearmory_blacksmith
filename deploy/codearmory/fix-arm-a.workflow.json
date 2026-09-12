@@ -1,5 +1,6 @@
 {
   "name": "fix-arm-a",
+  "project": "ops",
   "timeout_secs": 5400,
   "description": "Option A fix pipeline (prototype): fix FIRST, then write regression tests against the fixed code, then a base-vs-fix gate proves the tests catch the finding. fix-dev (reasoning ON) makes the smallest change that addresses the review finding and keeps the existing suite green; test-regression (reasoning OFF, whole-file writes) reads the real fixed code and writes *_test.go that PASS now; the gate rebuilds 'pre-fix source + new tests' and requires RED there and GREEN on the fixed tree. Inputs {task, namespace, repo, ref}: ref is the PR branch. No publish -- inspect the show diff.",
   "inputs": [

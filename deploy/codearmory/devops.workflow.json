@@ -1,5 +1,6 @@
 {
   "name": "devops",
+  "project": "ops",
   "timeout_secs": 2400,
   "description": "Devops arm (live capture of pipeline f8f8ba3e; runs the devops agent via blacksmith/agent, so the host blacksmith service must be up). Clones a repo, has the devops agent write a real source-grounded Dockerfile, TESTS it with a kaniko --no-push build (validates it builds; nothing is pushed), then publishes: if `ref` is set it pushes HEAD straight to that branch (e.g. dev); if `ref` is blank it seeds the repo and opens a bot-authored PR to dev. The image is built and pushed by the build-dev pipeline (on PR merge to dev, or triggered directly). Inputs {task, project, namespace, repo, ref}.",
   "inputs": [

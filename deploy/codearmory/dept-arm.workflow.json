@@ -1,5 +1,6 @@
 {
   "name": "dept-arm",
+  "project": "ops",
   "description": "The old department pipeline as a CodeArmory workflow, up to the merge-to-dev: architect -> [reset-src -> {spec -> expected-red}xN -> dev -> green]xN -> show -> publish. Blacksmith owns the roles (data in postgres); forge owns the volume/exec; the workflow owns the flow. The module lives under src/, as the architect lays it down. The outer 'draw' loop is the whole-run reroll (matching blacksmith's runWithReroll): if green fails, it re-rolls the code \u2014 reset-src clears src for a fresh test+impl draw \u2014 up to 3 times. Nested inside each draw, the 'specloop' converges the spec against expected-red. The publish step opens a git-factory PR of the run's work against dev (it never merges \u2014 a human judges the PR). Security/quality review is intentionally NOT a gating stage: the plan is for that feedback to land on the PR for a human to judge.",
   "timeout_secs": 5400,
   "inputs": [

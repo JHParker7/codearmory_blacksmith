@@ -1,5 +1,6 @@
 {
   "name": "pr-review",
+  "project": "ops",
   "timeout_secs": 10800,
   "description": "On a pull request, run staticcheck (lint), gosec (SAST), govulncheck (SCA) and Trivy (container: Dockerfile misconfig, dependency CVEs, leaked secrets \u2014 in its own sandbox), post their results as markdown-table PR comments, then run a code review and a security review whose findings (issues, vulns, and recommendations) are posted as further PR comments. Trigger with inputs {repo, number, ref, sha}: repo is the git-factory repo NAME under ops/, number the PR number, ref the PR source branch, sha its head commit. The reviewers read the tree at the PR head plus the scan/ reports and write a markdown findings table which a Go poster (embedded, go-run in the scan image) posts via git-factory's PR comments API.",
   "inputs": [

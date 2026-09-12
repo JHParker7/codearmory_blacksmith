@@ -1,5 +1,6 @@
 {
   "name": "git-open-pr",
+  "project": "ops",
   "timeout_secs": 300,
   "description": "Open a git-factory pull request, attributed to the automation bot. A single forge/run wrapper that authenticates with the run's own per-repo git: credential (least privilege -- no standing bot credential) and sets git-factory's createPull author override so the PR shows the bot, not the triggering user. Inputs: namespace, repo, title_b64, body_b64 (base64 so arbitrary text survives the shell), source_ref (the branch), target_ref (base, default dev), author_id (the bot user id, allowlisted server-side). Output: pr_number.",
   "inputs": [
