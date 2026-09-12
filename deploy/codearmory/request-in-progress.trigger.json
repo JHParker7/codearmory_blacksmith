@@ -1,0 +1,24 @@
+{
+  "name": "request-in-progress",
+  "enabled": true,
+  "description": "A ticket moved to in_progress on the requests board kicks off the agent-chain orchestrator (architect -> spec -> dev -> devops -> publish PR). board_id is filled in at registration time.",
+  "match": {
+    "all": [
+      { "field": "type", "op": "eq", "value": "ticket.status_changed" },
+      { "field": "data.new_status", "op": "eq", "value": "in_progress" },
+      { "field": "data.board_id", "op": "eq", "value": "<FILL_REQUESTS_BOARD_ID>" }
+    ]
+  },
+  "actions": [
+    {
+      "kind": "run_pipeline",
+      "config": {
+        "pipeline_id": "<FILL_AGENT_CHAIN_PIPELINE_ID>",
+        "inputs": {
+          "task": "{{ data.description }}",
+          "repo": "task-tracker"
+        }
+      }
+    }
+  ]
+}

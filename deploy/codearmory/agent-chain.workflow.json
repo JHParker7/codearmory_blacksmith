@@ -1,0 +1,300 @@
+{
+  "name": "agent-chain",
+  "description": "Request-triggered orchestrator: architect->spec->dev (test-first) ->devops (writes a real Dockerfile) ->publish a PR to dev on git-factory. The opened PR auto-reviews (pr-review-on-open) and on merge auto-builds the image (build-dev). Rebuilt 2026-09-12 to replace the lost DB-only agent-chain; backend/frontend/wiki stages of the original are folded into the dev+devops stages (those roles/pipelines and the wiki were not reproducible on the fresh cluster).",
+  "timeout_secs": 5400,
+  "inputs": [
+    {
+      "name": "task",
+      "required": true,
+      "description": "the work the department builds"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "the git-factory repo (under the caller's namespace) the run publishes a dev PR to"
+    }
+  ],
+  "steps": [
+    {
+      "action": "forge/create-volume",
+      "name": "workspace",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
+    },
+    {
+      "action": "blacksmith/agent",
+      "name": "architect",
+      "timeout": 1200,
+      "with": {
+        "role": "architect",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "${inputs.task}"
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
+    },
+    {
+      "action": "forge/run",
+      "name": "reset-src",
+      "timeout": 120,
+      "loop_id": "draw",
+      "with": {
+        "image": "alpine:3.19",
+        "runner_class": "standard",
+        "run": "rm -rf /workspace/src 2>/dev/null; echo 'draw: src cleared for a fresh test+impl draw (architect/pm plan kept)'",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
+      "action": "blacksmith/agent",
+      "name": "spec",
+      "timeout": 1800,
+      "loop_id": "specloop",
+      "with": {
+        "role": "spec",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "${inputs.task}"
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
+    },
+    {
+      "action": "forge/run",
+      "name": "expected-red",
+      "timeout": 300,
+      "loop_id": "specloop",
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOBIN=/tmp/gobin; cd /workspace/src 2>/dev/null || { echo 'no src/ module \u2014 the spec did not lay the module down under src/'; exit 1; }; go install ./... && go vet ./... && if go test ./... ; then echo 'FAIL: tests pass before dev'; exit 1; else echo 'OK: compiles and RED'; fi",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
+      "action": "blacksmith/agent",
+      "name": "dev",
+      "timeout": 2400,
+      "loop_id": "draw",
+      "with": {
+        "role": "dev",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "${inputs.task}"
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
+    },
+    {
+      "action": "forge/run",
+      "name": "green",
+      "timeout": 300,
+      "loop_id": "draw",
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go GOBIN=/tmp/gobin; cd /workspace/src && go install ./... && go test ./...",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "devops",
+      "action": "blacksmith/agent",
+      "timeout": 1200,
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ],
+      "with": {
+        "role": "devops",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "Write a production-grade multi-stage Dockerfile (and .dockerignore) for the Go service in this workspace, grounded in its go.mod and main.go: CGO disabled, non-root user, EXPOSE the port the service listens on, and a HEALTHCHECK against its health endpoint. Do not change application code."
+      }
+    },
+    {
+      "action": "forge/run",
+      "name": "show",
+      "timeout": 180,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; cd /workspace && echo '=== TREE ===' && find . -type f -not -path './.git/*' | sort && echo '=== go test (src) ===' && (cd src && go test ./... 2>&1 | tail -20)",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
+      "action": "forge/run",
+      "name": "publish",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/admin/${inputs.repo}.git"
+        },
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//token:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; CODE=$(curl -s -o /tmp/r -w '%{http_code}' -X POST \"$GF/repos\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"name\\\":\\\"$REPO\\\",\\\"visibility\\\":\\\"private\\\"}\"); case \"$CODE\" in 201|409) ;; *) echo \"repo create failed $CODE\"; cat /tmp/r; exit 1;; esac; if ! git ls-remote --exit-code --heads \"$GIT_URL\" dev >/dev/null 2>&1; then D=$(mktemp -d); git -C \"$D\" init -q; git -C \"$D\" -c user.email=blacksmith@workshop.invalid -c user.name=blacksmith commit -q --allow-empty -m 'chore: init dev'; git -C \"$D\" push \"$GIT_URL\" HEAD:refs/heads/dev; fi; R=$(mktemp -d); git clone -q --branch dev \"$GIT_URL\" \"$R\"; find \"$R\" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +; (cd /workspace && tar cf - --exclude=./.git .) | (cd \"$R\" && tar xf -); cd \"$R\"; git add -A; git -c user.email=blacksmith@workshop.invalid -c user.name=blacksmith commit -q -m \"run: ${inputs.task}\" || { echo 'no changes vs dev'; exit 0; }; BR=run/${run_id}; git push \"$GIT_URL\" HEAD:refs/heads/$BR; RID=$(curl -s \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); PR=$(curl -s -X POST \"$GF/repos/$RID/pulls\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"title\\\":\\\"run/${run_id}: ${inputs.task}\\\",\\\"source_ref\\\":\\\"$BR\\\",\\\"target_ref\\\":\\\"dev\\\"}\"); echo \"$PR\"; echo; echo \"PR_URL=$GF/repos/$RID/pulls\"; echo PUBLISH_DONE",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    }
+  ],
+  "loops": [
+    {
+      "id": "specloop",
+      "parent": "draw",
+      "limit": 3,
+      "until": "steps['expected-red'].status == 'completed'",
+      "var": "specattempt"
+    },
+    {
+      "id": "draw",
+      "limit": 3,
+      "until": "steps.green.status == 'completed'",
+      "var": "draw"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "dev_passed",
+      "value": "${steps.dev.output.passed}"
+    }
+  ]
+}

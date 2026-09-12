@@ -1,0 +1,25 @@
+{
+  "name": "pr-review-on-open",
+  "enabled": true,
+  "description": "A newly opened PR on git-factory is automatically reviewed by the pr-review pipeline (code + security review, autofix, summary, deterministic merge gate).",
+  "match": {
+    "all": [
+      { "field": "type", "op": "eq", "value": "repo.pull_request.opened" }
+    ]
+  },
+  "actions": [
+    {
+      "kind": "run_pipeline",
+      "config": {
+        "pipeline_id": "<FILL_PR_REVIEW_PIPELINE_ID>",
+        "inputs": {
+          "namespace": "{{ data.namespace }}",
+          "repo": "{{ data.name }}",
+          "number": "{{ data.number }}",
+          "ref": "{{ data.ref }}",
+          "sha": "{{ data.sha }}"
+        }
+      }
+    }
+  ]
+}
