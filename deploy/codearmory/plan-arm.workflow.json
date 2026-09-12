@@ -79,7 +79,34 @@
         "cache_workflow_id": "codearmory-plan-gocache",
         "cache_volume": "gocache"
       },
-      "loop_id": "testloop"
+      "loop_id": "testloop",
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
     },
     {
       "name": "dev",
@@ -93,7 +120,34 @@
         "cache_workflow_id": "codearmory-plan-gocache",
         "cache_volume": "gocache"
       },
-      "loop_id": "devloop"
+      "loop_id": "devloop",
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
     },
     {
       "name": "show",

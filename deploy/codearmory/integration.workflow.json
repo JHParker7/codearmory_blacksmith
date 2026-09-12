@@ -4,17 +4,39 @@
   "timeout_secs": 3600,
   "description": "Integration arm: stand the built image + its dependencies up and test them for real. clone -> compose agent writes docker-compose.yml -> integration-test agent writes tests/integration.sh -> run step (on the privileged kata microVM class, image docker:27-dind) starts dockerd, `docker compose up --build`, runs the tests against the live app at http://localhost:8080, then tears down. Needs forge FORGE_ALLOW_PRIVILEGED_KATA=1 + the kata-build runner class (see forge-privileged-kata-switch). Inputs {namespace, repo, ref, project}.",
   "inputs": [
-    {"name": "namespace", "required": true, "description": "git-factory namespace (repo owner), e.g. ops"},
-    {"name": "repo", "required": true, "description": "git-factory repo name"},
-    {"name": "ref", "required": false, "description": "branch to test (default dev)", "default": "dev"},
-    {"name": "project", "required": false, "description": "project for the agent steps", "default": "ops"}
+    {
+      "name": "namespace",
+      "required": true,
+      "description": "git-factory namespace (repo owner), e.g. ops"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "git-factory repo name"
+    },
+    {
+      "name": "ref",
+      "required": false,
+      "description": "branch to test (default dev)",
+      "default": "dev"
+    },
+    {
+      "name": "project",
+      "required": false,
+      "description": "project for the agent steps",
+      "default": "ops"
+    }
   ],
   "steps": [
     {
       "name": "workspace",
       "action": "forge/create-volume",
       "timeout": 120,
-      "with": {"workflow_id": "${run_id}", "name": "ws", "medium": "memory"}
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
     },
     {
       "name": "clone",
@@ -23,9 +45,18 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "secret_refs": {"GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"},
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
         "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"${inputs.ref}\"; echo cloned; git log --oneline -1",
-        "volumes": [{"workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true}]
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
       }
     },
     {
@@ -38,7 +69,34 @@
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "Write docker-compose.yml to run repo ${inputs.repo} and the dependencies its code actually uses. Build the app service (named app) from the local Dockerfile and publish it on host port 8080."
-      }
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
     },
     {
       "name": "inttest",
@@ -50,7 +108,34 @@
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "Write tests/integration.sh: black-box HTTP integration tests for repo ${inputs.repo} hitting the running service at TARGET_URL (default http://localhost:8080)."
-      }
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
     },
     {
       "name": "run",
@@ -60,7 +145,14 @@
         "image": "docker:27-dind",
         "runner_class": "kata-build",
         "run": "set -e; export DOCKER_TLS_CERTDIR=\"\"; ( dockerd-entrypoint.sh dockerd ) >/tmp/dockerd.log 2>&1 & for i in $(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 2; done; docker info >/dev/null 2>&1 || { echo 'dockerd did not start'; tail -50 /tmp/dockerd.log; exit 1; }; echo \"dockerd up\"; apk add --no-cache curl >/dev/null 2>&1 || true; cd /workspace; [ -f docker-compose.yml ] || [ -f compose.yaml ] || { echo 'no compose file from the compose agent'; exit 1; }; [ -f tests/integration.sh ] || { echo 'no tests/integration.sh from the integration-test agent'; exit 1; }; echo '=== docker-compose.yml ==='; cat docker-compose.yml 2>/dev/null || cat compose.yaml; set +e; echo '=== compose up --build --wait ==='; docker compose up -d --build --wait --wait-timeout 120; echo \"compose up rc=$?\"; echo '=== compose ps ==='; docker compose ps; export TARGET_URL=http://localhost:8080; echo '=== integration tests (TARGET_URL=http://localhost:8080) ==='; sh tests/integration.sh; rc=$?; echo '=== compose ps (post) ==='; docker compose ps; echo '=== app logs (tail) ==='; docker compose logs --tail=80 2>&1 | tail -80; docker compose down -v >/dev/null 2>&1 || true; echo \"integration result: $rc\"; exit $rc",
-        "volumes": [{"workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true}]
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
       }
     }
   ]

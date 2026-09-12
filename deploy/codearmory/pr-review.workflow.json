@@ -122,7 +122,34 @@
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "Review the change on pull request #${inputs.number} for quality."
-      }
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
     },
     {
       "name": "security-review",
@@ -133,7 +160,34 @@
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "Review the change on pull request #${inputs.number} for security."
-      }
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
     },
     {
       "name": "extract",
@@ -228,7 +282,34 @@
         "workflow_id": "${run_id}",
         "volume": "ws",
         "task": "Summarise pull request #${inputs.number} and give a merge recommendation."
-      }
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
     },
     {
       "name": "release",
@@ -268,7 +349,7 @@
         "secret_refs": {
           "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
         },
-        "run": "set +e\nexport HOME=/tmp\ngit config --global --add safe.directory '*'\ncd /workspace\nNUM='${inputs.number}'; REPO='${inputs.repo}'\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\ni=0; while [ \"$(timeout 12 curl -s -o /dev/null -w '%{http_code}' \"$GF/healthz\" 2>/dev/null)\" = \"000\" ]; do i=$((i+1)); [ \"$i\" -ge 10 ] && { echo \"gate: git-factory unreachable, leaving PR for a human\"; exit 0; }; sleep 5; done\nif [ ! -f SUMMARY.md ]; then echo \"gate: no SUMMARY.md — leaving PR #$NUM for a human\"; exit 0; fi\nVERDICT=$(sed -n '/## Recommendation/,$p' SUMMARY.md | sed '1d' | grep -m1 -oE 'MERGE WITH NUDGES|MERGE|HOLD')\necho \"gate: pr-summary verdict = ${VERDICT:-unknown}\"\nif [ \"$VERDICT\" != \"MERGE\" ]; then echo \"gate: holding PR #$NUM for a human (verdict ${VERDICT:-unknown})\"; exit 0; fi\nRID=$(curl -s --max-time 30 --retry 3 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1)\n[ -n \"$RID\" ] || { echo \"gate: could not resolve repo id, leaving PR #$NUM\"; exit 0; }\nCODE=$(curl -s -o /tmp/m -w '%{http_code}' --max-time 30 --retry 3 -X POST \"$GF/repos/$RID/pulls/$NUM/merge\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d '{\"message\":\"auto-merge: clean pr-review (MERGE)\"}')\ncase \"$CODE\" in 200|201|204) echo \"gate: auto-merged PR #$NUM to dev (verdict MERGE)\";; *) echo \"gate: merge of PR #$NUM failed HTTP $CODE (left for a human):\"; cat /tmp/m;; esac\nexit 0",
+        "run": "set +e\nexport HOME=/tmp\ngit config --global --add safe.directory '*'\ncd /workspace\nNUM='${inputs.number}'; REPO='${inputs.repo}'\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\ni=0; while [ \"$(timeout 12 curl -s -o /dev/null -w '%{http_code}' \"$GF/healthz\" 2>/dev/null)\" = \"000\" ]; do i=$((i+1)); [ \"$i\" -ge 10 ] && { echo \"gate: git-factory unreachable, leaving PR for a human\"; exit 0; }; sleep 5; done\nif [ ! -f SUMMARY.md ]; then echo \"gate: no SUMMARY.md \u2014 leaving PR #$NUM for a human\"; exit 0; fi\nVERDICT=$(sed -n '/## Recommendation/,$p' SUMMARY.md | sed '1d' | grep -m1 -oE 'MERGE WITH NUDGES|MERGE|HOLD')\necho \"gate: pr-summary verdict = ${VERDICT:-unknown}\"\nif [ \"$VERDICT\" != \"MERGE\" ]; then echo \"gate: holding PR #$NUM for a human (verdict ${VERDICT:-unknown})\"; exit 0; fi\nRID=$(curl -s --max-time 30 --retry 3 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1)\n[ -n \"$RID\" ] || { echo \"gate: could not resolve repo id, leaving PR #$NUM\"; exit 0; }\nCODE=$(curl -s -o /tmp/m -w '%{http_code}' --max-time 30 --retry 3 -X POST \"$GF/repos/$RID/pulls/$NUM/merge\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d '{\"message\":\"auto-merge: clean pr-review (MERGE)\"}')\ncase \"$CODE\" in 200|201|204) echo \"gate: auto-merged PR #$NUM to dev (verdict MERGE)\";; *) echo \"gate: merge of PR #$NUM failed HTTP $CODE (left for a human):\"; cat /tmp/m;; esac\nexit 0",
         "volumes": [
           {
             "workflow_id": "${run_id}",
