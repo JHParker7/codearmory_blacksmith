@@ -1,6 +1,6 @@
 {
   "name": "integration",
-  "project": "ops",
+  "project": "agentic-dev-flow",
   "timeout_secs": 3600,
   "description": "Integration arm: stand the built image + its dependencies up and test them for real. clone -> compose agent writes docker-compose.yml -> integration-test agent writes tests/integration.sh -> run step (on the privileged kata microVM class, image docker:27-dind) starts dockerd, `docker compose up --build`, runs the tests against the live app at http://localhost:8080, then tears down. Needs forge FORGE_ALLOW_PRIVILEGED_KATA=1 + the kata-build runner class (see forge-privileged-kata-switch). Inputs {namespace, repo, ref, project}.",
   "inputs": [
