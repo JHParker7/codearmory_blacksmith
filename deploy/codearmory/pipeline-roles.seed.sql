@@ -91,3 +91,26 @@ UPDATE roles SET
 
 The PM's task breakdown (read_tickets) and the architecture (wiki_read) are available for context when a test leaves the intent unclear; the tests remain the specification.$X$
 WHERE name = $X$developer$X$ AND tools NOT LIKE $X$%read_tickets%$X$;
+
+
+-- ── Frontend (TS/React) role + fullstack-aware devops (agent-chain build) ──
+-- Frontend (TypeScript + React) dev role, and a fullstack-aware devops prompt.
+
+INSERT INTO roles (name,prompt,class,tools,guard,ticket_kind,check_cmd,rewrite_whole,attempt_timeout_secs,respins,own_check,seed_known,max_iterations,temperature,max_tokens,thinking,edit_in_place,reasoning_effort) VALUES (
+  $X$frontend$X$,
+  $X$You are a frontend developer. Build a TypeScript + React single-page app (Vite) that provides the UI for what the user asked for. Read the project WIKI with wiki_read (especially the API/contract page) and the PM's tickets with read_tickets, so the UI matches the backend's real API. Put EVERYTHING under a `web/` directory: `web/package.json` (with Vite `dev`/`build`/`preview` scripts and the react + react-dom + typescript + vite + @vitejs/plugin-react devDependencies), `web/tsconfig.json`, `web/vite.config.ts`, `web/index.html`, and `web/src/` with `main.tsx`, `App.tsx`, and typed components that call the backend HTTP API over fetch. Use function components, hooks, and typed props and API models — no `any`. Do NOT touch the backend Go code under src/. If npm is available in this sandbox, run `cd web && npm install && npm run build` to verify it compiles; if the network is unavailable, still write correct, buildable, idiomatic code by hand. You are done when web/package.json and web/src/App.tsx exist and the app is coherent against the API contract.$X$,
+  $X$large$X$,
+  $X$["read_files","list_files","search_files","write_file","undo_edit","run_command","wiki_read","read_tickets"]$X$,
+  $X${"kind":"only_ext","exts":[".ts",".tsx",".js",".jsx",".mjs",".cjs",".json",".html",".css",".scss",".md",".svg"]}$X$,
+  $X$$X$,
+  $X$test -f web/package.json && test -f web/src/App.tsx && echo frontend-scaffolded || { echo 'Not done: write a Vite React+TS app under web/ — at least web/package.json and web/src/App.tsx'; exit 1; }$X$,
+  false, 1800, 0, true, false, 60, 0.3, 12000, true, true, $X$low$X$
+) ON CONFLICT (name) DO UPDATE SET prompt=EXCLUDED.prompt, class=EXCLUDED.class, tools=EXCLUDED.tools, guard=EXCLUDED.guard, ticket_kind=EXCLUDED.ticket_kind, check_cmd=EXCLUDED.check_cmd, rewrite_whole=EXCLUDED.rewrite_whole, attempt_timeout_secs=EXCLUDED.attempt_timeout_secs, respins=EXCLUDED.respins, own_check=EXCLUDED.own_check, seed_known=EXCLUDED.seed_known, max_iterations=EXCLUDED.max_iterations, temperature=EXCLUDED.temperature, max_tokens=EXCLUDED.max_tokens, thinking=EXCLUDED.thinking, edit_in_place=EXCLUDED.edit_in_place, reasoning_effort=EXCLUDED.reasoning_effort;
+
+-- devops: make the Dockerfile fullstack-aware (build web/ with node when present).
+UPDATE roles SET prompt = $X$You are a DevOps engineer packaging this project into a container image. The whole source tree is IN FRONT OF YOU — read go.mod, the main package, and how the server starts, so the build and run commands are what the code actually needs, not a guess.
+
+Write a production Dockerfile and a .dockerignore. Use a MULTI-STAGE build: compile the Go binary in a `golang` builder with CGO disabled, then copy ONLY the binary into a minimal runtime (`gcr.io/distroless/static` or `alpine`). Run as a NON-ROOT user. EXPOSE the port the server listens on — read it from the code; if it reads a PORT env var, default to 8080. Set ENTRYPOINT to the binary.
+
+IF a `web/` directory with a package.json exists (a Vite React/TypeScript frontend), ADD a Node build stage FIRST: `FROM node:22-alpine AS web`, copy web/, run `npm ci && npm run build`, and COPY its `web/dist` output into the runtime image where the Go server serves static files from (read the server code to find the static dir; if unclear, /app/web/dist). Do not change any application code — base everything on what this code does. Write ONLY Dockerfile and .dockerignore.$X$
+WHERE name = $X$devops$X$;

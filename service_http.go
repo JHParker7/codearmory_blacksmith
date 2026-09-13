@@ -64,6 +64,13 @@ type actionRequest struct {
 	Task       string `json:"task"`        // the request, the finding, the thing to do
 	Check      string `json:"check"`       // optional check-command override for this role
 	Project    string `json:"project"`     // the wiki project the architect writes to (wiki_page tool)
+	// Optional per-step sandbox overrides. Blank => the process default
+	// (AGENTS_REPO_IMAGE / AGENTS_REPO_RUNNER_CLASS). A Go stage leaves them blank
+	// and runs in golang; a frontend stage sets Image to a node image (and, if the
+	// node toolchain needs a different runtime, RunnerClass) so it builds React/TS
+	// in the right toolchain instead of the process-wide Go image.
+	Image       string `json:"image"`
+	RunnerClass string `json:"runner_class"`
 	// An optional PERSISTENT Go-cache volume, mounted alongside the workspace at
 	// /gocache with GOCACHE/GOMODCACHE pointed into it. The role's per-iteration
 	// `go build`/`go test` check reads a warm build+module cache instead of
@@ -265,10 +272,21 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		volumes = append(volumes, forge.VolumeMount{WorkflowID: req.CacheWorkflowID, Name: req.CacheVolume, MountPath: "/gocache"})
 		sandboxEnv = map[string]string{"GOCACHE": "/gocache/build", "GOMODCACHE": "/gocache/mod"}
 	}
+	// Per-step sandbox toolchain: a stage may override the image/runner class (a
+	// frontend stage runs node, a Go stage the default golang). Blank keeps the
+	// process default so every existing pipeline is unchanged.
+	sandboxImage := a.cfg.Repo.Image
+	if req.Image != "" {
+		sandboxImage = req.Image
+	}
+	sandboxClass := a.cfg.Repo.RunnerClass
+	if req.RunnerClass != "" {
+		sandboxClass = req.RunnerClass
+	}
 	fc := forge.Local(a.cfg.ForgeURL, tokenCredential(agentBearer, a.cfg))
 	sb, err := fc.Acquire(ctx, forge.SandboxSpec{
-		Image:           a.cfg.Repo.Image,
-		RunnerClass:     a.cfg.Repo.RunnerClass,
+		Image:           sandboxImage,
+		RunnerClass:     sandboxClass,
 		TimeoutSecs:     a.cfg.Repo.TimeoutSecs,
 		IdleTimeoutSecs: a.cfg.Repo.LeaseIdleSecs,
 		MaxLifetimeSecs: a.cfg.Repo.LeaseMaxSecs,

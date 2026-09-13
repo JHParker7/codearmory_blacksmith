@@ -324,8 +324,13 @@ func Defaults() []Role {
 				"binary in a `golang` builder with CGO disabled, then copy ONLY the binary into a minimal " +
 				"runtime (`gcr.io/distroless/static` or `alpine`). Run as a NON-ROOT user. EXPOSE the port " +
 				"the server listens on — read it from the code; if it reads a PORT env var, default to " +
-				"8080. Set ENTRYPOINT to the binary. Do not invent dependencies or change any application " +
-				"code — base everything on what this code does. Write ONLY Dockerfile and .dockerignore.",
+				"8080. Set ENTRYPOINT to the binary.\n\n" +
+				"IF a `web/` directory with a package.json exists (a Vite React/TypeScript frontend), ADD a " +
+				"Node build stage FIRST (`FROM node:22-alpine AS web`): copy web/, run `npm ci && npm run " +
+				"build`, and COPY its `web/dist` output into the runtime where the Go server serves static " +
+				"files from (read the code for the static dir; if unclear, /app/web/dist). Do not invent " +
+				"dependencies or change any application code — base everything on what this code does. Write " +
+				"ONLY Dockerfile and .dockerignore.",
 			Guard:         onlyBasenames("Dockerfile", ".dockerignore"),
 			Tools:         writing(),
 			OwnCheck:      true,
@@ -333,6 +338,32 @@ func Defaults() []Role {
 			MaxIterations: 8,
 			Temperature:   0.2,
 			MaxTokens:     6000,
+		},
+		{
+			// Frontend developer: builds a Vite React + TypeScript SPA under web/,
+			// reading the wiki contract + PM tickets. Runs in a node sandbox (the build
+			// pipeline sets with.image=node:22-alpine; blacksmith honors a per-step image
+			// override). Check is lenient — verify the app is scaffolded, not a full npm
+			// build — so it does not hard-depend on npm-registry egress from the sandbox.
+			Name:  "frontend",
+			Class: "large",
+			Prompt: "You are a frontend developer. Build a TypeScript + React single-page app (Vite) for what " +
+				"the user asked for. Read the project WIKI with wiki_read (the API/contract page) and the PM's " +
+				"tickets with read_tickets so the UI matches the backend's real API. Put EVERYTHING under a " +
+				"`web/` directory: web/package.json (Vite dev/build/preview scripts; react, react-dom, " +
+				"typescript, vite, @vitejs/plugin-react), web/tsconfig.json, web/vite.config.ts, web/index.html, " +
+				"and web/src/ with main.tsx, App.tsx, and typed components that call the backend over fetch. " +
+				"Function components and hooks, typed props and API models, no `any`. Do NOT touch the backend " +
+				"Go code under src/. If npm is available run `cd web && npm install && npm run build` to verify; " +
+				"otherwise write correct, buildable code by hand. Done when web/package.json and web/src/App.tsx " +
+				"exist and the app is coherent against the API contract.",
+			Guard:         onlyExt(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".html", ".css", ".scss", ".md", ".svg"),
+			Tools:         writing(tools.RunCommand, tools.WikiRead, tools.ReadTickets),
+			Check:         "test -f web/package.json && test -f web/src/App.tsx && echo frontend-scaffolded || { echo 'Not done: write a Vite React+TS app under web/'; exit 1; }",
+			OwnCheck:      true,
+			MaxIterations: 60,
+			Temperature:   0.3,
+			MaxTokens:     12000,
 		},
 
 		{
