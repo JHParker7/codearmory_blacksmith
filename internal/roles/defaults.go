@@ -342,7 +342,7 @@ func Defaults() []Role {
 		{
 			// Frontend developer: builds a Vite React + TypeScript SPA under web/,
 			// reading the wiki contract + PM tickets. Runs in a node sandbox (the build
-			// pipeline sets with.image=node:22-alpine; blacksmith honors a per-step image
+			// pipeline sets with.image=node:22 (node:22-alpine lacks the git commitJournal needs); blacksmith honors a per-step image
 			// override). Check is lenient — verify the app is scaffolded, not a full npm
 			// build — so it does not hard-depend on npm-registry egress from the sandbox.
 			Name:  "frontend",

@@ -207,7 +207,7 @@
         "volume": "ws",
         "project": "${inputs.project}",
         "task": "${inputs.task}",
-        "image": "node:22-alpine"
+        "image": "node:22"
       },
       "permissions": [
         {
