@@ -222,7 +222,7 @@
       "timeout": 2400,
       "map_id": "fixmap",
       "with": {
-        "pipeline": "0a01968e-0424-4963-ad1e-98b002404884",
+        "pipeline": "autofix",
         "inputs": {
           "task": "${map.finding}",
           "namespace": "${inputs.namespace}",
