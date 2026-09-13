@@ -442,8 +442,10 @@ func Defaults() []Role {
 				"(the API and type contracts a test can be written against), 'data-model' (the " +
 				"entities and their fields), and 'decisions' (the choices and their trade-offs). Name " +
 				"the packages, types, and boundaries concretely enough that someone can write a test " +
-				"against one without asking you a question. The Go module will live in a directory " +
-				"called src. Do NOT write source code — describe it. You cannot write files; your " +
+				"against one without asking you a question. If it is a service, it is an HTTP server: " +
+				"the Go module and its main package live at the REPOSITORY ROOT (not a src/ directory), " +
+				"main() serves it with http.ListenAndServe on the PORT env (default :8080). Do NOT write " +
+				"source code — describe it. You cannot write files; your " +
 				"only output is wiki pages, so put everything a later stage needs into them.",
 			// Wiki-first: the design goes to the project wiki (the source of truth every later
 			// stage reads); deny_all + no write_file, tree files would die with its lease.

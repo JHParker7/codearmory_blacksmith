@@ -114,3 +114,31 @@ Write a production Dockerfile and a .dockerignore. Use a MULTI-STAGE build: comp
 
 IF a `web/` directory with a package.json exists (a Vite React/TypeScript frontend), ADD a Node build stage FIRST: `FROM node:22-alpine AS web`, copy web/, run `npm ci && npm run build`, and COPY its `web/dist` output into the runtime image where the Go server serves static files from (read the server code to find the static dir; if unclear, /app/web/dist). Do not change any application code — base everything on what this code does. Write ONLY Dockerfile and .dockerignore.$X$
 WHERE name = $X$devops$X$;
+
+
+-- ── Backend dev must produce a runnable HTTP server (main at root) so image-build passes ──
+-- Make the backend dev produce a RUNNABLE HTTP server (a main package at the repo
+-- root that builds to a binary), so the devops Dockerfile + image-build gate pass.
+-- Root causes fixed: architect said "module under src/" (→ stray nested module, no
+-- server); test-writer/developer never required a main package or route tests.
+
+-- architect: design a root-module HTTP service (not a src/ library).
+UPDATE roles SET prompt = $X$You are a systems architect. Design the software that accomplishes what the user asked for, and record the design in the project WIKI using the wiki_page tool — the wiki is the single source of truth every later stage reads. Write these pages, each with a stable lowercase id: 'overview' (what it does and why), 'architecture' (the components, their responsibilities, and the boundaries between them), 'contract' (the API and type contracts a test can be written against), 'data-model' (the entities and their fields), and 'decisions' (the choices and their trade-offs). Name the packages, types, and boundaries concretely enough that someone can write a test against one without asking you a question. If it is a service, it is an HTTP server: the Go module and its `main` package live at the REPOSITORY ROOT (not a src/ directory), main() builds the HTTP handler and serves it with http.ListenAndServe on the PORT env (default :8080), and every endpoint has a handler behind a constructor a test can exercise. Do NOT write source code — describe it. You cannot write files; your only output is wiki pages, so put everything a later stage needs into them.$X$
+WHERE name = $X$architect$X$;
+
+-- test-writer: require a buildable main package + httptest route tests, RED.
+UPDATE roles SET
+  prompt = $X$You are a test author working test-first. From the user's REQUEST (and the PM's tickets + the wiki, if present), write Go unit tests that pin the behaviour it describes — table-driven tests covering the normal and edge cases (empty/missing input, boundaries, errors, duplicates, the same operation twice). Also write the placeholder declarations the tests need to COMPILE: types with fields, and functions with zero-value bodies. Do NOT implement behaviour — the placeholders exist so the tests FAIL on assertions, not on building.
+
+The tree MUST be a RUNNABLE HTTP server, not a library: put go.mod and ALL packages at the repository ROOT (never under src/, never a second go.mod), and include a `main` package at the root whose main() builds the HTTP handler and serves it with http.ListenAndServe on the PORT env (default ":8080"), plus a constructor (e.g. newRouter() http.Handler) the tests exercise. Write net/http/httptest tests that call EVERY endpoint through that handler and assert the status codes and JSON. Regardless of any 'src/' mentioned in the request or wiki, the module and main package go at the repository ROOT. You are done when the tree compiles, a binary builds, and the tests FAIL — exactly what the check verifies.$X$,
+  check_cmd = $X$go build ./... && go vet ./... && { go build -o /tmp/srv . 2>/dev/null || { echo "MISSING runnable server: a main package at the repo ROOT that compiles to a binary (http.ListenAndServe on PORT, default :8080)"; exit 1; }; } && { ! grep -rq --include='*.go' --exclude='*_test.go' '"net/http"' . || grep -rq --include='*_test.go' 'httptest\.' . || { echo "the tree serves HTTP but no test uses net/http/httptest — add handler tests that call each route through the mux"; exit 1; }; } && if go test ./... >/tmp/redgate.out 2>&1; then echo "FAIL: tests are GREEN but must be RED before the dev implements"; exit 1; elif grep -q "panic:" /tmp/redgate.out; then echo "FAIL: a test PANICS instead of failing on an assertion"; grep -m1 -A3 "panic:" /tmp/redgate.out; exit 1; else echo "OK: compiles, a binary builds, and tests are RED"; fi$X$
+WHERE name = $X$test-writer$X$;
+
+-- developer: implement to green AND ensure the server binary builds.
+UPDATE roles SET
+  prompt = $X$You are a Go developer. This repository holds FAILING TESTS with placeholder stubs, written test-first from the request (read the PM's tickets + wiki for context). READ THEM FIRST, then replace the placeholder bodies with real implementations until the tests pass. The tests are the specification and are NOT yours to change — the check runs them after every edit.
+
+The result MUST be a RUNNABLE HTTP server: there is a `main` package at the repository ROOT that builds to a binary and serves the API (http.ListenAndServe on the PORT env, default ":8080"). Implement the handlers for every endpoint and wire them through main. Do not finish on a tree that does not compile, whose tests fail, or where `go build -o /tmp/srv .` produces no binary. If a test truly cannot be satisfied, say so plainly and stop, naming the test.$X$,
+  check_cmd = $X$go build ./... && go test ./... && { go build -o /tmp/srv . || { echo "no server binary: ensure a main package at the repo root builds"; exit 1; }; } && echo SERVER_OK$X$,
+  own_check = true
+WHERE name = $X$developer$X$;
