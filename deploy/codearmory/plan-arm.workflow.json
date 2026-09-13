@@ -198,6 +198,69 @@
       ]
     },
     {
+      "name": "devops",
+      "action": "blacksmith/agent",
+      "timeout": 1200,
+      "with": {
+        "role": "devops",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "project": "${inputs.project}",
+        "task": "Package this project into a container image: write a production multi-stage Dockerfile and a .dockerignore grounded in the code (go.mod, the main package, the port it serves). Do not change application code."
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
+    },
+    {
+      "name": "image-build",
+      "action": "forge/build-image",
+      "timeout": 1200,
+      "with": {
+        "runner_class": "build",
+        "timeout": 1200,
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace"
+          }
+        ],
+        "build": {
+          "context": "/workspace",
+          "dockerfile": "Dockerfile",
+          "destinations": [
+            "codearmory-registry-mirror:5000/${inputs.namespace}/${inputs.repo}:preview"
+          ],
+          "no_push": true
+        }
+      }
+    },
+    {
       "name": "show",
       "action": "forge/run",
       "timeout": 180,
