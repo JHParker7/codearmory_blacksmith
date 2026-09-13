@@ -20,11 +20,11 @@ const (
 
 // Ticket is the subset of the platform's ticket the department reads and writes.
 type Ticket struct {
-	ID          string  `json:"ticket_id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Status      string  `json:"status"`
-	Priority    string  `json:"priority"`
+	ID          string `json:"ticket_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	Priority    string `json:"priority"`
 
 	// Project is the free-text project slug the platform filters a listing by. It
 	// carries NO authorization weight (access is still created_by/org), but it is
@@ -33,10 +33,10 @@ type Ticket struct {
 	// builder lists by it. Empty means "unfiled".
 	Project string `json:"project,omitempty"`
 
-	CreatedBy string `json:"created_by"`
-	BoardID     *string `json:"board_id,omitempty"`
-	AssigneeID  *string `json:"assignee_id,omitempty"`
-	ParentID    *string `json:"parent_id,omitempty"`
+	CreatedBy  string  `json:"created_by"`
+	BoardID    *string `json:"board_id,omitempty"`
+	AssigneeID *string `json:"assignee_id,omitempty"`
+	ParentID   *string `json:"parent_id,omitempty"`
 
 	// Version is the optimistic-concurrency token, served as an ETag and sent
 	// back as If-Match. It is what makes claiming a compare-and-set rather than

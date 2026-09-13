@@ -23,6 +23,11 @@
       "name": "ref",
       "required": false,
       "description": "an existing branch to extend/fix and push back to (a PR branch); empty = greenfield + open a new dev PR"
+    },
+    {
+      "name": "project",
+      "required": false,
+      "description": "the project every resource this run creates (the repo, its PR) is tagged with, and the project whose PM tickets + wiki the build agents read; defaults to ops"
     }
   ],
   "steps": [
@@ -54,7 +59,7 @@
       "with": {
         "image": "golang:1.25",
         "runner_class": "large",
-        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; REF='${inputs.ref}'; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; if [ -n \"$REF\" ]; then git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"$REF\"; echo \"working on existing branch $REF:\"; git log --oneline -1; else CODE=$(curl -s -o /tmp/r -w '%{http_code}' -X POST \"$GF/repos\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"name\\\":\\\"$REPO\\\",\\\"visibility\\\":\\\"private\\\",\\\"project\\\":\\\"ops\\\"}\"); case \"$CODE\" in 201|409) ;; *) echo \"repo create failed $CODE\"; cat /tmp/r; exit 1;; esac; if ! git ls-remote --exit-code --heads \"$GIT_URL\" main >/dev/null 2>&1; then D=$(mktemp -d); git -C \"$D\" init -q; git -C \"$D\" -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q --allow-empty -m 'chore: init main'; git -C \"$D\" push \"$GIT_URL\" HEAD:refs/heads/main; fi; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q main; echo 'cloned:'; git log --oneline -1; fi",
+        "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; REF='${inputs.ref}'; PROJ='${inputs.project}'; [ -z \"$PROJ\" ] && PROJ=ops; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; REPO='${inputs.repo}'; if [ -n \"$REF\" ]; then git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"$REF\"; echo \"working on existing branch $REF:\"; git log --oneline -1; else CODE=$(curl -s -o /tmp/r -w '%{http_code}' -X POST \"$GF/repos\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"name\\\":\\\"$REPO\\\",\\\"visibility\\\":\\\"private\\\",\\\"project\\\":\\\"$PROJ\\\"}\"); case \"$CODE\" in 201|409) ;; *) echo \"repo create failed $CODE\"; cat /tmp/r; exit 1;; esac; if ! git ls-remote --exit-code --heads \"$GIT_URL\" main >/dev/null 2>&1; then D=$(mktemp -d); git -C \"$D\" init -q; git -C \"$D\" -c user.email=blacksmith@codearmory -c user.name=blacksmith commit -q --allow-empty -m 'chore: init main'; git -C \"$D\" push \"$GIT_URL\" HEAD:refs/heads/main; fi; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q main; echo 'cloned:'; git log --oneline -1; fi",
         "volumes": [
           {
             "workflow_id": "${run_id}",
@@ -76,6 +81,7 @@
         "role": "test-writer",
         "workflow_id": "${run_id}",
         "volume": "ws",
+        "project": "${inputs.project}",
         "task": "${inputs.task}",
         "cache_workflow_id": "codearmory-plan-gocache",
         "cache_volume": "gocache"
@@ -106,6 +112,26 @@
           "service": "forge",
           "action": "getExecution",
           "resource": "forge/executions/*"
+        },
+        {
+          "service": "tickets",
+          "action": "listTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "getTicket",
+          "resource": "tickets/tickets/*"
+        },
+        {
+          "service": "wiki",
+          "action": "getPage",
+          "resource": "project/*/wiki/pages/*"
+        },
+        {
+          "service": "wiki",
+          "action": "listPage",
+          "resource": "project/*/wiki/pages"
         }
       ]
     },
@@ -117,6 +143,7 @@
         "role": "developer",
         "workflow_id": "${run_id}",
         "volume": "ws",
+        "project": "${inputs.project}",
         "task": "${inputs.task}",
         "cache_workflow_id": "codearmory-plan-gocache",
         "cache_volume": "gocache"
@@ -147,6 +174,26 @@
           "service": "forge",
           "action": "getExecution",
           "resource": "forge/executions/*"
+        },
+        {
+          "service": "tickets",
+          "action": "listTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "getTicket",
+          "resource": "tickets/tickets/*"
+        },
+        {
+          "service": "wiki",
+          "action": "getPage",
+          "resource": "project/*/wiki/pages/*"
+        },
+        {
+          "service": "wiki",
+          "action": "listPage",
+          "resource": "project/*/wiki/pages"
         }
       ]
     },

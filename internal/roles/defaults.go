@@ -354,6 +354,7 @@ func Defaults() []Role {
 				"<container-port>\"), so an integration test always reaches it at http://localhost:8080; " +
 				"give the app a healthcheck hitting its real health endpoint; pass the env the app needs to " +
 				"reach each dependency. For each dependency use its official image at a pinned tag, set the " +
+				"dependency. For each dependency use its official image at a pinned tag, set the " +
 				"env/credentials the app expects, give it a healthcheck, and make the app depends_on each " +
 				"with condition service_healthy so tests run only once everything is up. No host paths. " +
 				"Write ONLY docker-compose.yml, in one write_file call, then stop.",
@@ -402,16 +403,21 @@ func Defaults() []Role {
 		{
 			Name:  "architect",
 			Class: "large",
-			Prompt: "You are a systems architect. Write or update markdown files describing the " +
-				"software architecture that accomplishes what the user asked for. These files are " +
-				"the only thing the later stages get: a product manager will break them into work, a " +
-				"specification author will write failing tests from them, and a developer will " +
-				"implement against those tests. Put the Go module in a directory called src. Name " +
-				"the packages, the types and the boundaries between them concretely enough that " +
-				"someone can write a test against one without asking you a question. Do not write " +
-				"source code — describe it.",
-			Guard:         onlyExt(".md"),
-			Tools:         writing(),
+			Prompt: "You are a systems architect. Design the software that accomplishes what the " +
+				"user asked for, and record the design in the project WIKI using the wiki_page tool — " +
+				"the wiki is the single source of truth every later stage reads. Write these pages, " +
+				"each with a stable lowercase id: 'overview' (what it does and why), 'architecture' " +
+				"(the components, their responsibilities, and the boundaries between them), 'contract' " +
+				"(the API and type contracts a test can be written against), 'data-model' (the " +
+				"entities and their fields), and 'decisions' (the choices and their trade-offs). Name " +
+				"the packages, types, and boundaries concretely enough that someone can write a test " +
+				"against one without asking you a question. The Go module will live in a directory " +
+				"called src. Do NOT write source code — describe it. You cannot write files; your " +
+				"only output is wiki pages, so put everything a later stage needs into them.",
+			// Wiki-first: the design goes to the project wiki (the source of truth every later
+			// stage reads); deny_all + no write_file, tree files would die with its lease.
+			Guard:         denyAll(),
+			Tools:         append(readOnly(), tools.WikiPage),
 			MaxIterations: 20,
 			Temperature:   0.3,
 			MaxTokens:     8000,
@@ -419,14 +425,21 @@ func Defaults() []Role {
 		{
 			Name:  "pm",
 			Class: "large",
-			Prompt: "You are a product manager. Read the architecture documents and break the work " +
-				"into tasks that can be done independently. For each task write what it covers, what " +
-				"it depends on, and how anyone would know it is finished. Write them to markdown. A " +
-				"task that cannot be started until another is done must say so — the stages after " +
-				"you work from what you write, and an unstated dependency becomes a developer " +
-				"waiting on a package nobody built.",
-			Guard:         onlyExt(".md"),
-			Tools:         writing(),
+			Prompt: "You are a product manager. Read the project WIKI with the wiki_read tool — the " +
+				"architect has written the design there. Break the work into tasks small enough to be " +
+				"built and reviewed independently, and FILE EACH TASK AS A TICKET with the file_ticket " +
+				"tool. A ticket's title states the task in one line; its body states what the task " +
+				"covers, what it depends on (name the other tasks), and how anyone will know it is " +
+				"done (the acceptance check). Set the priority: 'high' for a foundational task nothing " +
+				"else can start without, 'medium' for the main body of work, 'low' for polish. Make " +
+				"dependencies explicit — an unstated dependency becomes a developer waiting on a " +
+				"package nobody built. The build pipeline reads the tickets you file (via " +
+				"read_tickets) and implements them, so a task you do not file does not get built. You " +
+				"cannot write files; your only outputs are reading the wiki and filing tickets.",
+			// Reads the wiki, files one ticket per task; the build agents read those tickets
+			// (read_tickets). deny_all + no write_file: outputs are wiki reads and filed tickets.
+			Guard:         denyAll(),
+			Tools:         append(readOnly(), tools.WikiRead, tools.FileTicket),
 			MaxIterations: 20,
 			Temperature:   0.3,
 			MaxTokens:     8000,
@@ -465,9 +478,9 @@ func Defaults() []Role {
 				"quietly working around it is not. IMPORTANT: the Go module lives in a directory called " +
 				"src — the architecture puts it there and the check runs `cd src`. Put go.mod and every " +
 				".go file you write UNDER src/ (e.g. src/store.go, src/go.mod), never at the repository root.",
-			Guard:         noTestsGo(),
-			Tools:         writing(tools.RunCommand),
-			Check:         goCheck,
+			Guard: noTestsGo(),
+			Tools: writing(tools.RunCommand),
+			Check: goCheck,
 			// OwnCheck: this role's module is under src/, so its check runs `cd src`.
 			// Without OwnCheck the operator's AGENTS_REPO_TEST_COMMAND (a root-level
 			// `go build ./...`, for the CLI's root-module demo repo) overrides it — and
@@ -503,9 +516,9 @@ func Defaults() []Role {
 				"the integration, not the design — if two pieces disagree about what a type should " +
 				"be, make them agree the way the architecture says, and if the architecture does not " +
 				"say, pick the one with more callers and note it. You may not edit tests.",
-			Guard:         noTestsGo(),
-			Tools:         writing(tools.RunCommand),
-			Check:         goCheck,
+			Guard: noTestsGo(),
+			Tools: writing(tools.RunCommand),
+			Check: goCheck,
 			// OwnCheck for the same reason as dev: the module is under src/, so the
 			// operator's root-level test-command override must not clobber `cd src`.
 			OwnCheck:      true,

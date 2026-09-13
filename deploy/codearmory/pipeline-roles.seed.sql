@@ -45,3 +45,49 @@ Treat the scan/ reports as LEADS, not truth: verify each against the code, keep 
 
 IMPORTANT — deliver, do not investigate forever: orient in AT MOST 3 turns from the tree and the scan reports; do NOT read every source file. Then make ONE write_file call with the full markdown findings table and STOP — do not read it back or write it again. A short, honest table written early is the goal; running out of turns while reading is a failure.$X$, $X$large$X$, $X$["read_files","list_files","search_files","write_file","undo_edit"]$X$, $X${"kind":"only_basenames","names":["review-security.md"]}$X$, $X$$X$, $X$$X$, false, 0, 0, false, true, 20, 0.7, 8000, true, false, $X$low$X$
 ) ON CONFLICT (name) DO UPDATE SET prompt=EXCLUDED.prompt, class=EXCLUDED.class, tools=EXCLUDED.tools, guard=EXCLUDED.guard, ticket_kind=EXCLUDED.ticket_kind, check_cmd=EXCLUDED.check_cmd, rewrite_whole=EXCLUDED.rewrite_whole, attempt_timeout_secs=EXCLUDED.attempt_timeout_secs, respins=EXCLUDED.respins, own_check=EXCLUDED.own_check, seed_known=EXCLUDED.seed_known, max_iterations=EXCLUDED.max_iterations, temperature=EXCLUDED.temperature, max_tokens=EXCLUDED.max_tokens, thinking=EXCLUDED.thinking, edit_in_place=EXCLUDED.edit_in_place, reasoning_effort=EXCLUDED.reasoning_effort;
+
+
+-- ── Corrected end-to-end orchestration roles (agent-chain: architect->pm->build) ──
+-- architect writes the design to the WIKI; pm reads the wiki and files task tickets;
+-- test-writer/developer read those tickets (+ the wiki). Applied after the rows above
+-- so the two UPDATEs land on the test-writer/developer rows the INSERTs just made.
+-- Corrected end-to-end pipeline roles:
+--   architect  -> writes the design to the WIKI (wiki_page)
+--   pm         -> reads the WIKI (wiki_read), files a task ticket per task (file_ticket)
+--   test-writer/developer -> read the PM's tickets (read_tickets) + the wiki (wiki_read)
+
+-- architect: wiki-first, cannot touch code (deny_all guard, no write_file)
+INSERT INTO roles (name,prompt,class,tools,guard,ticket_kind,check_cmd,rewrite_whole,attempt_timeout_secs,respins,own_check,seed_known,max_iterations,temperature,max_tokens,thinking,edit_in_place,reasoning_effort) VALUES (
+  $X$architect$X$,
+  $X$You are a systems architect. Design the software that accomplishes what the user asked for, and record the design in the project WIKI using the wiki_page tool — the wiki is the single source of truth every later stage reads. Write these pages, each with a stable lowercase id: 'overview' (what it does and why), 'architecture' (the components, their responsibilities, and the boundaries between them), 'contract' (the API and type contracts a test can be written against), 'data-model' (the entities and their fields), and 'decisions' (the choices and their trade-offs). Name the packages, types, and boundaries concretely enough that someone can write a test against one without asking you a question. The Go module will live in a directory called src. Do NOT write source code — describe it. You cannot write files; your only output is wiki pages, so put everything a later stage needs into them.$X$,
+  $X$large$X$,
+  $X$["read_files","list_files","search_files","wiki_page"]$X$,
+  $X${"kind":"deny_all"}$X$,
+  $X$$X$, $X$$X$, false, 1200, 0, false, false, 20, 0.3, 8000, true, false, $X$low$X$
+) ON CONFLICT (name) DO UPDATE SET prompt=EXCLUDED.prompt, class=EXCLUDED.class, tools=EXCLUDED.tools, guard=EXCLUDED.guard, ticket_kind=EXCLUDED.ticket_kind, check_cmd=EXCLUDED.check_cmd, rewrite_whole=EXCLUDED.rewrite_whole, attempt_timeout_secs=EXCLUDED.attempt_timeout_secs, respins=EXCLUDED.respins, own_check=EXCLUDED.own_check, seed_known=EXCLUDED.seed_known, max_iterations=EXCLUDED.max_iterations, temperature=EXCLUDED.temperature, max_tokens=EXCLUDED.max_tokens, thinking=EXCLUDED.thinking, edit_in_place=EXCLUDED.edit_in_place, reasoning_effort=EXCLUDED.reasoning_effort;
+
+-- pm: reads the wiki, files one ticket per task (deny_all guard, no write_file)
+INSERT INTO roles (name,prompt,class,tools,guard,ticket_kind,check_cmd,rewrite_whole,attempt_timeout_secs,respins,own_check,seed_known,max_iterations,temperature,max_tokens,thinking,edit_in_place,reasoning_effort) VALUES (
+  $X$pm$X$,
+  $X$You are a product manager. Read the project WIKI with the wiki_read tool — the architect has written the design there. Break the work into tasks small enough to be built and reviewed independently, and FILE EACH TASK AS A TICKET with the file_ticket tool. A ticket's title states the task in one line; its body states what the task covers, what it depends on (name the other tasks), and how anyone will know it is done (the acceptance check). Set the priority: 'high' for a foundational task nothing else can start without, 'medium' for the main body of work, 'low' for polish. Make dependencies explicit — an unstated dependency becomes a developer waiting on a package nobody built. The build pipeline reads the tickets you file (via read_tickets) and implements them, so a task you do not file does not get built. You cannot write files; your only outputs are reading the wiki and filing tickets.$X$,
+  $X$large$X$,
+  $X$["read_files","list_files","search_files","wiki_read","file_ticket"]$X$,
+  $X${"kind":"deny_all"}$X$,
+  $X$$X$, $X$$X$, false, 1200, 0, false, false, 20, 0.3, 8000, true, false, $X$low$X$
+) ON CONFLICT (name) DO UPDATE SET prompt=EXCLUDED.prompt, class=EXCLUDED.class, tools=EXCLUDED.tools, guard=EXCLUDED.guard, ticket_kind=EXCLUDED.ticket_kind, check_cmd=EXCLUDED.check_cmd, rewrite_whole=EXCLUDED.rewrite_whole, attempt_timeout_secs=EXCLUDED.attempt_timeout_secs, respins=EXCLUDED.respins, own_check=EXCLUDED.own_check, seed_known=EXCLUDED.seed_known, max_iterations=EXCLUDED.max_iterations, temperature=EXCLUDED.temperature, max_tokens=EXCLUDED.max_tokens, thinking=EXCLUDED.thinking, edit_in_place=EXCLUDED.edit_in_place, reasoning_effort=EXCLUDED.reasoning_effort;
+
+-- test-writer: also read the PM's tickets and the wiki for the behaviour to pin
+UPDATE roles SET
+  tools = $X$["read_files","list_files","search_files","write_file","undo_edit","run_command","read_tickets","wiki_read"]$X$,
+  prompt = prompt || $X$
+
+Before you start, call read_tickets to get the PM's task breakdown for this project and wiki_read to read the architecture the architect wrote — together they are the source of truth for the behaviour to pin. Pin the tickets' acceptance checks as tests.$X$
+WHERE name = $X$test-writer$X$ AND tools NOT LIKE $X$%read_tickets%$X$;
+
+-- developer: the tickets + wiki are context when the tests leave intent unclear
+UPDATE roles SET
+  tools = $X$["read_files","list_files","search_files","write_file","undo_edit","run_command","read_tickets","wiki_read"]$X$,
+  prompt = prompt || $X$
+
+The PM's task breakdown (read_tickets) and the architecture (wiki_read) are available for context when a test leaves the intent unclear; the tests remain the specification.$X$
+WHERE name = $X$developer$X$ AND tools NOT LIKE $X$%read_tickets%$X$;

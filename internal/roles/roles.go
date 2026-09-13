@@ -40,13 +40,13 @@ type Role struct {
 	TicketKind string       `json:"ticket_kind" gorm:"column:ticket_kind"`
 	Check      string       `json:"check"       gorm:"column:check_cmd"`
 
-	RewriteWhole       bool `json:"rewrite_whole"        gorm:"column:rewrite_whole"`
+	RewriteWhole       bool   `json:"rewrite_whole"        gorm:"column:rewrite_whole"`
 	EditInPlace        bool   `json:"edit_in_place"        gorm:"column:edit_in_place"`
 	ReasoningEffort    string `json:"reasoning_effort"     gorm:"column:reasoning_effort"`
-	AttemptTimeoutSecs int  `json:"attempt_timeout_secs" gorm:"column:attempt_timeout_secs"`
-	Respins            int  `json:"respins"              gorm:"column:respins"`
-	OwnCheck           bool `json:"own_check"            gorm:"column:own_check"`
-	SeedKnown          bool `json:"seed_known"           gorm:"column:seed_known"`
+	AttemptTimeoutSecs int    `json:"attempt_timeout_secs" gorm:"column:attempt_timeout_secs"`
+	Respins            int    `json:"respins"              gorm:"column:respins"`
+	OwnCheck           bool   `json:"own_check"            gorm:"column:own_check"`
+	SeedKnown          bool   `json:"seed_known"           gorm:"column:seed_known"`
 
 	MaxIterations int     `json:"max_iterations" gorm:"column:max_iterations"`
 	Temperature   float64 `json:"temperature"    gorm:"column:temperature"`

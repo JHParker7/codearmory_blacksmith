@@ -318,7 +318,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		WritePage:   a.wikiWriter(agentBearer, req.Project),
 		ReadWiki:    a.wikiReader(agentBearer, req.Project),
 		ReadTickets: a.ticketsReader(agentBearer, req.Project),
-		MergeFix:   func(string) (string, error) { approved = true; return "approved", nil },
+		MergeFix:    func(string) (string, error) { approved = true; return "approved", nil },
 		OnWrite: func(path, content string, deleted bool, message string) {
 			journal = append(journal, recordedWrite{path: path, content: content, deleted: deleted, message: message})
 		},
