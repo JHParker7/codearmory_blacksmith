@@ -1,0 +1,84 @@
+{
+  "name": "promote",
+  "project": "agentic-dev-flow",
+  "timeout_secs": 604800,
+  "description": "Environment-promotion pipeline with human gates: promote an already-built image through dev -> UAT -> prod by retagging it in the local registry, pausing at a manual ApprovalGate before each environment. Trigger with inputs {namespace, repo, version}: version is the source image tag build-dev produced on merge-to-dev (e.g. v1.2.3a). Each stage copies the image manifest to the next environment tag (uat, prod) only after an authorised human approves the gate, so a release never advances an environment without sign-off. No rebuild happens — the exact bytes validated in dev are the bytes promoted, so the artifact is immutable across environments.",
+  "inputs": [
+    {
+      "name": "namespace",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "repo",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "version",
+      "type": "string",
+      "required": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "approve-uat",
+      "approval": {
+        "message": "Promote ${inputs.namespace}/${inputs.repo}:${inputs.version} from dev to UAT? Approving copies the dev-validated image to the :uat tag."
+      }
+    },
+    {
+      "name": "tag-uat",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "standard",
+        "env": {
+          "NS": "${inputs.namespace}",
+          "REPO": "${inputs.repo}",
+          "SRC": "${inputs.version}",
+          "DST": "uat"
+        },
+        "run": "set -e; REG=codearmory-registry-mirror:5000; ACCEPT='application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json'; echo \"promoting $NS/$REPO: $SRC -> $DST\"; CT=$(curl -s -o /dev/null -D - -H \"Accept: $ACCEPT\" \"http://$REG/v2/$NS/$REPO/manifests/$SRC\" | tr -d '\\r' | awk -F': ' 'tolower($1)==\"content-type\"{print $2}' | tail -1); [ -n \"$CT\" ] || { echo \"could not read manifest content-type for $NS/$REPO:$SRC (does the image exist in the registry?)\"; exit 1; }; curl -s -H \"Accept: $ACCEPT\" \"http://$REG/v2/$NS/$REPO/manifests/$SRC\" > /tmp/m.json; [ -s /tmp/m.json ] || { echo 'empty manifest'; exit 1; }; for T in \"$DST\" \"$DST-$SRC\"; do code=$(curl -s -o /tmp/put.out -w '%{http_code}' -X PUT -H \"Content-Type: $CT\" \"http://$REG/v2/$NS/$REPO/manifests/$T\" --data-binary @/tmp/m.json); echo \"tag $NS/$REPO:$T -> $code\"; case \"$code\" in 2*) ;; *) cat /tmp/put.out; exit 1;; esac; done; echo promoted-to-uat"
+      }
+    },
+    {
+      "name": "approve-prod",
+      "approval": {
+        "message": "Promote ${inputs.namespace}/${inputs.repo} from UAT to PRODUCTION? Approving copies the UAT image to the :prod tag. This is the production release gate."
+      }
+    },
+    {
+      "name": "tag-prod",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "standard",
+        "env": {
+          "NS": "${inputs.namespace}",
+          "REPO": "${inputs.repo}",
+          "SRC": "uat",
+          "DST": "prod",
+          "VER": "${inputs.version}"
+        },
+        "run": "set -e; REG=codearmory-registry-mirror:5000; ACCEPT='application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json'; echo \"promoting $NS/$REPO: $SRC -> $DST\"; CT=$(curl -s -o /dev/null -D - -H \"Accept: $ACCEPT\" \"http://$REG/v2/$NS/$REPO/manifests/$SRC\" | tr -d '\\r' | awk -F': ' 'tolower($1)==\"content-type\"{print $2}' | tail -1); [ -n \"$CT\" ] || { echo \"could not read manifest content-type for $NS/$REPO:$SRC\"; exit 1; }; curl -s -H \"Accept: $ACCEPT\" \"http://$REG/v2/$NS/$REPO/manifests/$SRC\" > /tmp/m.json; [ -s /tmp/m.json ] || { echo 'empty manifest'; exit 1; }; for T in \"$DST\" \"$DST-$VER\"; do code=$(curl -s -o /tmp/put.out -w '%{http_code}' -X PUT -H \"Content-Type: $CT\" \"http://$REG/v2/$NS/$REPO/manifests/$T\" --data-binary @/tmp/m.json); echo \"tag $NS/$REPO:$T -> $code\"; case \"$code\" in 2*) ;; *) cat /tmp/put.out; exit 1;; esac; done; echo promoted-to-prod"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "from": "approve-uat",
+      "to": "tag-uat"
+    },
+    {
+      "from": "tag-uat",
+      "to": "approve-prod"
+    },
+    {
+      "from": "approve-prod",
+      "to": "tag-prod"
+    }
+  ]
+}
