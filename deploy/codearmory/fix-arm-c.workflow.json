@@ -74,6 +74,24 @@
       }
     },
     {
+      "name": "announce",
+      "action": "forge/run",
+      "timeout": 120,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "env": {
+          "TASK": "${inputs.task}",
+          "REPO": "${inputs.repo}",
+          "NUM": "${inputs.number}"
+        },
+        "run": "set +e; export HOME=/tmp; [ -n \"$NUM\" ] || { echo 'no PR number; skip announce'; exit 0; }; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; RID=$(curl -s --connect-timeout 5 --max-time 20 --retry 2 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); mkdir -p /tmp/jw; echo 'Ly8ganNvbndyYXA6IHJlYWRzIGEgYm9keSB0ZXh0IGZpbGUgYW5kIGVtaXRzIHsiYm9keSI6IDxqc29uLWVuY29kZWQgY29udGVudHM+fSB0bwovLyBzdGRvdXQuIFRoZSBjb21tZW50IGJvZHkgaXMgYnVpbHQgZnJvbSBnaXQgZGF0YSAoY29tbWl0IHNoYSArIHN1YmplY3QpIHdyaXR0ZW4gdG8KLy8gYSBmaWxlIOKAlCBzbyBpdCBpcyBzaGVsbC1zYWZlIChuZXZlciBpbnRlcnBvbGF0ZWQpIGFuZCBKU09OLXNhZmUgKGpzb24uTWFyc2hhbAovLyBlc2NhcGVzIHF1b3Rlcy9uZXdsaW5lcy9iYWNrdGlja3MpLiBjdXJsIHRoZW4gUE9TVHMgdGhlIHJlc3VsdCB0byBnaXQtZmFjdG9yeS4KcGFja2FnZSBtYWluCgppbXBvcnQgKAoJImVuY29kaW5nL2pzb24iCgkib3MiCikKCmZ1bmMgbWFpbigpIHsKCWIsIGVyciA6PSBvcy5SZWFkRmlsZShvcy5BcmdzWzFdKQoJaWYgZXJyICE9IG5pbCB7CgkJb3MuRXhpdCgxKQoJfQoJcGF5bG9hZCA6PSBtYXBbc3RyaW5nXXN0cmluZ3siYm9keSI6IHN0cmluZyhiKX0KCS8vIFBSX0NPTU1FTlRfQVVUSE9SIGF0dHJpYnV0ZXMgdGhlIHJlbGVhc2UgY29tbWVudCB0byBhIGJvdCBkaXNwbGF5IGlkZW50aXR5IHZpYQoJLy8gZ2l0LWZhY3RvcnkncyBjcmVhdGVQdWxsQ29tbWVudCBhdXRob3Igb3ZlcnJpZGUgKGFsbG93bGlzdGVkIHNlcnZlci1zaWRlKS4gRW1wdHkKCS8vIGxlYXZlcyBhdXRob3JzaGlwIGFzIHRoZSBwb3N0aW5nIGNyZWRlbnRpYWwncyB1c2VyLgoJaWYgYSA6PSBvcy5HZXRlbnYoIlBSX0NPTU1FTlRfQVVUSE9SIik7IGEgIT0gIiIgewoJCXBheWxvYWRbImF1dGhvciJdID0gYQoJfQoJZW5jLCBfIDo9IGpzb24uTWFyc2hhbChwYXlsb2FkKQoJb3MuU3Rkb3V0LldyaXRlKGVuYykKfQo=' | base64 -d > /tmp/jw/main.go; cd /tmp/jw && printf 'module jw\\n\\ngo 1.25\\n' > go.mod; FIRST=$(printf '%s' \"$TASK\" | head -1); printf '\ud83d\udd27 **Fixing:** %s\\n\\nThe commits below address this finding.' \"$FIRST\" > /tmp/body.txt; go run . /tmp/body.txt > /tmp/body.json; code=$(curl -s -o /tmp/resp --connect-timeout 5 --max-time 20 --retry 2 -w '%{http_code}' -X POST \"$GF/repos/$RID/pulls/$NUM/comments\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d @/tmp/body.json || echo 000); echo \"announce -> $code\"; exit 0"
+      }
+    },
+    {
       "name": "fixdev",
       "action": "blacksmith/agent",
       "timeout": 3000,
@@ -242,6 +260,32 @@
         },
         "output_env": [
           "fixed"
+        ]
+      }
+    },
+    {
+      "name": "done",
+      "action": "forge/run",
+      "timeout": 120,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "env": {
+          "REPO": "${inputs.repo}",
+          "NUM": "${inputs.number}",
+          "FIXED": "${steps.publish.output.fixed}"
+        },
+        "run": "set +e; export HOME=/tmp; git config --global --add safe.directory '*'; [ -n \"$NUM\" ] || { echo 'no PR number; skip done'; exit 0; }; TOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#'); GF=http://codearmory-git-factory:9002; RID=$(curl -s --connect-timeout 5 --max-time 20 --retry 2 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1); SHA=$(cd /workspace && git rev-parse --short HEAD 2>/dev/null || echo ''); if [ \"$FIXED\" = \"1\" ]; then printf '\u2705 **Fixed** \u2014 pushed `%s` (commits above).' \"$SHA\" > /tmp/body.txt; else printf '\u26a0\ufe0f **No change** for this finding \u2014 the autofixer could not resolve it.' > /tmp/body.txt; fi; mkdir -p /tmp/jw; echo 'Ly8ganNvbndyYXA6IHJlYWRzIGEgYm9keSB0ZXh0IGZpbGUgYW5kIGVtaXRzIHsiYm9keSI6IDxqc29uLWVuY29kZWQgY29udGVudHM+fSB0bwovLyBzdGRvdXQuIFRoZSBjb21tZW50IGJvZHkgaXMgYnVpbHQgZnJvbSBnaXQgZGF0YSAoY29tbWl0IHNoYSArIHN1YmplY3QpIHdyaXR0ZW4gdG8KLy8gYSBmaWxlIOKAlCBzbyBpdCBpcyBzaGVsbC1zYWZlIChuZXZlciBpbnRlcnBvbGF0ZWQpIGFuZCBKU09OLXNhZmUgKGpzb24uTWFyc2hhbAovLyBlc2NhcGVzIHF1b3Rlcy9uZXdsaW5lcy9iYWNrdGlja3MpLiBjdXJsIHRoZW4gUE9TVHMgdGhlIHJlc3VsdCB0byBnaXQtZmFjdG9yeS4KcGFja2FnZSBtYWluCgppbXBvcnQgKAoJImVuY29kaW5nL2pzb24iCgkib3MiCikKCmZ1bmMgbWFpbigpIHsKCWIsIGVyciA6PSBvcy5SZWFkRmlsZShvcy5BcmdzWzFdKQoJaWYgZXJyICE9IG5pbCB7CgkJb3MuRXhpdCgxKQoJfQoJcGF5bG9hZCA6PSBtYXBbc3RyaW5nXXN0cmluZ3siYm9keSI6IHN0cmluZyhiKX0KCS8vIFBSX0NPTU1FTlRfQVVUSE9SIGF0dHJpYnV0ZXMgdGhlIHJlbGVhc2UgY29tbWVudCB0byBhIGJvdCBkaXNwbGF5IGlkZW50aXR5IHZpYQoJLy8gZ2l0LWZhY3RvcnkncyBjcmVhdGVQdWxsQ29tbWVudCBhdXRob3Igb3ZlcnJpZGUgKGFsbG93bGlzdGVkIHNlcnZlci1zaWRlKS4gRW1wdHkKCS8vIGxlYXZlcyBhdXRob3JzaGlwIGFzIHRoZSBwb3N0aW5nIGNyZWRlbnRpYWwncyB1c2VyLgoJaWYgYSA6PSBvcy5HZXRlbnYoIlBSX0NPTU1FTlRfQVVUSE9SIik7IGEgIT0gIiIgewoJCXBheWxvYWRbImF1dGhvciJdID0gYQoJfQoJZW5jLCBfIDo9IGpzb24uTWFyc2hhbChwYXlsb2FkKQoJb3MuU3Rkb3V0LldyaXRlKGVuYykKfQo=' | base64 -d > /tmp/jw/main.go; cd /tmp/jw && printf 'module jw\\n\\ngo 1.25\\n' > go.mod; go run . /tmp/body.txt > /tmp/body.json; code=$(curl -s -o /tmp/resp --connect-timeout 5 --max-time 20 --retry 2 -w '%{http_code}' -X POST \"$GF/repos/$RID/pulls/$NUM/comments\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d @/tmp/body.json || echo 000); echo \"done -> $code\"; exit 0",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
         ]
       }
     }
