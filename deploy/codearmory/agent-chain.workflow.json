@@ -39,7 +39,7 @@
     {
       "action": "blacksmith/agent",
       "name": "architect",
-      "timeout": 1800,
+      "timeout": 3000,
       "with": {
         "role": "architect",
         "workflow_id": "${run_id}",
@@ -93,7 +93,7 @@
     {
       "action": "blacksmith/agent",
       "name": "pm",
-      "timeout": 1800,
+      "timeout": 2400,
       "with": {
         "role": "pm",
         "workflow_id": "${run_id}",
