@@ -29,16 +29,21 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 5 {
-		fmt.Fprintln(os.Stderr, "poster: usage: poster <scanDir> <outDir> <findings.json|-> <outcomes.json|-> [reviewFile...]")
+	if len(os.Args) < 7 {
+		fmt.Fprintln(os.Stderr, "poster: usage: poster <scanDir> <outDir> <findings-go.json|-> <go-outcomes.json|-> <findings-web.json|-> <web-outcomes.json|-> [reviewFile...]")
 		os.Exit(1)
 	}
 	scanDir, outDir := os.Args[1], os.Args[2]
-	// fixedByLoc: finding location -> was it fixed. Built by zipping findings.json (the
-	// order the fix map iterated) with the map's aggregated per-fix outcomes. Empty when
-	// either arg is "-" (then no Fixed column is added).
+	// fixedByLoc: finding location -> was it fixed. Built by zipping each domain's record
+	// file (the order that domain's fix map iterated) with that map's aggregated
+	// outcomes, then MERGING the two — so a finding is marked fixed only by the fixer
+	// that actually ran for it (Go findings by `autofix`, web findings by `autofix-web`).
+	// A "-" arg contributes nothing (its half adds no Fixed marks).
 	fixedByLoc := buildFixed(os.Args[3], os.Args[4])
-	reviewFiles := os.Args[5:]
+	for k, v := range buildFixed(os.Args[5], os.Args[6]) {
+		fixedByLoc[k] = v
+	}
+	reviewFiles := os.Args[7:]
 
 	// The scan comment: one block, three tables (or a clean bill of health each).
 	var b strings.Builder

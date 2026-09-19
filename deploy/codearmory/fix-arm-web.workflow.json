@@ -1,0 +1,153 @@
+{
+  "name": "autofix-web",
+  "project": "agentic-dev-flow",
+  "timeout_secs": 6000,
+  "description": "Frontend (TypeScript/React) fix pipeline: a frontend-fixer agent writes the fix under web/, gated by its OWN check (npm install && npm run build / tsc --noEmit), then publishes the commit to the PR branch. The web sibling of `autofix` — no Go test-auditor, since the guard is .ts/.tsx and the gate is a type-check/build. Inputs {task, namespace, repo, ref, number}.",
+  "inputs": [
+    {
+      "name": "task",
+      "required": true,
+      "description": "the review finding to fix"
+    },
+    {
+      "name": "namespace",
+      "required": true,
+      "description": "git-factory namespace (owner)"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "git-factory repo name"
+    },
+    {
+      "name": "ref",
+      "required": true,
+      "description": "the PR branch to fix"
+    },
+    {
+      "name": "number",
+      "required": false,
+      "description": "the pull request number this fix belongs to (provenance)"
+    }
+  ],
+  "steps": [
+    {
+      "name": "workspace",
+      "action": "forge/create-volume",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
+    },
+    {
+      "name": "clone",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"${inputs.ref}\"; git rev-parse HEAD > /workspace/.fixbase; echo \"working on branch ${inputs.ref}:\"; git log --oneline -1",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
+      }
+    },
+    {
+      "name": "fixdev",
+      "action": "blacksmith/agent",
+      "timeout": 3000,
+      "with": {
+        "role": "frontend-fixer",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "${inputs.task}",
+        "image": "node:22"
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
+    },
+    {
+      "name": "show",
+      "action": "forge/run",
+      "timeout": 180,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; BASE=$(cat /workspace/.fixbase 2>/dev/null || git rev-parse \"origin/${inputs.ref}\"); echo '=== STAT ==='; git diff --stat \"$BASE\" HEAD; echo '=== DIFF ==='; git diff \"$BASE\" HEAD | head -450",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "publish",
+      "action": "forge/run",
+      "timeout": 200,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; REF='${inputs.ref}'; BASE=$(git rev-parse \"origin/$REF\"); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no fix commits -- nothing to push'; fixed=0; export fixed; echo \"fixed=$fixed\"; exit 0; fi; git push \"$GIT_URL\" HEAD:refs/heads/$REF; echo \"pushed the fix to $REF\"; fixed=1; export fixed; echo \"fixed=$fixed\"",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "output_env": [
+          "fixed"
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "fixed",
+      "value": "${steps.publish.output.fixed}"
+    }
+  ]
+}
