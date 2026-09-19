@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -45,6 +46,14 @@ func main() {
 	b.WriteString(lintTable(filepath.Join(scanDir, "lint.txt")))
 	b.WriteString(gosecTable(filepath.Join(scanDir, "sast.json")))
 	b.WriteString(vulnTable(filepath.Join(scanDir, "sca.txt")))
+
+	// Frontend (web/) scans, shown only when the scan-web step ran (its output files
+	// exist). Keeps the comment Go-only for backend-only repos.
+	if fileExists(filepath.Join(scanDir, "web-lint.txt")) || fileExists(filepath.Join(scanDir, "web-sca.json")) {
+		b.WriteString("### Frontend (web/)\n\n")
+		b.WriteString(webLintTable(filepath.Join(scanDir, "web-lint.txt")))
+		b.WriteString(npmAuditTable(filepath.Join(scanDir, "web-sca.json")))
+	}
 
 	bodies := []string{b.String()}
 	// The reviewer findings files. Each is a markdown table; inject a "Fixed?" column
@@ -171,6 +180,98 @@ func cell(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", "")
 	return strings.TrimSpace(s)
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// webLintTable renders the node-native frontend scanners' output (tsc --noEmit and
+// Biome lint, both appended to web-lint.txt) into a table. Formats vary, so it keeps
+// diagnostic-looking lines and splits location from message best-effort; capped so a
+// noisy run can't produce a giant comment.
+func webLintTable(p string) string {
+	lines := nonEmptyLines(readFile(p))
+	var diag []string
+	for _, ln := range lines {
+		low := strings.ToLower(ln)
+		if strings.Contains(low, "error") || strings.Contains(low, "warning") ||
+			strings.Contains(ln, ".ts") || strings.Contains(ln, ".tsx") ||
+			strings.Contains(ln, ".js") || strings.Contains(ln, ".jsx") {
+			diag = append(diag, ln)
+		}
+	}
+	if len(diag) == 0 {
+		return "#### 🧹 Lint & types (tsc + Biome)\n\nNo issues found.\n\n"
+	}
+	const cap = 50
+	trunc := false
+	if len(diag) > cap {
+		diag, trunc = diag[:cap], true
+	}
+	var b strings.Builder
+	b.WriteString("#### 🧹 Lint & types (tsc + Biome)\n\n| Location | Message |\n|---|---|\n")
+	for _, ln := range diag {
+		loc, msg := ln, ""
+		if parts := strings.SplitN(ln, ": ", 2); len(parts) == 2 {
+			loc, msg = parts[0], parts[1]
+		}
+		b.WriteString("| " + cell(loc) + " | " + cell(msg) + " |\n")
+	}
+	if trunc {
+		b.WriteString("| … | (truncated) |\n")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// npmAuditTable parses `npm audit --json` (npm 7+ shape: a vulnerabilities map) into a
+// table. Keys are sorted so the output is stable across runs.
+func npmAuditTable(p string) string {
+	var report struct {
+		Vulnerabilities map[string]struct {
+			Severity string          `json:"severity"`
+			Via      json.RawMessage `json:"via"`
+		} `json:"vulnerabilities"`
+	}
+	if err := json.Unmarshal([]byte(readFile(p)), &report); err != nil || len(report.Vulnerabilities) == 0 {
+		return "#### 📦 Dependencies (npm audit)\n\nNo known vulnerabilities.\n\n"
+	}
+	names := make([]string, 0, len(report.Vulnerabilities))
+	for name := range report.Vulnerabilities {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	b.WriteString("#### 📦 Dependencies (npm audit)\n\n| Package | Severity | Advisory |\n|---|---|---|\n")
+	for _, name := range names {
+		v := report.Vulnerabilities[name]
+		b.WriteString("| " + cell(name) + " | " + cell(v.Severity) + " | " + cell(viaSummary(v.Via)) + " |\n")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// viaSummary pulls a human advisory title from npm audit's `via` array, whose elements
+// are either an advisory object {title,url,severity} or a bare package-name string.
+func viaSummary(raw json.RawMessage) string {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return ""
+	}
+	for _, el := range arr {
+		var obj struct {
+			Title string `json:"title"`
+		}
+		if json.Unmarshal(el, &obj) == nil && obj.Title != "" {
+			return obj.Title
+		}
+	}
+	if len(arr) > 0 {
+		var s string
+		if json.Unmarshal(arr[0], &s) == nil && s != "" {
+			return "via " + s
+		}
+	}
+	return ""
 }
 
 // --- Fixed? column support ---
