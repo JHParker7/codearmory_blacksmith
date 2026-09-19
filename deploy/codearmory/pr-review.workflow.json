@@ -408,7 +408,7 @@
         "secret_refs": {
           "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
         },
-        "run": "set +e\nexport HOME=/tmp\ngit config --global --add safe.directory '*'\ncd /workspace\nNUM='${inputs.number}'; REPO='${inputs.repo}'; RITER='${inputs.refine_iter}'\n[ -z \"$RITER\" ] && RITER=0\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\nverdict=unknown; merged=false\ni=0; while [ \"$(timeout 12 curl -s -o /dev/null -w '%{http_code}' \"$GF/healthz\" 2>/dev/null)\" = \"000\" ]; do i=$((i+1)); [ \"$i\" -ge 10 ] && break; sleep 5; done\nif [ -f SUMMARY.md ]; then v=$(sed -n '/## Recommendation/,$p' SUMMARY.md | sed '1d' | grep -m1 -oE 'MERGE WITH NUDGES|MERGE|HOLD'); [ -n \"$v\" ] && verdict=\"$v\"; fi\necho \"gate: verdict=[$verdict] refine_iter=$RITER\" 1>&2\nif [ \"$verdict\" = \"MERGE\" ]; then\n  RID=$(curl -s --max-time 30 --retry 3 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1)\n  if [ -n \"$RID\" ]; then\n    CODE=$(curl -s -o /tmp/m -w '%{http_code}' --max-time 30 --retry 3 -X POST \"$GF/repos/$RID/pulls/$NUM/merge\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d '{\"message\":\"auto-merge: clean pr-review (MERGE)\"}')\n    case \"$CODE\" in 200|201|204) merged=true; echo \"gate: auto-merged PR #$NUM\" 1>&2;; *) echo \"gate: merge failed HTTP $CODE\" 1>&2; cat /tmp/m 1>&2;; esac\n  fi\nfi\nrefine_iter=\"$RITER\"\nexport verdict merged refine_iter\necho \"verdict=$verdict\"\necho \"merged=$merged\"\necho \"refine_iter=$refine_iter\"\n",
+        "run": "set +e\nexport HOME=/tmp\ngit config --global --add safe.directory '*'\ncd /workspace\nNUM='${inputs.number}'; REPO='${inputs.repo}'; RITER='${inputs.refine_iter}'\n[ -z \"$RITER\" ] && RITER=0\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\nverdict=unknown; merged=false\ni=0; while [ \"$(timeout 12 curl -s -o /dev/null -w '%{http_code}' \"$GF/healthz\" 2>/dev/null)\" = \"000\" ]; do i=$((i+1)); [ \"$i\" -ge 10 ] && break; sleep 5; done\nif [ -f SUMMARY.md ]; then v=$(sed -n '/## Recommendation/,$p' SUMMARY.md | sed '1d' | grep -m1 -oE 'MERGE WITH NUDGES|MERGE|HOLD'); [ -n \"$v\" ] && verdict=\"$v\"; fi\necho \"gate: verdict=[$verdict] refine_iter=$RITER\" 1>&2\nif [ \"$verdict\" = \"MERGE\" ] || { [ \"$verdict\" = \"MERGE WITH NUDGES\" ] && [ \"${RITER:-0}\" -ge 1 ]; }; then\n  RID=$(curl -s --max-time 30 --retry 3 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1)\n  if [ -n \"$RID\" ]; then\n    CODE=$(curl -s -o /tmp/m -w '%{http_code}' --max-time 30 --retry 3 -X POST \"$GF/repos/$RID/pulls/$NUM/merge\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d '{\"message\":\"auto-merge: clean pr-review (MERGE)\"}')\n    case \"$CODE\" in 200|201|204) merged=true; echo \"gate: auto-merged PR #$NUM\" 1>&2;; *) echo \"gate: merge failed HTTP $CODE\" 1>&2; cat /tmp/m 1>&2;; esac\n  fi\nfi\nrefine_iter=\"$RITER\"\nexport verdict merged refine_iter\necho \"verdict=$verdict\"\necho \"merged=$merged\"\necho \"refine_iter=$refine_iter\"\n",
         "volumes": [
           {
             "workflow_id": "${run_id}",
@@ -617,12 +617,12 @@
     {
       "from": "gate",
       "to": "judge",
-      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict != 'MERGE'"
+      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict == 'HOLD'"
     },
     {
       "from": "gate",
       "to": "hold",
-      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict == 'MERGE'"
+      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict != 'MERGE WITH NUDGES' && steps.gate.json.verdict != 'HOLD'"
     },
     {
       "from": "judge",
@@ -642,6 +642,11 @@
       "from": "judgeread",
       "to": "hold",
       "when": "steps.judgeread.json.decision == 'human' || (steps.judgeread.json.decision == 'autofix' && int(steps.gate.json.refine_iter) >= 1)"
+    },
+    {
+      "from": "gate",
+      "to": "refine",
+      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict == 'MERGE WITH NUDGES' && int(steps.gate.json.refine_iter) == 0"
     }
   ]
 }
