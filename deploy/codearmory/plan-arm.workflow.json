@@ -297,6 +297,24 @@
       ]
     },
     {
+      "name": "normalize-dockerfile",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; CHANGED=0; for f in Dockerfile web/Dockerfile frontend/Dockerfile; do [ -f \"$f\" ] || continue; if grep -q 'npm ci' \"$f\"; then sed -i 's/npm ci/npm install/g' \"$f\"; echo \"normalized npm ci -> npm install in $f\"; CHANGED=1; fi; done; if [ \"$CHANGED\" = 1 ]; then git config user.email 'pipeline@codearmory.local'; git config user.name 'codearmory-pipeline'; git add -A; git commit -m 'chore(build): use npm install so image build does not require a lockfile' || true; fi; echo normalize-done",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
+      }
+    },
+    {
       "name": "image-build",
       "action": "forge/build-image",
       "timeout": 1200,
