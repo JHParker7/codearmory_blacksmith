@@ -617,12 +617,12 @@
     {
       "from": "gate",
       "to": "judge",
-      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict != 'MERGE' && int(steps.gate.json.refine_iter) == 0"
+      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict != 'MERGE'"
     },
     {
       "from": "gate",
       "to": "hold",
-      "when": "steps.gate.json.merged == 'false' && (steps.gate.json.verdict == 'MERGE' || int(steps.gate.json.refine_iter) >= 1)"
+      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict == 'MERGE'"
     },
     {
       "from": "judge",
@@ -636,12 +636,12 @@
     {
       "from": "judgeread",
       "to": "refine",
-      "when": "steps.judgeread.json.decision == 'autofix'"
+      "when": "steps.judgeread.json.decision == 'autofix' && int(steps.gate.json.refine_iter) == 0"
     },
     {
       "from": "judgeread",
       "to": "hold",
-      "when": "steps.judgeread.json.decision == 'human'"
+      "when": "steps.judgeread.json.decision == 'human' || (steps.judgeread.json.decision == 'autofix' && int(steps.gate.json.refine_iter) >= 1)"
     }
   ]
 }
