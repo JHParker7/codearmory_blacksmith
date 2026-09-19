@@ -249,7 +249,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 	agentBearer := who.bearer
 	var roleID, sessionID string
 	if a.gk != nil && who.sub.UserID != "" {
-		rid, err := a.gk.MintRole(ctx, id, who.sub.UserID, who.sub.OrgID, agentPermissions(req.Project))
+		rid, err := a.gk.MintRole(ctx, id, who.sub.UserID, who.sub.OrgID, agentPermissions(req.Project, a.cfg.DocsProject))
 		if err != nil {
 			fail("mint the agent's scoped role: " + firstLineOf(err.Error()))
 			return
@@ -401,7 +401,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 // agentPermissions is the set an agent run requests. gatekeeper intersects it
 // with the user's own grants, so this is a ceiling, not a grant: the agent may
 // file findings and run in its sandbox, and only against what the user can.
-func agentPermissions(project string) []gatekeeper.Permission {
+func agentPermissions(project, docsProject string) []gatekeeper.Permission {
 	perms := []gatekeeper.Permission{
 		// The role runs its ENTIRE tool loop inside ONE forge lease: acquire it
 		// (createLease), wait for its sandbox to boot (getLease), run every command
@@ -441,6 +441,18 @@ func agentPermissions(project string) []gatekeeper.Permission {
 			gatekeeper.Permission{Service: "wiki", Action: "writePage", Resource: "project/" + project + "/wiki/pages/*"},
 			gatekeeper.Permission{Service: "wiki", Action: "getPage", Resource: "project/" + project + "/wiki/pages/*"},
 			gatekeeper.Permission{Service: "wiki", Action: "listPage", Resource: "project/" + project + "/wiki/pages"},
+		)
+	}
+	// The architect also MIRRORS architecture diagrams into a central cross-repo docs
+	// wiki (a project other than the run's), so the scoped role must carry write on
+	// that project's wiki too. Attenuated against the user like every other grant: it
+	// survives only if the pipeline owner already holds write on the docs project (be
+	// a member/owner of it), so a run can never mirror somewhere the user could not.
+	if docsProject != "" && docsProject != project {
+		perms = append(perms,
+			gatekeeper.Permission{Service: "wiki", Action: "writePage", Resource: "project/" + docsProject + "/wiki/pages/*"},
+			gatekeeper.Permission{Service: "wiki", Action: "getPage", Resource: "project/" + docsProject + "/wiki/pages/*"},
+			gatekeeper.Permission{Service: "wiki", Action: "listPage", Resource: "project/" + docsProject + "/wiki/pages"},
 		)
 	}
 	return perms
