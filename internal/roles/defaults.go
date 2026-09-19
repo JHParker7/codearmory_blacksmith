@@ -343,8 +343,12 @@ func Defaults() []Role {
 			// Frontend developer: builds a Vite React + TypeScript SPA under web/,
 			// reading the wiki contract + PM tickets. Runs in a node sandbox (the build
 			// pipeline sets with.image=node:22 (node:22-alpine lacks the git commitJournal needs); blacksmith honors a per-step image
-			// override). Check is lenient — verify the app is scaffolded, not a full npm
-			// build — so it does not hard-depend on npm-registry egress from the sandbox.
+			// override). Test-first like the backend: the frontend-test-writer leaves RED
+			// vitest tests, and this check runs the REAL build + tests (npm ci && npm run
+			// build && vitest) — the egress proxy allows the npm registry
+			// (PROXY_ALLOWED_DOMAINS=*), so a strict tsc error (e.g. noUnusedLocals) is
+			// caught and fixed here in-loop, not later at image-build. Before this the check
+			// only checked files existed, and an unused-var tsc error reached image-build (r: taskboard-v2).
 			Name:  "frontend",
 			Class: "large",
 			Prompt: "You are a frontend developer. Build a TypeScript + React single-page app (Vite) for what " +
@@ -354,15 +358,47 @@ func Defaults() []Role {
 				"typescript, vite, @vitejs/plugin-react), web/tsconfig.json, web/vite.config.ts, web/index.html, " +
 				"and web/src/ with main.tsx, App.tsx, and typed components that call the backend over fetch. " +
 				"Function components and hooks, typed props and API models, no `any`. Do NOT touch the backend " +
-				"Go code under src/. If npm is available run `cd web && npm install && npm run build` to verify; " +
-				"otherwise write correct, buildable code by hand. Done when web/package.json and web/src/App.tsx " +
-				"exist and the app is coherent against the API contract.",
+				"Go code under src/. The repo already holds RED vitest + React Testing Library tests under web/ " +
+				"(written test-first) — READ them first; they are the SPEC and are NOT yours to change. Implement " +
+				"the components until they pass. Your check runs `cd web && npm ci && npm run build && vitest run` " +
+				"after every edit: fix EVERY TypeScript/build error (the tsc build is strict — noUnusedLocals, no " +
+				"`any`) and make the tests green. Done when the build and the tests both pass.",
 			Guard:         onlyExt(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".html", ".css", ".scss", ".md", ".svg"),
 			Tools:         writing(tools.RunCommand, tools.WikiRead, tools.ReadTickets),
-			Check:         "test -f web/package.json && test -f web/src/App.tsx && echo frontend-scaffolded || { echo 'Not done: write a Vite React+TS app under web/'; exit 1; }",
+			Check:         "cd web && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npm run build && if [ -f node_modules/.bin/vitest ]; then CI=1 node_modules/.bin/vitest run; fi && echo WEB_OK || { echo 'web is not green: run `cd web && npm run build` and fix the TypeScript/build errors (strict tsc: noUnusedLocals), then make vitest pass'; exit 1; }",
 			OwnCheck:      true,
 			MaxIterations: 60,
 			Temperature:   0.3,
+			MaxTokens:     12000,
+		},
+		{
+			// Frontend test author, test-first — the web mirror of the Go test-writer.
+			// Writes FAILING vitest + React Testing Library tests under web/ plus the
+			// compiling stubs they need (package.json with vitest + @testing-library/react
+			// and a `test`: `vitest run` script, tsconfig, vite.config, stub components), so
+			// the frontend dev has a RED spec to satisfy. Runs in node:22 (pipeline image
+			// override). Check is the expected-RED gate: deps install, tsc --noEmit compiles
+			// the stubs, at least one *.test.tsx exists, and the suite is RED.
+			Name:  "frontend-test-writer",
+			Class: "large",
+			Prompt: "You are a frontend test author working test-first — the web equivalent of a Go test author. " +
+				"From the user's REQUEST, the project WIKI (wiki_read — the API/contract page) and the PM's tickets " +
+				"(read_tickets), write vitest + React Testing Library tests under `web/` that pin the UI behaviour: " +
+				"rendering, list/empty states, add/toggle/delete interactions, and the fetch calls to the backend API " +
+				"(mock fetch). Put EVERYTHING under web/: web/package.json (react, react-dom, typescript, vite, " +
+				"@vitejs/plugin-react, vitest, jsdom, @testing-library/react, @testing-library/jest-dom; a `build`: " +
+				"`tsc && vite build` script and a `test`: `vitest run` script), web/tsconfig.json, web/vite.config.ts " +
+				"(test.environment jsdom), web/index.html, and web/src/*.test.tsx. Also write the MINIMAL compiling " +
+				"STUBS the tests import (component files + typed API models with real signatures but placeholder " +
+				"bodies) so the project type-checks — but the tests MUST FAIL (RED), because the frontend dev writes " +
+				"the implementations next. Do NOT implement the components. Clean TypeScript, no unused locals, no " +
+				"`any`. Done when web/ type-checks (tsc --noEmit) and `vitest run` is RED.",
+			Guard:         onlyExt(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".html", ".css", ".scss", ".md", ".svg"),
+			Tools:         writing(tools.RunCommand, tools.WikiRead, tools.ReadTickets),
+			Check:         "cd web && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npx --yes tsc --noEmit && [ -f node_modules/.bin/vitest ] && find src -name '*.test.ts*' | grep -q . && { CI=1 node_modules/.bin/vitest run >/tmp/wr.out 2>&1 && { echo 'FAIL: web tests are GREEN but must be RED before the frontend dev implements'; exit 1; } || echo 'OK: web compiles, tests are RED'; } || { echo 'Not done: write web/ with vitest deps, a *.test.tsx suite that COMPILES (tsc --noEmit) but FAILS (RED)'; exit 1; }",
+			OwnCheck:      true,
+			MaxIterations: 40,
+			Temperature:   0.5,
 			MaxTokens:     12000,
 		},
 
