@@ -31,8 +31,9 @@ AUTH=(-H "Authorization: Bearer $TOK" -H 'Content-Type: application/json')
 pname() { python3 -c 'import sys,json;print(json.load(open(sys.argv[1]))["name"])' "$1"; }
 # id of a live pipeline by its name (GET /pipelines), empty if absent
 pid_of() { curl -s "${AUTH[@]}" "$WF/pipelines" | python3 -c 'import sys,json;n=sys.argv[1]
-for p in (json.load(sys.stdin) or []):
-    if p.get("name")==n: print(p.get("id") or p.get("pipeline_id") or ""); break' "$1"; }
+d=json.load(sys.stdin); items=d if isinstance(d,list) else (d.get("pipelines") or d.get("workflows") or d.get("items") or [])
+for p in items:
+    if p.get("name")==n: print(p.get("workflow_id") or p.get("id") or p.get("pipeline_id") or ""); break' "$1"; }
 
 upsert() { # <file>  -> PUT if exists (backing up), else POST
   local f="$1" name id code
@@ -40,9 +41,11 @@ upsert() { # <file>  -> PUT if exists (backing up), else POST
   if [ -n "$id" ]; then
     curl -s "${AUTH[@]}" "$WF/pipelines/$id" > "$BK/$name.json" || true
     code=$(curl -s -o /tmp/pb.out -w '%{http_code}' -X PUT "${AUTH[@]}" "$WF/pipelines/$id" --data-binary @"$f")
+    cp /tmp/pb.out "$BK/$name.response.txt" 2>/dev/null || true
     echo "  update $name ($id) -> $code"
+    case "$code" in 2*) ;; *) echo "    body: $(head -c 300 /tmp/pb.out)";; esac
   else
-    id=$(curl -s -X POST "${AUTH[@]}" "$WF/pipelines" --data-binary @"$f" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("id") or d.get("pipeline_id") or "")')
+    id=$(curl -s -X POST "${AUTH[@]}" "$WF/pipelines" --data-binary @"$f" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("workflow_id") or d.get("id") or d.get("pipeline_id") or "")')
     code=201; echo "  create $name -> id=$id"
   fi
   [ -n "$id" ] || { echo "  !! $name got no id"; return 1; }
@@ -58,7 +61,8 @@ upsert "$DIR/promote.workflow.json"
 
 echo "== ensure build-dev-on-merge trigger =="
 HAVE=$(curl -s "${AUTH[@]}" "$EV/triggers" | python3 -c 'import sys,json
-print("yes" if any(t.get("name")=="build-dev-on-merge" for t in (json.load(sys.stdin) or [])) else "no")' 2>/dev/null || echo no)
+d=json.load(sys.stdin); items=d if isinstance(d,list) else (d.get("triggers") or d.get("items") or [])
+print("yes" if any(t.get("name")=="build-dev-on-merge" for t in items) else "no")' 2>/dev/null || echo no)
 if [ "$HAVE" = no ]; then
   python3 - "$DIR/build-dev.trigger.json" "$BUILD_DEV_ID" > /tmp/bd.trigger.json <<'PY'
 import sys, json
