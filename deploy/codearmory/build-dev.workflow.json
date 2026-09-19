@@ -116,6 +116,20 @@
         "timeout": 60,
         "run": "echo \"built and pushed: codearmory-registry-mirror:5000/${inputs.namespace}/${inputs.repo}:${steps.version.output.TAG}\""
       }
+    },
+    {
+      "name": "link-project",
+      "action": "forge/run",
+      "timeout": 120,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "standard",
+        "timeout": 120,
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "run": "set +e\nexport HOME=/tmp\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\nC=http://codearmory-containers:8089\nNS='${inputs.namespace}'; REPO='${inputs.repo}'\n# git-factory is the source of truth for repo->project; mirror that link into the\n# container registry so the pushed image is project-scoped automatically.\nPROJ=$(curl -s --max-time 20 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | grep \"\\\"namespace\\\":\\\"$NS\\\"\" | sed -E 's/.*\"project\":\"([^\"]*)\".*/\\1/' | head -1)\nif [ -z \"$PROJ\" ]; then echo \"link: no project mapped for $NS/$REPO - skipping\"; exit 0; fi\nCODE=$(curl -s -o /tmp/lk -w '%{http_code}' --max-time 20 -X PUT \"$C/repositories/$NS/$REPO/project\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"project\\\":\\\"$PROJ\\\"}\")\necho \"link $NS/$REPO -> project $PROJ : HTTP $CODE\"\n[ -f /tmp/lk ] && cat /tmp/lk\nexit 0"
+      }
     }
   ]
 }
