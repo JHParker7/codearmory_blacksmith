@@ -64,6 +64,11 @@ type actionRequest struct {
 	Task       string `json:"task"`        // the request, the finding, the thing to do
 	Check      string `json:"check"`       // optional check-command override for this role
 	Project    string `json:"project"`     // the wiki project the architect writes to (wiki_page tool)
+	// WikiBranch, when set, makes the architect's wiki_page writes land on this branch of
+	// the <project>-wiki repo (auto-created off main by the wiki service) instead of main.
+	// The agent-plan pipeline sets it to "plan/${run_id}" so the plan lands on a branch a
+	// human reviews as a PR before the build phase reads the merged main. Blank => main.
+	WikiBranch string `json:"wiki_branch"`
 	// Optional per-step sandbox overrides. Blank => the process default
 	// (AGENTS_REPO_IMAGE / AGENTS_REPO_RUNNER_CLASS). A Go stage leaves them blank
 	// and runs in golang; a frontend stage sets Image to a node image (and, if the
@@ -333,7 +338,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 			a.jobs.finish(id, func(r *actionResult) { r.Stdout = tr.String() })
 		},
 		FileTicket:  a.ticketFiler(agentBearer, req.Project),
-		WritePage:   a.wikiWriter(agentBearer, req.Project),
+		WritePage:   a.wikiWriter(agentBearer, req.Project, req.WikiBranch),
 		ReadWiki:    a.wikiReader(agentBearer, req.Project),
 		ReadTickets: a.ticketsReader(agentBearer, req.Project),
 		MergeFix:    func(string) (string, error) { approved = true; return "approved", nil },
@@ -513,15 +518,21 @@ func (a *actionServer) ticketsReader(bearer, project string) func() (string, err
 // wiki service for `project`, authenticating as the agent's own run token (so the wiki's
 // own writePage permission gates it). Nil when no wiki is configured or no project was
 // given — the tool then tells the model it is not wired rather than pretending.
-func (a *actionServer) wikiWriter(bearer, project string) func(id, pageType, stack, format, title, content string) (string, error) {
+func (a *actionServer) wikiWriter(bearer, project, branch string) func(id, pageType, stack, format, title, content string) (string, error) {
 	if a.cfg.WikiURL == "" || project == "" || bearer == "" {
 		return nil
 	}
 	base := strings.TrimRight(a.cfg.WikiURL, "/")
 	return func(id, pageType, stack, format, title, content string) (string, error) {
-		body, _ := json.Marshal(map[string]string{
+		fields := map[string]string{
 			"type": pageType, "stack": stack, "format": format, "title": title, "content": content,
-		})
+		}
+		// When a plan branch is set, every page lands there (the wiki service creates it
+		// off main on first write) so the whole plan can be reviewed as one PR.
+		if branch != "" {
+			fields["branch"] = branch
+		}
+		body, _ := json.Marshal(fields)
 		req, err := http.NewRequest(http.MethodPut, base+"/projects/"+project+"/pages/"+id, strings.NewReader(string(body)))
 		if err != nil {
 			return "", err

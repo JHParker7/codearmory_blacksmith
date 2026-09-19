@@ -1,0 +1,165 @@
+{
+  "name": "agent-build",
+  "project": "agentic-dev-flow",
+  "description": "Build phase: fired by the <project>-wiki plan-PR merge. Reads the build manifest from the merged wiki, the PM files tickets off the approved plan, then the build pipeline writes code test-first and opens a dev PR.",
+  "timeout_secs": 7200,
+  "inputs": [
+    {
+      "name": "wiki_repo",
+      "required": true,
+      "description": "the <project>-wiki repo whose plan PR merged"
+    },
+    {
+      "name": "wiki_namespace",
+      "required": true,
+      "description": "the wiki bot namespace"
+    },
+    {
+      "name": "wiki_repo_id",
+      "required": false,
+      "description": "git-factory id of the wiki repo (from the merge event)"
+    }
+  ],
+  "steps": [
+    {
+      "action": "forge/run",
+      "name": "read-manifest",
+      "timeout": 180,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "standard",
+        "timeout": 180,
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.wiki_namespace}/${inputs.wiki_repo}.git"
+        },
+        "env": {
+          "WIKI_REPO": "${inputs.wiki_repo}",
+          "WIKI_REPO_ID": "${inputs.wiki_repo_id}"
+        },
+        "output_env": [
+          "PROJECT",
+          "TASK",
+          "REPO",
+          "NAMESPACE"
+        ],
+        "run": "set -e\nexport HOME=/tmp\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\nPROJECT=$(printf '%s' \"$WIKI_REPO\" | sed 's/-wiki$//')\nWID=\"$WIKI_REPO_ID\"\n[ -n \"$WID\" ] || WID=$(curl -s --max-time 20 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$WIKI_REPO\\\"\" | sed -E 's/.*\"id\":\"([^\"]+)\".*/\\1/' | head -1)\n[ -n \"$WID\" ] || { echo \"could not resolve $WIKI_REPO id\"; exit 1; }\nBODY=$(curl -s --retry 4 --retry-all-errors --retry-delay 2 --max-time 30 \"$GF/repos/$WID/blob?ref=main&path=.codearmory/build.env\" -H \"authorization: Bearer $TOK\")\nMF=$(printf '%s' \"$BODY\" | sed -E 's/.*\"content\":\"([A-Za-z0-9+/=]*)\".*/\\1/')\n[ -n \"$MF\" ] || { echo \"no build.env in $WIKI_REPO main: $BODY\"; exit 1; }\nprintf '%s' \"$MF\" | base64 -d > /tmp/e.env\n. /tmp/e.env\nTASK=$(printf '%s' \"$TASK_B64\" | base64 -d)\nexport PROJECT TASK REPO NAMESPACE\necho \"recovered project=$PROJECT repo=$REPO ns=$NAMESPACE task-len=${#TASK}\""
+      },
+      "permissions": [
+        {
+          "service": "codearmory_git_factory",
+          "action": "listRepo",
+          "resource": "codearmory_git_factory/repos"
+        },
+        {
+          "service": "codearmory_git_factory",
+          "action": "writeRepo",
+          "resource": "codearmory_git_factory/repos/*"
+        },
+        {
+          "service": "codearmory_git_factory",
+          "action": "createPull",
+          "resource": "codearmory_git_factory/repos/*"
+        },
+        {
+          "service": "codearmory_git_factory",
+          "action": "getRepo",
+          "resource": "codearmory_git_factory/repos/*"
+        }
+      ]
+    },
+    {
+      "action": "forge/create-volume",
+      "name": "workspace",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
+    },
+    {
+      "action": "blacksmith/agent",
+      "name": "pm",
+      "timeout": 2400,
+      "with": {
+        "role": "pm",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "project": "${steps.read-manifest.output.PROJECT}",
+        "task": "${steps.read-manifest.output.TASK}"
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        },
+        {
+          "service": "wiki",
+          "action": "getPage",
+          "resource": "project/*/wiki/pages/*"
+        },
+        {
+          "service": "wiki",
+          "action": "listPage",
+          "resource": "project/*/wiki/pages"
+        },
+        {
+          "service": "tickets",
+          "action": "createTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "listTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "getTicket",
+          "resource": "tickets/tickets/*"
+        }
+      ]
+    },
+    {
+      "action": "workflows/trigger",
+      "name": "build",
+      "timeout": 3600,
+      "with": {
+        "pipeline": "2d0b1f4c-e232-4ed7-9918-227dd2f3be04",
+        "inputs": {
+          "task": "${steps.read-manifest.output.TASK}",
+          "namespace": "${steps.read-manifest.output.NAMESPACE}",
+          "repo": "${steps.read-manifest.output.REPO}",
+          "project": "${steps.read-manifest.output.PROJECT}"
+        }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "build_run",
+      "value": "${steps.build.output.run_id}"
+    }
+  ]
+}

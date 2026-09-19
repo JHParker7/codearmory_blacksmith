@@ -1,0 +1,147 @@
+{
+  "name": "agent-plan",
+  "project": "agentic-dev-flow",
+  "description": "Plan phase: the architect writes the design to a plan/<run> branch of <project>-wiki, records a build manifest (.codearmory/build.env), and opens a wiki PR for a human to review/refine and MERGE. Merging fires agent-build (the build phase).",
+  "timeout_secs": 5400,
+  "inputs": [
+    {
+      "name": "task",
+      "required": true,
+      "description": "the request the department builds"
+    },
+    {
+      "name": "repo",
+      "required": true,
+      "description": "the git-factory repo the build pipeline creates/extends and opens a dev PR to"
+    },
+    {
+      "name": "project",
+      "required": true,
+      "description": "the project this run and every resource it creates (wiki pages, tickets, repo, PR) belong to"
+    },
+    {
+      "name": "namespace",
+      "required": true,
+      "description": "the git-factory namespace (owner) the repo lives under"
+    }
+  ],
+  "steps": [
+    {
+      "action": "forge/create-volume",
+      "name": "workspace",
+      "timeout": 120,
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
+    },
+    {
+      "action": "blacksmith/agent",
+      "name": "architect",
+      "timeout": 3000,
+      "with": {
+        "role": "architect",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "project": "${inputs.project}",
+        "task": "${inputs.task}",
+        "wiki_branch": "plan/${run_id}"
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        },
+        {
+          "service": "wiki",
+          "action": "writePage",
+          "resource": "project/*/wiki/pages/*"
+        },
+        {
+          "service": "wiki",
+          "action": "getPage",
+          "resource": "project/*/wiki/pages/*"
+        },
+        {
+          "service": "wiki",
+          "action": "listPage",
+          "resource": "project/*/wiki/pages"
+        }
+      ]
+    },
+    {
+      "action": "forge/run",
+      "name": "publish",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "standard",
+        "timeout": 300,
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/codearmory-wiki-bot/${inputs.project}-wiki.git"
+        },
+        "env": {
+          "TASK": "${inputs.task}",
+          "REPO": "${inputs.repo}",
+          "NAMESPACE": "${inputs.namespace}",
+          "PROJECT": "${inputs.project}",
+          "RUN_ID": "${run_id}"
+        },
+        "output_env": [
+          "PR_NUMBER"
+        ],
+        "run": "set -e\nexport HOME=/tmp\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\nWID=$(curl -s --max-time 20 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"${PROJECT}-wiki\\\"\" | sed -E 's/.*\"id\":\"([^\"]+)\".*/\\1/' | head -1)\n[ -n \"$WID\" ] || { echo \"could not resolve ${PROJECT}-wiki repo id\"; exit 1; }\necho \"wiki repo id: $WID\"\nMF=$(printf 'TASK_B64=%s\\nREPO=%s\\nNAMESPACE=%s\\nPROJECT=%s\\n' \"$(printf '%s' \"$TASK\" | base64 -w0)\" \"$REPO\" \"$NAMESPACE\" \"$PROJECT\" | base64 -w0)\nprintf '{\"ref\":\"plan/%s\",\"path\":\".codearmory/build.env\",\"content\":\"%s\",\"message\":\"chore: build manifest\"}' \"$RUN_ID\" \"$MF\" > /tmp/b.json\nBC=$(curl -s --retry 4 --retry-all-errors --retry-delay 2 -o /tmp/br -w '%{http_code}' --max-time 30 -X PUT \"$GF/repos/$WID/blob\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d @/tmp/b.json)\necho \"manifest blob -> $BC\"; cat /tmp/br; echo\n{ [ \"$BC\" -ge 200 ] && [ \"$BC\" -lt 300 ]; } || exit 1\nTT=$(printf '%s' \"$TASK\" | head -c 60 | tr '\\n\"' '  ')\nprintf '{\"source_ref\":\"plan/%s\",\"target_ref\":\"main\",\"title\":\"Plan: %s\",\"body\":\"Architect plan for review. Edit the pages on the plan branch, then MERGE this PR to start the build.\"}' \"$RUN_ID\" \"$TT\" > /tmp/p.json\nPC=$(curl -s --retry 4 --retry-all-errors --retry-delay 2 -o /tmp/pr -w '%{http_code}' --max-time 30 -X POST \"$GF/repos/$WID/pulls\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d @/tmp/p.json)\necho \"open plan PR -> $PC\"; cat /tmp/pr; echo\n{ [ \"$PC\" -ge 200 ] && [ \"$PC\" -lt 300 ]; } || exit 1\nPR_NUMBER=$(sed -E 's/.*\"number\":([0-9]+).*/\\1/' /tmp/pr)\nexport PR_NUMBER"
+      },
+      "permissions": [
+        {
+          "service": "codearmory_git_factory",
+          "action": "listRepo",
+          "resource": "codearmory_git_factory/repos"
+        },
+        {
+          "service": "codearmory_git_factory",
+          "action": "writeRepo",
+          "resource": "codearmory_git_factory/repos/*"
+        },
+        {
+          "service": "codearmory_git_factory",
+          "action": "createPull",
+          "resource": "codearmory_git_factory/repos/*"
+        },
+        {
+          "service": "codearmory_git_factory",
+          "action": "getRepo",
+          "resource": "codearmory_git_factory/repos/*"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "plan_pr",
+      "value": "${steps.publish.output.PR_NUMBER}"
+    }
+  ]
+}

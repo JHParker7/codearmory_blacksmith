@@ -1,0 +1,25 @@
+{
+  "name": "agent-build-on-plan-merge",
+  "enabled": true,
+  "description": "When an architect plan PR merges on a <project>-wiki repo (target main), run the build phase (agent-build): read the build manifest from the merged wiki, the PM files tickets off the approved plan, then the build pipeline writes the code and opens a dev PR.",
+  "match": {
+    "all": [
+      { "field": "type", "op": "eq", "value": "repo.pull_request.merged" },
+      { "field": "data.name", "op": "suffix", "value": "-wiki" },
+      { "field": "data.target_ref", "op": "eq", "value": "main" }
+    ]
+  },
+  "actions": [
+    {
+      "kind": "run_pipeline",
+      "config": {
+        "pipeline_id": "cbfaaf8b-34cc-452c-8d07-7f7bc9f6a64d",
+        "inputs": {
+          "wiki_repo": "{{ data.name }}",
+          "wiki_namespace": "{{ data.namespace }}",
+          "wiki_repo_id": "{{ data.repo_id }}"
+        }
+      }
+    }
+  ]
+}
