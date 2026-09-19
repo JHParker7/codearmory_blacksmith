@@ -263,6 +263,12 @@ type Config struct {
 	// writes to (via conductor/in-cluster DNS). Empty disables the tool.
 	WikiURL string
 
+	// DocsProject, when set, names a CENTRAL docs-wiki project that architecture
+	// diagrams are mirrored into (in addition to the run's own project wiki), so
+	// diagrams from every repo aggregate in one cross-repo docs wiki. Empty disables
+	// the mirror. The wiki-bot identity must hold a write grant on this project.
+	DocsProject string
+
 	// GatekeeperURL and ServiceKey are how the ACTION SERVICE authenticates as a
 	// CodeArmory service: GatekeeperURL is gatekeeper's base URL, ServiceKey is
 	// blacksmith's east-west key (rotated), used to validate a caller's bearer and

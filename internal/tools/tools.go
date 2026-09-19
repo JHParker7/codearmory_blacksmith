@@ -102,6 +102,18 @@ type Set struct {
 	// write a file at all, only to publish a wiki page. Nil means no wiki is wired.
 	WritePage func(id, pageType, stack, format, title, content string) (string, error)
 
+	// WriteDocsPage mirrors a rendered architecture diagram into a CENTRAL docs wiki
+	// (a project separate from the run's own), so diagrams from every repo aggregate
+	// in one cross-repo docs wiki. Same signature and host-side nature as WritePage;
+	// nil when no central docs wiki is configured (AGENTS_DOCS_PROJECT). Only the
+	// archify diagram tool uses it, as a best-effort mirror after the project write.
+	WriteDocsPage func(id, pageType, stack, format, title, content string) (string, error)
+
+	// Project is the run's project slug, used only to NAMESPACE docs-wiki mirror
+	// pages (id/title prefixed by project) so diagrams from different repos never
+	// collide in the shared docs wiki. Empty disables the namespacing/mirror.
+	Project string
+
 	// ReadWiki returns the whole project wiki as one document, for a stage that
 	// reads the source of truth (pm/dev/frontend) rather than writes it. Nil means
 	// no wiki is wired, and the tool says so.
@@ -626,6 +638,17 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 		res, err := s.WritePage(a.ID, "component", a.Stack, "html", a.Title, html)
 		if err != nil {
 			return "Error: the wiki refused the diagram page: " + err.Error(), nil
+		}
+		// Cross-repo docs wiki: also mirror the diagram into a central docs wiki so
+		// every project's architecture aggregates in one place. Namespace the page by
+		// the source project so mirrors from different repos never collide. Best-effort
+		// — a docs-wiki failure never fails the diagram the project wiki already took.
+		if s.WriteDocsPage != nil && s.Project != "" {
+			if _, derr := s.WriteDocsPage(s.Project+"-"+a.ID, "component", a.Stack, "html", a.Title+" ("+s.Project+")", html); derr != nil {
+				res += " (docs-wiki mirror skipped: " + derr.Error() + ")"
+			} else {
+				res += " + mirrored to the docs wiki"
+			}
 		}
 		return "Rendered diagram " + a.ID + " (" + dtype + ") and published it: " + res, nil
 

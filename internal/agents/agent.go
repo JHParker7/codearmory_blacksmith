@@ -70,6 +70,13 @@ type Creator struct {
 	// produces its whole output through it and never writes a file.
 	WritePage func(id, pageType, stack, format, title, content string) (string, error)
 
+	// WriteDocsPage mirrors architecture diagrams into a central cross-repo docs
+	// wiki (a project separate from this run's). Nil when no docs wiki is configured.
+	WriteDocsPage func(id, pageType, stack, format, title, content string) (string, error)
+
+	// Project is the run's project slug, used to namespace docs-wiki mirror pages.
+	Project string
+
 	// ReadWiki returns the whole project wiki (every page's content) as one
 	// document, for a stage that CONSUMES the source of truth (pm, dev, frontend)
 	// rather than writes it. Nil when no wiki is wired.
@@ -229,9 +236,11 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			FileTicket:  c.FileTicket,
 			TicketKind:  o.TicketKind,
 			MergeFix:    c.MergeFix,
-			WritePage:   c.WritePage,
-			ReadWiki:    c.ReadWiki,
-			ReadTickets: c.ReadTickets,
+			WritePage:     c.WritePage,
+			WriteDocsPage: c.WriteDocsPage,
+			Project:       c.Project,
+			ReadWiki:      c.ReadWiki,
+			ReadTickets:   c.ReadTickets,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,

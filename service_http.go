@@ -339,7 +339,12 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		},
 		FileTicket:  a.ticketFiler(agentBearer, req.Project),
 		WritePage:   a.wikiWriter(agentBearer, req.Project, req.WikiBranch),
-		ReadWiki:    a.wikiReader(agentBearer, req.Project),
+		// Central cross-repo docs wiki: architecture diagrams mirror here (main branch,
+		// never a plan branch) in addition to the project wiki. Nil unless
+		// AGENTS_DOCS_PROJECT names a project; wikiWriter returns nil for an empty one.
+		WriteDocsPage: a.wikiWriter(agentBearer, a.cfg.DocsProject, ""),
+		Project:       req.Project,
+		ReadWiki:      a.wikiReader(agentBearer, req.Project),
 		ReadTickets: a.ticketsReader(agentBearer, req.Project),
 		MergeFix:    func(string) (string, error) { approved = true; return "approved", nil },
 		OnWrite: func(path, content string, deleted bool, message string) {
