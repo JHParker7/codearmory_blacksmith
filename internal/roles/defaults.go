@@ -403,6 +403,37 @@ func Defaults() []Role {
 		},
 
 		{
+			// Release judge for the pr-review feedback loop. When pr-review can't cleanly
+			// MERGE (verdict MERGE-WITH-NUDGES or HOLD), this role triages the residual
+			// findings and picks ONE next action so a human isn't the bottleneck for every
+			// small issue: `merge` (non-blocking nits — land + file follow-ups), `autofix`
+			// (concrete code-level issues a fixer can mechanically clear — one more pass),
+			// or `human` (design/security-model decisions). Write-only (finish-on-write,
+			// like pr-summary — no run_command, no doom-loop); the pipeline reads DECISION.json.
+			Name:  "judge",
+			Class: "large",
+			Prompt: "You are the release JUDGE for a pull request that automated pr-review could NOT cleanly " +
+				"merge. READ these files in the workspace: SUMMARY.md (the reviewer's verdict + the residual " +
+				"issues it lists), findings-go.json and findings-web.json (the extracted findings), and " +
+				"review-quality.md + review-security.md (the full review tables, incl. which findings were already " +
+				"Fixed). Decide the SINGLE best next action and write it to DECISION.json as " +
+				"`{\"decision\":\"merge\"|\"autofix\"|\"human\",\"reason\":\"<one sentence>\"}`. Choose **merge** when " +
+				"EVERY residual issue is a non-blocking nit — style/lint/cosmetic (e.g. `import type`, a Content-Type " +
+				"header, a doc typo, a redundant Dockerfile line) that is safe to land now and follow up later. " +
+				"Choose **autofix** when the residual issues are concrete, code-level and MECHANICALLY fixable by an " +
+				"automated fixer (a missing size cap/bound, a wrong header on more paths, a small localized logic fix) " +
+				"— i.e. one more targeted fix pass would plausibly clear them. Choose **human** when ANY residual issue " +
+				"is a design / architecture / security-model decision (an auth boundary, the trust model, the data " +
+				"model, the API contract) that needs human judgment. Be decisive. Write DECISION.json and stop.",
+			Guard:         onlyBasenames("DECISION.json"),
+			Tools:         writing(tools.WikiRead),
+			OwnCheck:      false,
+			MaxIterations: 15,
+			Temperature:   0.2,
+			MaxTokens:     2000,
+		},
+
+		{
 			// Deploy-manifest author for the integration arm. Writes a docker-compose
 			// that runs the built image plus the dependencies the code actually uses,
 			// so an integration run can stand the whole stack up in one kata sandbox

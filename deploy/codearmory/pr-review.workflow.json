@@ -28,6 +28,11 @@
       "name": "sha",
       "required": false,
       "description": "the PR head commit (checkout fallback)"
+    },
+    {
+      "name": "refine_iter",
+      "required": false,
+      "description": "internal: refine cycle counter (0 first pass, 1 = last chance before human hold)"
     }
   ],
   "steps": [
@@ -403,7 +408,92 @@
         "secret_refs": {
           "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
         },
-        "run": "set +e\nexport HOME=/tmp\ngit config --global --add safe.directory '*'\ncd /workspace\nNUM='${inputs.number}'; REPO='${inputs.repo}'\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\ni=0; while [ \"$(timeout 12 curl -s -o /dev/null -w '%{http_code}' \"$GF/healthz\" 2>/dev/null)\" = \"000\" ]; do i=$((i+1)); [ \"$i\" -ge 10 ] && { echo \"gate: git-factory unreachable, leaving PR for a human\"; exit 0; }; sleep 5; done\nif [ ! -f SUMMARY.md ]; then echo \"gate: no SUMMARY.md \u2014 leaving PR #$NUM for a human\"; exit 0; fi\nVERDICT=$(sed -n '/## Recommendation/,$p' SUMMARY.md | sed '1d' | grep -m1 -oE 'MERGE WITH NUDGES|MERGE|HOLD')\necho \"gate: pr-summary verdict = ${VERDICT:-unknown}\"\nif [ \"$VERDICT\" != \"MERGE\" ]; then echo \"gate: HELD PR #$NUM for a human \u2014 pr-review verdict ${VERDICT:-unknown}; unresolved findings remain (see the PR's review comments). Marking this run as needing attention.\"; exit 1; fi\nRID=$(curl -s --max-time 30 --retry 3 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1)\n[ -n \"$RID\" ] || { echo \"gate: could not resolve repo id, leaving PR #$NUM\"; exit 0; }\nCODE=$(curl -s -o /tmp/m -w '%{http_code}' --max-time 30 --retry 3 -X POST \"$GF/repos/$RID/pulls/$NUM/merge\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d '{\"message\":\"auto-merge: clean pr-review (MERGE)\"}')\ncase \"$CODE\" in 200|201|204) echo \"gate: auto-merged PR #$NUM to dev (verdict MERGE)\"; exit 0;; *) echo \"gate: merge of PR #$NUM failed HTTP $CODE (left for a human):\"; cat /tmp/m; exit 1;; esac",
+        "run": "set +e\nexport HOME=/tmp\ngit config --global --add safe.directory '*'\ncd /workspace\nNUM='${inputs.number}'; REPO='${inputs.repo}'; RITER='${inputs.refine_iter}'\n[ -z \"$RITER\" ] && RITER=0\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\nverdict=unknown; merged=false\ni=0; while [ \"$(timeout 12 curl -s -o /dev/null -w '%{http_code}' \"$GF/healthz\" 2>/dev/null)\" = \"000\" ]; do i=$((i+1)); [ \"$i\" -ge 10 ] && break; sleep 5; done\nif [ -f SUMMARY.md ]; then v=$(sed -n '/## Recommendation/,$p' SUMMARY.md | sed '1d' | grep -m1 -oE 'MERGE WITH NUDGES|MERGE|HOLD'); [ -n \"$v\" ] && verdict=\"$v\"; fi\necho \"gate: verdict=[$verdict] refine_iter=$RITER\" 1>&2\nif [ \"$verdict\" = \"MERGE\" ]; then\n  RID=$(curl -s --max-time 30 --retry 3 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1)\n  if [ -n \"$RID\" ]; then\n    CODE=$(curl -s -o /tmp/m -w '%{http_code}' --max-time 30 --retry 3 -X POST \"$GF/repos/$RID/pulls/$NUM/merge\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d '{\"message\":\"auto-merge: clean pr-review (MERGE)\"}')\n    case \"$CODE\" in 200|201|204) merged=true; echo \"gate: auto-merged PR #$NUM\" 1>&2;; *) echo \"gate: merge failed HTTP $CODE\" 1>&2; cat /tmp/m 1>&2;; esac\n  fi\nfi\nrefine_iter=\"$RITER\"\nexport verdict merged refine_iter\necho \"verdict=$verdict merged=$merged refine_iter=$refine_iter\"\nexit 0\n",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "output_env": [
+          "verdict",
+          "merged",
+          "refine_iter"
+        ]
+      }
+    },
+    {
+      "name": "judge",
+      "action": "blacksmith/agent",
+      "timeout": 900,
+      "with": {
+        "role": "judge",
+        "workflow_id": "${run_id}",
+        "volume": "ws",
+        "task": "Triage the residual pr-review findings for PR #${inputs.number} and write DECISION.json."
+      },
+      "permissions": [
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        }
+      ]
+    },
+    {
+      "name": "judgeread",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set +e; cd /workspace\nraw=$(cat DECISION.json 2>/dev/null | tr '\\n' ' ')\ndecision=$(printf '%s' \"$raw\" | sed -E 's/.*\"decision\"[[:space:]]*:[[:space:]]*\"([a-zA-Z]+)\".*/\\1/')\ncase \"$decision\" in merge|autofix|human) ;; *) decision=human;; esac\necho \"judge decision=$decision (raw: $raw)\" 1>&2\nexport decision\necho \"decision=$decision\"\nexit 0\n",
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "output_env": [
+          "decision"
+        ]
+      }
+    },
+    {
+      "name": "merge-nudges",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "set +e; export HOME=/tmp; cd /workspace\nNUM='${inputs.number}'; REPO='${inputs.repo}'\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\nRID=$(curl -s --max-time 30 --retry 3 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | sed -E 's/.*\\\"id\\\":\\\"([^\\\"]+)\\\".*/\\1/' | head -1)\n[ -n \"$RID\" ] || { echo 'merge-nudges: no repo id' 1>&2; exit 1; }\nprintf '%s' '{\"body\":\"## \\u2705 Auto-merged with deferred nudges\\n\\nThe pr-review judge assessed the residual findings as non-blocking nits and merged this PR. See the review comments above for the deferred follow-ups.\"}' > /tmp/c.json\ncurl -s -o /dev/null -w 'nudge-comment %{http_code}\\n' --max-time 30 -X POST \"$GF/repos/$RID/pulls/$NUM/comments\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d @/tmp/c.json 1>&2\nCODE=$(curl -s -o /tmp/m -w '%{http_code}' --max-time 30 --retry 3 -X POST \"$GF/repos/$RID/pulls/$NUM/merge\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d '{\"message\":\"auto-merge: pr-review judge (nits deferred)\"}')\necho \"merge-nudges: merge PR #$NUM HTTP $CODE\" 1>&2\ncase \"$CODE\" in 200|201|204) exit 0;; *) cat /tmp/m 1>&2; exit 1;; esac\n",
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
         "volumes": [
           {
             "workflow_id": "${run_id}",
@@ -412,6 +502,32 @@
             "workdir": true
           }
         ]
+      }
+    },
+    {
+      "name": "refine",
+      "action": "workflows/trigger",
+      "timeout": 3600,
+      "with": {
+        "pipeline": "ef217c6b-307d-491c-9a80-3846462fd2c0",
+        "inputs": {
+          "namespace": "${inputs.namespace}",
+          "repo": "${inputs.repo}",
+          "number": "${inputs.number}",
+          "ref": "${inputs.ref}",
+          "sha": "${inputs.sha}",
+          "refine_iter": "1"
+        }
+      }
+    },
+    {
+      "name": "hold",
+      "action": "forge/run",
+      "timeout": 300,
+      "with": {
+        "image": "golang:1.25",
+        "runner_class": "large",
+        "run": "echo 'pr-review: HELD PR #${inputs.number} for a human \u2014 automated refine could not converge (see the review comments).' 1>&2\nexit 1\n"
       }
     }
   ],
@@ -497,6 +613,35 @@
     {
       "from": "release",
       "to": "gate"
+    },
+    {
+      "from": "gate",
+      "to": "judge",
+      "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict != 'MERGE' && int(steps.gate.json.refine_iter) == 0"
+    },
+    {
+      "from": "gate",
+      "to": "hold",
+      "when": "steps.gate.json.merged == 'false' && (steps.gate.json.verdict == 'MERGE' || int(steps.gate.json.refine_iter) >= 1)"
+    },
+    {
+      "from": "judge",
+      "to": "judgeread"
+    },
+    {
+      "from": "judgeread",
+      "to": "merge-nudges",
+      "when": "steps.judgeread.json.decision == 'merge'"
+    },
+    {
+      "from": "judgeread",
+      "to": "refine",
+      "when": "steps.judgeread.json.decision == 'autofix'"
+    },
+    {
+      "from": "judgeread",
+      "to": "hold",
+      "when": "steps.judgeread.json.decision == 'human'"
     }
   ]
 }
