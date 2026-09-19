@@ -46,7 +46,7 @@
       "action": "forge/create-volume",
       "timeout": 120,
       "with": {
-        "workflow_id": "codearmory-plan-gocache",
+        "workflow_id": "${run_id}",
         "name": "gocache",
         "size_mb": 8192,
         "medium": "disk"
@@ -83,7 +83,7 @@
         "volume": "ws",
         "project": "${inputs.project}",
         "task": "${inputs.task}",
-        "cache_workflow_id": "codearmory-plan-gocache",
+        "cache_workflow_id": "${run_id}",
         "cache_volume": "gocache"
       },
       "loop_id": "testloop",
@@ -145,7 +145,7 @@
         "volume": "ws",
         "project": "${inputs.project}",
         "task": "${inputs.task}",
-        "cache_workflow_id": "codearmory-plan-gocache",
+        "cache_workflow_id": "${run_id}",
         "cache_volume": "gocache"
       },
       "loop_id": "devloop",
@@ -354,7 +354,7 @@
             "workdir": true
           },
           {
-            "workflow_id": "codearmory-plan-gocache",
+            "workflow_id": "${run_id}",
             "name": "gocache",
             "mount_path": "/gocache"
           }
