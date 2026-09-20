@@ -322,6 +322,25 @@ func normLoc(s string) string {
 	return strings.TrimSpace(strings.ToLower(s))
 }
 
+// fileKeyOf reduces a location to its file part ("src/x.go:42" -> "src/x.go"),
+// mirroring the extractor's fileOf so a per-file batched fix's key matches a row.
+func fileKeyOf(loc string) string {
+	s := strings.ToLower(strings.ReplaceAll(loc, "`", ""))
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.Index(s, " line "); i >= 0 {
+		s = s[:i]
+	}
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '/' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // injectFixedColumn adds a "Fixed?" column to each markdown table in a reviewer's
 // findings file: the header gets the column, the separator a "---", each data row a
 // ✅/⚠️ (or — when the location isn't in the fix set) by matching the row's Location
@@ -350,7 +369,13 @@ func injectFixedColumn(md string, fixedByLoc map[string]bool) string {
 		default:
 			mark := "—"
 			if len(cells) >= 2 {
-				if f, ok := fixedByLoc[normLoc(cells[1])]; ok {
+				// Exact location first, then the FILE key (a per-file batched fix
+				// records just the file); line-level keys match first.
+				f, ok := fixedByLoc[normLoc(cells[1])]
+				if !ok {
+					f, ok = fixedByLoc[fileKeyOf(cells[1])]
+				}
+				if ok {
 					if f {
 						mark = "✅ fixed"
 					} else {

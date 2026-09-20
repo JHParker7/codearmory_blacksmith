@@ -11,6 +11,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -93,9 +94,19 @@ func main() {
 			goF = append(goF, f)
 		}
 	}
+	// PER-FILE BATCHING: group each domain's findings by their source file and emit
+	// ONE combined task per file, so the fix map fans out one autofix run per FILE
+	// instead of one per finding. One agent sees every finding in a file together,
+	// makes coherent edits (shared imports fixed once, no two runs racing the same
+	// file), and it is one clone + one fixer + one auditor + one push per file — a
+	// big saving on a single-slot GPU. Blast radius is bounded to a file (a bad batch
+	// holds only that file's fixes), unlike sending the whole review to one agent.
+	goF = groupByFile(goF)
+	webF = groupByFile(webF)
 	// Record files (untracked in /workspace; survive the refresh reset) — one per
 	// domain, in the same order the matching fix map iterates, so the poster can zip
-	// each with its map's outcomes for the "Fixed?" column.
+	// each with its map's outcomes for the "Fixed?" column. A grouped entry's Location
+	// is the FILE, which the poster matches against a review row by its file part.
 	writeJSON(os.Args[3], goF)
 	writeJSON(os.Args[4], webF)
 	// Web task STRINGS go to a file the extract step reads into output.tasks_web.
@@ -103,6 +114,62 @@ func main() {
 	// STDOUT is the Go map's values_from: the Go task strings.
 	arr, _ := json.Marshal(taskStrings(goF))
 	os.Stdout.Write(arr)
+}
+
+// fileOf returns the source file part of a Location cell — the path before the
+// line number ("src/store.go:42" and "`src/store.go` line 42" both -> "src/store.go").
+// Empty means the location was too vague to name a file (never batched with others).
+func fileOf(loc string) string {
+	s := strings.ToLower(strings.ReplaceAll(loc, "`", ""))
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.Index(s, " line "); i >= 0 {
+		s = s[:i]
+	}
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '/' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// groupByFile collapses a domain's findings into one task PER FILE (preserving
+// first-seen order). A file with a single finding is passed through unchanged (its
+// Location keeps the line, so the poster's line-level match still applies); a file
+// with several becomes one Finding whose Location is the file and whose Task lists
+// every finding for the agent to fix in one pass. Vague locations (no file) are
+// never merged with each other.
+func groupByFile(fs []Finding) []Finding {
+	order := []string{}
+	groups := map[string][]Finding{}
+	for i, f := range fs {
+		k := fileOf(f.Location)
+		if k == "" {
+			k = "\x00" + strconv.Itoa(i) // vague: its own group, never merged
+		}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], f)
+	}
+	out := make([]Finding, 0, len(order))
+	for _, k := range order {
+		g := groups[k]
+		if len(g) == 1 {
+			out = append(out, g[0])
+			continue
+		}
+		var b strings.Builder
+		b.WriteString("Fix these " + strconv.Itoa(len(g)) + " review findings, each with the smallest change:\n")
+		for i, f := range g {
+			b.WriteString(strconv.Itoa(i+1) + ". " + f.Task + "\n")
+		}
+		out = append(out, Finding{Severity: g[0].Severity, Location: fileOf(g[0].Location), Task: b.String()})
+	}
+	return out
 }
 
 func writeJSON(path string, v any) {
