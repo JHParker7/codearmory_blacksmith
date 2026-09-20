@@ -513,12 +513,20 @@ func Defaults() []Role {
 				"the Go module and its main package live at the REPOSITORY ROOT (not a src/ directory), " +
 				"main() serves it with http.ListenAndServe on the PORT env (default :8080). Do NOT write " +
 				"source code — describe it. You cannot write files; your " +
-				"only output is wiki pages, so put everything a later stage needs into them.",
+				"only output is wiki pages, so put everything a later stage needs into them." +
+				" ALSO render the architecture as a DIAGRAM using the archify_diagram tool: call it " +
+				"once with id 'architecture-diagram', type 'architecture', a stack of 'shared', a short " +
+				"title, and ir set to a valid archify typed-JSON IR (as a JSON string) describing the " +
+				"components and the data flow between them. If archify rejects the IR, fix it from the " +
+				"diagnostics and call archify_diagram again. Render the diagram IN ADDITION to the pages.",
 			// Wiki-first: the design goes to the project wiki (the source of truth every later
 			// stage reads); deny_all + no write_file, tree files would die with its lease.
+			// archify_diagram renders the architecture as a diagram, published to the project wiki
+			// AND mirrored to the central docs wiki (AGENTS_DOCS_PROJECT) — a sandbox with node +
+			// /opt/archify is required, so the agent-plan architect step runs the archify image.
 			Guard:         denyAll(),
-			Tools:         append(readOnly(), tools.WikiPage),
-			MaxIterations: 20,
+			Tools:         append(readOnly(), tools.WikiPage, tools.ArchifyDiagram),
+			MaxIterations: 26,
 			Temperature:   0.3,
 			MaxTokens:     8000,
 		},
