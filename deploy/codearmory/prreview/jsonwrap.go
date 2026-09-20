@@ -2,6 +2,8 @@
 // stdout. The comment body is built from git data (commit sha + subject) written to
 // a file — so it is shell-safe (never interpolated) and JSON-safe (json.Marshal
 // escapes quotes/newlines/backticks). curl then POSTs the result to git-factory.
+//go:build ignore
+
 package main
 
 import (

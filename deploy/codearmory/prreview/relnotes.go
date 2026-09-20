@@ -26,6 +26,8 @@
 //	base64 -w0 deploy/codearmory/prreview/relnotes.go
 //
 // Args: <dumpFile> <version>.
+//go:build ignore
+
 package main
 
 import (

@@ -6,6 +6,8 @@
 // pipes and quotes; only real JSON encoding survives being fed to a workflow map
 // as values_from. The table shape is fixed by the reviewer prompt:
 // | Severity | Location | Issue | Recommendation |
+//go:build ignore
+
 package main
 
 import (

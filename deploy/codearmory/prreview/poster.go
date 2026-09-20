@@ -17,6 +17,8 @@
 //
 // Args: the scan dir, then an OUTPUT dir, then the reviewer markdown files to
 // post verbatim. Writes comment-1.json … in the output dir; prints each path.
+//go:build ignore
+
 package main
 
 import (
