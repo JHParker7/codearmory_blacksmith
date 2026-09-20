@@ -95,9 +95,10 @@ type Creator struct {
 	MoveTicket    func(id, status string) (string, error)
 
 	// NextTask is the work-queue pump: mark the agent's current ticket done and return
-	// the next todo (or a done sentinel). Lets one long-lived agent work findings one
-	// at a time in a single session. Nil when no board is wired.
-	NextTask func() (string, error)
+	// the next todo (bool `more` = false when the queue is now empty). Lets one
+	// long-lived agent work findings one at a time in a single session, and the loop
+	// auto-finishes when more==false. Nil when no board is wired.
+	NextTask func() (string, bool, error)
 }
 
 // Options is what makes one stage different from another.
@@ -349,6 +350,13 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 	out := Outcome{}
 	idle := 0
 
+	// QUEUE MODE: a role wired with next_task works a QUEUE of findings one at a time
+	// in this one session. Its terminal is the queue draining (next_task reporting
+	// empty), NOT a green check — a check passes per finding, and letting a green
+	// check end the stage stopped the fixer after ONE finding (measured). So in queue
+	// mode a passing check does not return; only QueueDrained() does.
+	queueMode := a.tools.NextTask != nil
+
 	// produced counts everything this stage delivered — accepted writes AND
 	// filed tickets. The security reviewer writes nothing to the tree; its
 	// deliverable is tickets on the board, so gating completion on tree writes
@@ -421,7 +429,9 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			truncated := res.Truncated(a.opts.MaxTokens)
 			owesFiles := a.offersTool(tools.WriteFile) && produced == 0
 
-			if a.opts.Check == "" && !truncated && !owesFiles {
+			// Queue mode never finishes on a prose answer: the terminal is next_task
+			// reporting the queue empty, so a prose answer before then is an EARLY STOP.
+			if a.opts.Check == "" && !truncated && !owesFiles && !queueMode {
 				out.Answer = res.Content
 				out.Passed = true
 				a.logf("%s: finished after %d turns", a.opts.Name, out.Iterations)
@@ -434,6 +444,10 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 				notice = "Your reply was CUT OFF at the token limit — it is not finished, it " +
 					"ran out of room. Do not retry it at the same length: say less, or do the " +
 					"work through tool calls instead of prose."
+			case queueMode:
+				notice = "You have not finished the queue. Call " + tools.NextTask + " to record " +
+					"the current finding done and get the next one; the run ends AUTOMATICALLY when " +
+					tools.NextTask + " reports the queue is empty. Do not stop or answer in prose until then."
 			case a.opts.Check != "":
 				notice = "You answered in prose, but this stage ends when its check passes, not " +
 					"when you say it is done. Call " + tools.RunCommand + " to run the check, or " +
@@ -494,9 +508,25 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 				out.LastCheck = result
 				if checkPassed(result) {
 					out.Passed = true
-					a.logf("%s: check passed after %d turns", a.opts.Name, out.Iterations)
-					return out, nil
+					// In queue mode a green check finishes only the CURRENT finding, not
+					// the stage — keep going until the queue drains.
+					if !queueMode {
+						a.logf("%s: check passed after %d turns", a.opts.Name, out.Iterations)
+						return out, nil
+					}
 				}
+			}
+
+			// QUEUE DRAINED = DONE. next_task reported the queue empty, so every finding
+			// has been worked; end the stage cleanly (the work-done gate guaranteed each
+			// advance was a real fix, so this is an honest completion).
+			if call.Name == tools.NextTask && a.tools.QueueDrained() {
+				out.Passed = true
+				if out.Answer == "" {
+					out.Answer = "All queued findings handled — the work queue is empty."
+				}
+				a.logf("%s: work queue drained after %d turns", a.opts.Name, out.Iterations)
+				return out, nil
 			}
 
 			// A SUCCESSFUL MERGE ENDS THE REVIEW. Once the reviewer approves and
@@ -537,8 +567,11 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 			out.LastCheck = result
 			if checkPassed(result) {
 				out.Passed = true
-				a.logf("%s: check passed after %d turns", a.opts.Name, out.Iterations)
-				return out, nil
+				// Queue mode: a green check ends the current finding, not the stage.
+				if !queueMode {
+					a.logf("%s: check passed after %d turns", a.opts.Name, out.Iterations)
+					return out, nil
+				}
 			}
 		}
 

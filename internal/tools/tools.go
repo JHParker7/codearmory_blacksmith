@@ -145,16 +145,19 @@ type Set struct {
 
 	// NextTask is a work-QUEUE pump for a single long-lived agent: each call marks the
 	// ticket the agent was working (its claimed one) as done and hands back the next
-	// todo ticket, claiming it. It returns a sentinel when the queue is empty. The
-	// QUEUE (the board), not the model's memory, drives coverage — nothing is skipped.
-	// Nil = no board wired.
-	NextTask func() (string, error)
+	// todo ticket, claiming it. The bool is `more`: false means the queue is now empty
+	// (the returned string is the done sentinel). The QUEUE (the board), not the
+	// model's memory, drives coverage — nothing is skipped. Nil = no board wired.
+	NextTask func() (task string, more bool, err error)
 
 	// next_task work-done GATE state (per agent session): a task has been handed out,
 	// and the workspace hash captured when it was — so next_task can REFUSE to advance
 	// until the code actually changes, stopping the model from rushing the queue.
 	taskHanded bool
 	taskHash   uint64
+	// queueDrained is set once next_task reports the queue empty (more==false): the
+	// signal the agent loop uses to AUTO-FINISH a queue-driven role.
+	queueDrained bool
 
 	// MergeFix is the review agent's APPROVAL: it merges the fix under review
 	// into the integration branch and returns what happened. Called at most
@@ -434,6 +437,10 @@ func (s *Set) offers(name string) bool {
 	}
 	return false
 }
+
+// QueueDrained reports whether next_task has signalled the work queue is empty —
+// the terminal condition for a queue-driven role (the agent loop auto-finishes).
+func (s *Set) QueueDrained() bool { return s.queueDrained }
 
 // workspaceHash is a content hash of the whole workspace tree. The next_task gate
 // compares it before/after to tell whether the agent actually edited anything since
@@ -721,9 +728,14 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 				"not fixed. Make the change for the current finding (edit the file, then run the check), " +
 				"and only then call next_task. It will not advance until the workspace changes.", nil
 		}
-		out, err := s.NextTask()
+		out, more, err := s.NextTask()
 		if err != nil {
 			return "Error: the task queue could not be read: " + err.Error(), nil
+		}
+		if !more {
+			// Queue empty: signal the loop to auto-finish. Do NOT re-arm the gate.
+			s.queueDrained = true
+			return out, nil
 		}
 		s.taskHanded = true
 		s.taskHash = workspaceHash(s.Workspace)
