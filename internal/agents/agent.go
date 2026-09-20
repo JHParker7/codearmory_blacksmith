@@ -86,6 +86,13 @@ type Creator struct {
 	// stage that PICKS UP the PM's task breakdown (dev, frontend, backend). The
 	// counterpart to FileTicket. Nil when no board is wired.
 	ReadTickets func() (string, error)
+
+	// ListTicketsAt lists the project's tickets at a board status (todo /
+	// to-be-reviewed / done, or "" for all not-done) WITH ids, and MoveTicket sets
+	// one ticket's status — together they let a board-loop stage (board-fixer,
+	// board-auditor) pull its column and move cards. Nil when no board is wired.
+	ListTicketsAt func(status string) (string, error)
+	MoveTicket    func(id, status string) (string, error)
 }
 
 // Options is what makes one stage different from another.
@@ -241,6 +248,8 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			Project:       c.Project,
 			ReadWiki:      c.ReadWiki,
 			ReadTickets:   c.ReadTickets,
+			ListTicketsAt: c.ListTicketsAt,
+			MoveTicket:    c.MoveTicket,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,

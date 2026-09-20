@@ -28,6 +28,8 @@ const (
 	WikiPage       = "wiki_page"
 	WikiRead       = "wiki_read"
 	ReadTickets    = "read_tickets"
+	ListTickets    = "list_tickets"
+	MoveTicket     = "move_ticket"
 	ArchifyDiagram = "archify_diagram"
 )
 
@@ -126,6 +128,17 @@ type Set struct {
 	// tickets, and a builder reads them here rather than from wiki pages. Nil means
 	// no board is wired, and the tool says so.
 	ReadTickets func() (string, error)
+
+	// ListTicketsAt returns the project's tickets at a given status ("todo",
+	// "to-be-reviewed", "done", or "" for all non-terminal), INCLUDING each ticket's
+	// id and status — a board stage needs the ids to move the cards it owns. Nil
+	// means no board is wired. (The status arg accepts the friendly board labels or
+	// the raw platform statuses; the sink maps them.)
+	ListTicketsAt func(status string) (string, error)
+
+	// MoveTicket sets one ticket's board status (todo -> to-be-reviewed -> done, or
+	// back to todo when a review fails), returning confirmation. Nil = no board wired.
+	MoveTicket func(id, status string) (string, error)
 
 	// MergeFix is the review agent's APPROVAL: it merges the fix under review
 	// into the integration branch and returns what happened. Called at most
@@ -352,6 +365,25 @@ func (s *Set) Definitions() []model.Tool {
 				"title": map[string]any{"type": "string", "maxLength": MaxSummaryChars, "description": "Human-readable title."},
 				"ir":    map[string]any{"type": "string", "description": "The archify typed JSON IR, as a JSON string."},
 			}, "id", "type", "title", "ir"),
+		},
+		ListTickets: {
+			Name: ListTickets,
+			Description: "List the board tickets for this work at a given status, WITH each ticket's " +
+				"id and status. Statuses: 'todo' (needs fixing), 'to-be-reviewed' (a fix is claimed), " +
+				"'done' (verified). Pass '' for all not-done. Use the returned ids with move_ticket.",
+			Parameters: object(map[string]any{
+				"status": map[string]any{"type": "string", "enum": []string{"todo", "to-be-reviewed", "done", ""}, "description": "Which column to list; empty = all not-done."},
+			}),
+		},
+		MoveTicket: {
+			Name: MoveTicket,
+			Description: "Move ONE ticket to a board status: 'to-be-reviewed' when you have made its " +
+				"fix, 'done' when you have verified the fix is really in the code, or 'todo' to send it " +
+				"back for another attempt. Use the id from list_tickets.",
+			Parameters: object(map[string]any{
+				"id":     map[string]any{"type": "string", "description": "The ticket id from list_tickets."},
+				"status": map[string]any{"type": "string", "enum": []string{"todo", "to-be-reviewed", "done"}, "description": "The column to move it to."},
+			}, "id", "status"),
 		},
 	}
 
@@ -592,6 +624,40 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 			return "Error: the board could not be read: " + err.Error(), nil
 		}
 		return doc, nil
+
+	case ListTickets:
+		var a struct {
+			Status string `json:"status"`
+		}
+		_ = json.Unmarshal([]byte(args), &a)
+		if s.ListTicketsAt == nil {
+			return "Error: no ticket board is wired at this stage, so it cannot be listed.", nil
+		}
+		doc, err := s.ListTicketsAt(a.Status)
+		if err != nil {
+			return "Error: the board could not be listed: " + err.Error(), nil
+		}
+		return doc, nil
+
+	case MoveTicket:
+		var a struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(args), &a); err != nil {
+			return badArgs(name, err), nil
+		}
+		if s.MoveTicket == nil {
+			return "Error: no ticket board is wired at this stage, so tickets cannot be moved.", nil
+		}
+		if strings.TrimSpace(a.ID) == "" || strings.TrimSpace(a.Status) == "" {
+			return "Error: move_ticket needs both an id (from list_tickets) and a status.", nil
+		}
+		res, err := s.MoveTicket(a.ID, a.Status)
+		if err != nil {
+			return "Error: the board refused the move: " + err.Error(), nil
+		}
+		return res, nil
 
 	case ArchifyDiagram:
 		var a struct {

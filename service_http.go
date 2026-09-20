@@ -346,6 +346,10 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		Project:       req.Project,
 		ReadWiki:      a.wikiReader(agentBearer, req.Project),
 		ReadTickets: a.ticketsReader(agentBearer, req.Project),
+		// Board-loop sinks: list tickets by column (with ids) + move a card between
+		// columns, so a board-fixer/board-auditor drives the todo->review->done loop.
+		ListTicketsAt: a.ticketLister(agentBearer, req.Project),
+		MoveTicket:    a.ticketMover(agentBearer, req.Project),
 		MergeFix:    func(string) (string, error) { approved = true; return "approved", nil },
 		OnWrite: func(path, content string, deleted bool, message string) {
 			journal = append(journal, recordedWrite{path: path, content: content, deleted: deleted, message: message})
@@ -430,6 +434,9 @@ func agentPermissions(project, docsProject string) []gatekeeper.Permission {
 		{Service: "tickets", Action: "createComment", Resource: "tickets/tickets/*"},
 		{Service: "tickets", Action: "listTicket", Resource: "tickets/tickets"},
 		{Service: "tickets", Action: "getTicket", Resource: "tickets/tickets/*"},
+		// move_ticket needs updateTicket so a board-loop stage can move its cards
+		// (todo -> to-be-reviewed -> done). Attenuated to the user like every grant.
+		{Service: "tickets", Action: "updateTicket", Resource: "tickets/tickets/*"},
 	}
 	// The architect writes the project's wiki via the wiki_page tool. The wiki now
 	// authorizes on the reserved project namespace "project/<slug>/wiki/pages[/id]"
@@ -528,6 +535,93 @@ func (a *actionServer) ticketsReader(bearer, project string) func() (string, err
 			fmt.Fprintf(&b, "## [%s] %s\n(id %s)\n\n%s\n\n", pr, t.Title, t.ID, strings.TrimSpace(t.Description))
 		}
 		return b.String(), nil
+	}
+}
+
+// boardStatus maps a friendly board label to the platform status enum, and
+// boardLabel the reverse — the board columns todo / to-be-reviewed / done are
+// modelled on the existing {open, in_progress, resolved} statuses so the loop needs
+// no custom field-defs. Unknown labels pass through (the tickets service validates).
+func boardStatus(label string) string {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "todo", "open", "":
+		return ticket.StatusOpen
+	case "to-be-reviewed", "to be reviewed", "review", "in-review", "in_review", "in_progress":
+		return ticket.StatusInProgress
+	case "done", "resolved", "closed":
+		return ticket.StatusResolved
+	default:
+		return label
+	}
+}
+
+func boardLabel(status string) string {
+	switch status {
+	case ticket.StatusOpen:
+		return "todo"
+	case ticket.StatusInProgress:
+		return "to-be-reviewed"
+	case ticket.StatusResolved, ticket.StatusClosed:
+		return "done"
+	default:
+		return status
+	}
+}
+
+// ticketLister builds the list_tickets sink: the project's tickets at a board
+// status (todo/to-be-reviewed/done, or "" for all not-done) WITH their ids, so a
+// board-loop stage can pull its column and act on it. AS THE AGENT'S IDENTITY.
+func (a *actionServer) ticketLister(bearer, project string) func(string) (string, error) {
+	if a.cfg.TicketsURL == "" {
+		return nil
+	}
+	store, err := platform.Local(a.cfg.TicketsURL, transport.Static(bearer))
+	if err != nil {
+		slog.Warn("action: could not build a tickets client for list_tickets", "error", err)
+		return nil
+	}
+	return func(label string) (string, error) {
+		statuses := []string{boardStatus(label)}
+		if strings.TrimSpace(label) == "" {
+			statuses = []string{ticket.StatusOpen, ticket.StatusInProgress}
+		}
+		var all []ticket.Ticket
+		for _, st := range statuses {
+			ts, err := store.List(context.Background(), ticket.ListOpts{Project: project, Status: st})
+			if err != nil {
+				return "", err
+			}
+			all = append(all, ts...)
+		}
+		if len(all) == 0 {
+			return "No tickets at that status.", nil
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "# Board tickets (%d)\n\n", len(all))
+		for _, t := range all {
+			fmt.Fprintf(&b, "- id=%s  status=%s  [%s] %s\n  %s\n\n", t.ID, boardLabel(t.Status), t.Priority, t.Title, strings.TrimSpace(t.Description))
+		}
+		return b.String(), nil
+	}
+}
+
+// ticketMover builds the move_ticket sink: set one ticket's board status. AS THE
+// AGENT'S IDENTITY (needs the updateTicket grant added to agentPermissions).
+func (a *actionServer) ticketMover(bearer, project string) func(string, string) (string, error) {
+	if a.cfg.TicketsURL == "" {
+		return nil
+	}
+	store, err := platform.Local(a.cfg.TicketsURL, transport.Static(bearer))
+	if err != nil {
+		slog.Warn("action: could not build a tickets client for move_ticket", "error", err)
+		return nil
+	}
+	return func(id, label string) (string, error) {
+		st := boardStatus(label)
+		if _, err := store.Update(context.Background(), id, ticket.Update{Status: st}); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("moved ticket %s to %s", id, boardLabel(st)), nil
 	}
 }
 
