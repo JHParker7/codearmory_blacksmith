@@ -37,6 +37,19 @@
       }
     },
     {
+      "action": "tickets/create",
+      "name": "epic",
+      "timeout": 60,
+      "with": {
+        "title": "${inputs.task}",
+        "description": "Delivery epic — tracks this request across the lifecycle board (repo=${inputs.repo}). Auto-managed by agent-chain.",
+        "project": "${inputs.project}",
+        "board_id": "020503fd-8684-452e-9987-c908c5ad651e",
+        "status": "todo",
+        "workflow_id": "${run_id}"
+      }
+    },
+    {
       "action": "blacksmith/agent",
       "name": "architect",
       "timeout": 3000,
@@ -89,6 +102,15 @@
           "resource": "project/*/wiki/pages"
         }
       ]
+    },
+    {
+      "action": "tickets/update",
+      "name": "epic_plan",
+      "timeout": 60,
+      "with": {
+        "id": "${steps.epic.output.ticket_id}",
+        "status": "plan"
+      }
     },
     {
       "action": "blacksmith/agent",
@@ -155,6 +177,24 @@
       ]
     },
     {
+      "action": "tickets/update",
+      "name": "epic_triage",
+      "timeout": 60,
+      "with": {
+        "id": "${steps.epic.output.ticket_id}",
+        "status": "triage"
+      }
+    },
+    {
+      "action": "tickets/update",
+      "name": "epic_inprogress",
+      "timeout": 60,
+      "with": {
+        "id": "${steps.epic.output.ticket_id}",
+        "status": "in_progress"
+      }
+    },
+    {
       "action": "workflows/trigger",
       "name": "build",
       "timeout": 3600,
@@ -173,6 +213,10 @@
     {
       "name": "build_run",
       "value": "${steps.build.output.run_id}"
+    },
+    {
+      "name": "epic_ticket",
+      "value": "${steps.epic.output.ticket_id}"
     }
   ]
 }
