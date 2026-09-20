@@ -350,12 +350,15 @@ func (a *Agent) Run(ctx context.Context, task string) (Outcome, error) {
 	out := Outcome{}
 	idle := 0
 
-	// QUEUE MODE: a role wired with next_task works a QUEUE of findings one at a time
-	// in this one session. Its terminal is the queue draining (next_task reporting
-	// empty), NOT a green check — a check passes per finding, and letting a green
-	// check end the stage stopped the fixer after ONE finding (measured). So in queue
-	// mode a passing check does not return; only QueueDrained() does.
-	queueMode := a.tools.NextTask != nil
+	// QUEUE MODE: a role that EXPOSES the next_task tool works a QUEUE of findings one
+	// at a time in this one session. Its terminal is the queue draining (next_task
+	// reporting empty), NOT a green check — a check passes per finding, and letting a
+	// green check end the stage stopped the fixer after ONE finding (measured). So in
+	// queue mode a passing check does not return; only QueueDrained() does. Keyed on
+	// the ROLE exposing the tool (not merely the sink being wired, which every agent
+	// gets) — otherwise a non-queue role like board-seed is told to call a tool it
+	// does not have and stalls.
+	queueMode := a.offersTool(tools.NextTask)
 
 	// produced counts everything this stage delivered — accepted writes AND
 	// filed tickets. The security reviewer writes nothing to the tree; its
