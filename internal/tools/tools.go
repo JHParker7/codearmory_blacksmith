@@ -30,6 +30,7 @@ const (
 	ReadTickets    = "read_tickets"
 	ListTickets    = "list_tickets"
 	MoveTicket     = "move_ticket"
+	NextTask       = "next_task"
 	ArchifyDiagram = "archify_diagram"
 )
 
@@ -139,6 +140,13 @@ type Set struct {
 	// MoveTicket sets one ticket's board status (todo -> to-be-reviewed -> done, or
 	// back to todo when a review fails), returning confirmation. Nil = no board wired.
 	MoveTicket func(id, status string) (string, error)
+
+	// NextTask is a work-QUEUE pump for a single long-lived agent: each call marks the
+	// ticket the agent was working (its claimed one) as done and hands back the next
+	// todo ticket, claiming it. It returns a sentinel when the queue is empty. The
+	// QUEUE (the board), not the model's memory, drives coverage — nothing is skipped.
+	// Nil = no board wired.
+	NextTask func() (string, error)
 
 	// MergeFix is the review agent's APPROVAL: it merges the fix under review
 	// into the integration branch and returns what happened. Called at most
@@ -384,6 +392,15 @@ func (s *Set) Definitions() []model.Tool {
 				"id":     map[string]any{"type": "string", "description": "The ticket id from list_tickets."},
 				"status": map[string]any{"type": "string", "enum": []string{"todo", "to-be-reviewed", "done"}, "description": "The column to move it to."},
 			}, "id", "status"),
+		},
+		NextTask: {
+			Name: NextTask,
+			Description: "Get the NEXT finding to work, one at a time. Call it with no arguments to " +
+				"receive your first task. When you have FINISHED the current task (made and checked " +
+				"the fix), call next_task again — it records the current one done and hands you the " +
+				"next. When it returns 'no more tasks', every finding is handled: give a short final " +
+				"summary and stop. The queue drives the work, so keep calling next_task until it is empty.",
+			Parameters: object(map[string]any{}),
 		},
 	}
 
@@ -658,6 +675,16 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 			return "Error: the board refused the move: " + err.Error(), nil
 		}
 		return res, nil
+
+	case NextTask:
+		if s.NextTask == nil {
+			return "Error: no task queue is wired at this stage.", nil
+		}
+		out, err := s.NextTask()
+		if err != nil {
+			return "Error: the task queue could not be read: " + err.Error(), nil
+		}
+		return out, nil
 
 	case ArchifyDiagram:
 		var a struct {

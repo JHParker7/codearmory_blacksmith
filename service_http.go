@@ -350,6 +350,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		// columns, so a board-fixer/board-auditor drives the todo->review->done loop.
 		ListTicketsAt: a.ticketLister(agentBearer, req.Project),
 		MoveTicket:    a.ticketMover(agentBearer, req.Project),
+		NextTask:      a.ticketNext(agentBearer, req.Project),
 		MergeFix:    func(string) (string, error) { approved = true; return "approved", nil },
 		OnWrite: func(path, content string, deleted bool, message string) {
 			journal = append(journal, recordedWrite{path: path, content: content, deleted: deleted, message: message})
@@ -622,6 +623,57 @@ func (a *actionServer) ticketMover(bearer, project string) func(string, string) 
 			return "", err
 		}
 		return fmt.Sprintf("moved ticket %s to %s", id, boardLabel(st)), nil
+	}
+}
+
+// ticketNext builds the next_task pump: a stateless work queue backed by the board.
+// Each call (a) marks whatever this run had claimed (in_progress) as done, then
+// (b) claims the next todo (open) ticket by moving it to in_progress and returns it,
+// or a done sentinel when the queue is empty. The board is the state, so one
+// long-lived agent works findings one at a time without the model tracking coverage.
+func (a *actionServer) ticketNext(bearer, project string) func() (string, error) {
+	if a.cfg.TicketsURL == "" {
+		return nil
+	}
+	store, err := platform.Local(a.cfg.TicketsURL, transport.Static(bearer))
+	if err != nil {
+		slog.Warn("action: could not build a tickets client for next_task", "error", err)
+		return nil
+	}
+	return func() (string, error) {
+		ctx := context.Background()
+		// (a) finish the currently-claimed task(s): in_progress -> resolved (done).
+		claimed, err := store.List(ctx, ticket.ListOpts{Project: project, Status: ticket.StatusInProgress})
+		if err != nil {
+			return "", err
+		}
+		for _, t := range claimed {
+			if _, err := store.Update(ctx, t.ID, ticket.Update{Status: ticket.StatusResolved}); err != nil {
+				return "", err
+			}
+		}
+		// (b) claim the next todo (open) ticket.
+		todo, err := store.List(ctx, ticket.ListOpts{Project: project, Status: ticket.StatusOpen})
+		if err != nil {
+			return "", err
+		}
+		if len(todo) == 0 {
+			done := "No more tasks — every finding on the board is handled. Give a short final summary of what you fixed and stop; do not call next_task again."
+			if len(claimed) > 0 {
+				done = fmt.Sprintf("Recorded the previous task done. %s", done)
+			}
+			return done, nil
+		}
+		t := todo[0]
+		if _, err := store.Update(ctx, t.ID, ticket.Update{Status: ticket.StatusInProgress}); err != nil {
+			return "", err
+		}
+		prefix := ""
+		if len(claimed) > 0 {
+			prefix = "Recorded the previous task done.\n\n"
+		}
+		return fmt.Sprintf("%sNEXT TASK (ticket %s) [%s]: %s\n\n%s\n\nFix this in the code, run the check, then call next_task again for the next one.",
+			prefix, t.ID, t.Priority, t.Title, strings.TrimSpace(t.Description)), nil
 	}
 }
 

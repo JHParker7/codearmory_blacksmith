@@ -93,6 +93,11 @@ type Creator struct {
 	// board-auditor) pull its column and move cards. Nil when no board is wired.
 	ListTicketsAt func(status string) (string, error)
 	MoveTicket    func(id, status string) (string, error)
+
+	// NextTask is the work-queue pump: mark the agent's current ticket done and return
+	// the next todo (or a done sentinel). Lets one long-lived agent work findings one
+	// at a time in a single session. Nil when no board is wired.
+	NextTask func() (string, error)
 }
 
 // Options is what makes one stage different from another.
@@ -250,6 +255,7 @@ func (c Creator) New(files map[string]string, o Options) *Agent {
 			ReadTickets:   c.ReadTickets,
 			ListTicketsAt: c.ListTicketsAt,
 			MoveTicket:    c.MoveTicket,
+			NextTask:      c.NextTask,
 		},
 		gateway: c.Gateway,
 		log:     c.Log,
