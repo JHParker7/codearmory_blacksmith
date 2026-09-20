@@ -685,8 +685,7 @@
     },
     {
       "from": "clone",
-      "to": "advance-review",
-      "when": "inputs.repo == 'task-tracker'"
+      "to": "advance-review"
     }
   ]
 }

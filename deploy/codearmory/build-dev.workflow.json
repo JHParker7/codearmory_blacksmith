@@ -165,8 +165,7 @@
     },
     {
       "from": "image",
-      "to": "advance-built",
-      "when": "inputs.repo == 'task-tracker'"
+      "to": "advance-built"
     }
   ]
 }
