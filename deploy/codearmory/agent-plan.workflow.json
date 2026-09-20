@@ -46,7 +46,8 @@
         "volume": "ws",
         "project": "${inputs.project}",
         "task": "${inputs.task}",
-        "wiki_branch": "plan/${run_id}"
+        "wiki_branch": "plan/${run_id}",
+        "image": "codearmory-registry-mirror:5000/agent-tools/archify:1"
       },
       "permissions": [
         {
