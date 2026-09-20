@@ -4,25 +4,58 @@
   "timeout_secs": 7200,
   "description": "Ticket-board autofix loop. Seeds ONE board ticket per finding at status todo, then loops a board-fixer (fixes todo tickets, moves each it addresses to to-be-reviewed) and a board-auditor (verifies each to-be-reviewed ticket's fix in the actual code, moving it to done or back to todo), bounded to 3 cycles, then publishes. The ticket board is the shared work list AND the coverage gate: a finding is 'done' only when the auditor confirms the fix is really in the code, and anything not done is left visible on the board as the honest needs-human set. Inputs {namespace, repo, ref, project, findings, number?}; findings is a numbered list of review findings (file:line + issue + fix).",
   "inputs": [
-    { "name": "namespace", "type": "string", "required": true },
-    { "name": "repo", "type": "string", "required": true },
-    { "name": "ref", "type": "string", "required": true },
-    { "name": "project", "type": "string", "required": true },
-    { "name": "findings", "type": "string", "required": true },
-    { "name": "number", "type": "string", "required": false }
+    {
+      "name": "namespace",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "repo",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "ref",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "project",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "findings",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "number",
+      "type": "string",
+      "required": false
+    }
   ],
   "steps": [
     {
       "name": "workspace",
       "action": "forge/create-volume",
       "timeout": 60,
-      "with": { "workflow_id": "${run_id}", "name": "ws", "medium": "memory" }
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "ws",
+        "medium": "memory"
+      }
     },
     {
       "name": "gocache",
       "action": "forge/create-volume",
       "timeout": 60,
-      "with": { "workflow_id": "${run_id}", "name": "gocache", "size_mb": 8192, "medium": "disk" }
+      "with": {
+        "workflow_id": "${run_id}",
+        "name": "gocache",
+        "size_mb": 8192,
+        "medium": "disk"
+      }
     },
     {
       "name": "clone",
@@ -32,8 +65,17 @@
         "image": "golang:1.25",
         "runner_class": "large",
         "run": "set -e; export HOME=/tmp GOCACHE=/tmp/gocache GOPATH=/tmp/go; git config --global --add safe.directory '*'; git clone -q \"$GIT_URL\" /workspace; cd /workspace; git checkout -q \"${inputs.ref}\"; git rev-parse HEAD > /workspace/.fixbase; echo \"working on branch ${inputs.ref}:\"; git log --oneline -1",
-        "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ],
-        "secret_refs": { "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git" }
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        }
       }
     },
     {
@@ -48,11 +90,56 @@
         "task": "Seed the review board with these findings, one ticket each (status todo):\n\n${inputs.findings}"
       },
       "permissions": [
-        { "service": "forge", "action": "createLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "getLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "deleteLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "createExecution", "resource": "forge/executions" },
-        { "service": "forge", "action": "getExecution", "resource": "forge/executions/*" }
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        },
+        {
+          "service": "tickets",
+          "action": "createTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "listTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "getTicket",
+          "resource": "tickets/tickets/*"
+        },
+        {
+          "service": "tickets",
+          "action": "updateTicket",
+          "resource": "tickets/tickets/*"
+        },
+        {
+          "service": "tickets",
+          "action": "createComment",
+          "resource": "tickets/tickets/*"
+        }
       ]
     },
     {
@@ -70,11 +157,56 @@
       },
       "loop_id": "boardloop",
       "permissions": [
-        { "service": "forge", "action": "createLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "getLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "deleteLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "createExecution", "resource": "forge/executions" },
-        { "service": "forge", "action": "getExecution", "resource": "forge/executions/*" }
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        },
+        {
+          "service": "tickets",
+          "action": "createTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "listTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "getTicket",
+          "resource": "tickets/tickets/*"
+        },
+        {
+          "service": "tickets",
+          "action": "updateTicket",
+          "resource": "tickets/tickets/*"
+        },
+        {
+          "service": "tickets",
+          "action": "createComment",
+          "resource": "tickets/tickets/*"
+        }
       ]
     },
     {
@@ -90,11 +222,56 @@
       },
       "loop_id": "boardloop",
       "permissions": [
-        { "service": "forge", "action": "createLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "getLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "deleteLease", "resource": "forge/leases" },
-        { "service": "forge", "action": "createExecution", "resource": "forge/executions" },
-        { "service": "forge", "action": "getExecution", "resource": "forge/executions/*" }
+        {
+          "service": "forge",
+          "action": "createLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "getLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "deleteLease",
+          "resource": "forge/leases"
+        },
+        {
+          "service": "forge",
+          "action": "createExecution",
+          "resource": "forge/executions"
+        },
+        {
+          "service": "forge",
+          "action": "getExecution",
+          "resource": "forge/executions/*"
+        },
+        {
+          "service": "tickets",
+          "action": "createTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "listTicket",
+          "resource": "tickets/tickets"
+        },
+        {
+          "service": "tickets",
+          "action": "getTicket",
+          "resource": "tickets/tickets/*"
+        },
+        {
+          "service": "tickets",
+          "action": "updateTicket",
+          "resource": "tickets/tickets/*"
+        },
+        {
+          "service": "tickets",
+          "action": "createComment",
+          "resource": "tickets/tickets/*"
+        }
       ]
     },
     {
@@ -105,7 +282,14 @@
         "image": "golang:1.25",
         "runner_class": "large",
         "run": "set +e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; echo '=== diffstat vs base ==='; BASE=$(cat /workspace/.fixbase 2>/dev/null); git diff --stat \"$BASE\" HEAD 2>/dev/null | tail -20; echo done",
-        "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ]
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ]
       }
     },
     {
@@ -116,12 +300,34 @@
         "image": "golang:1.25",
         "runner_class": "large",
         "run": "set -e; export HOME=/tmp; git config --global --add safe.directory '*'; cd /workspace; REF='${inputs.ref}'; git rm -q -r --ignore-unmatch .review .board AUDIT.md STRENGTH.md >/dev/null 2>&1 || true; git -c user.email=publish@forge.cicd -c user.name=publish commit -q -am 'chore: drop review artifacts' >/dev/null 2>&1 || true; BASE=$(git rev-parse \"origin/$REF\"); if [ \"$(git rev-parse HEAD)\" = \"$BASE\" ]; then echo 'no fix commits -- nothing to push'; fixed=0; export fixed; echo \"fixed=$fixed\"; exit 0; fi; git push \"$GIT_URL\" HEAD:refs/heads/$REF; echo \"pushed the fix to $REF\"; fixed=1; export fixed; echo \"fixed=$fixed\"",
-        "volumes": [ { "workflow_id": "${run_id}", "name": "ws", "mount_path": "/workspace", "workdir": true } ],
-        "secret_refs": { "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git" },
-        "output_env": [ "fixed" ]
+        "volumes": [
+          {
+            "workflow_id": "${run_id}",
+            "name": "ws",
+            "mount_path": "/workspace",
+            "workdir": true
+          }
+        ],
+        "secret_refs": {
+          "GIT_URL": "git:http://codearmory-git-factory:9002/${inputs.namespace}/${inputs.repo}.git"
+        },
+        "output_env": [
+          "fixed"
+        ]
       }
     }
   ],
-  "outputs": [ { "name": "fixed", "value": "${steps.publish.output.fixed}" } ],
-  "loops": [ { "id": "boardloop", "limit": 3, "var": "bl" } ]
+  "outputs": [
+    {
+      "name": "fixed",
+      "value": "${steps.publish.output.fixed}"
+    }
+  ],
+  "loops": [
+    {
+      "id": "boardloop",
+      "limit": 3,
+      "var": "bl"
+    }
+  ]
 }
