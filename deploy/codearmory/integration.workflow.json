@@ -60,6 +60,16 @@
       }
     },
     {
+      "action": "tickets/advance",
+      "name": "advance-testing",
+      "timeout": 60,
+      "with": {
+        "id": "020503fd-8684-452e-9987-c908c5ad651e",
+        "from": "built",
+        "to": "testing"
+      }
+    },
+    {
       "name": "compose",
       "action": "blacksmith/agent",
       "timeout": 1800,
@@ -153,6 +163,16 @@
             "workdir": true
           }
         ]
+      }
+    },
+    {
+      "action": "tickets/advance",
+      "name": "advance-done",
+      "timeout": 60,
+      "with": {
+        "id": "020503fd-8684-452e-9987-c908c5ad651e",
+        "from": "testing",
+        "to": "closed"
       }
     }
   ]

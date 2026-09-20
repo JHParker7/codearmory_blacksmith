@@ -121,7 +121,10 @@
         "workflow_id": "${run_id}",
         "volume": "ws",
         "project": "${inputs.project}",
-        "task": "${inputs.task}"
+        "task": "${inputs.task}",
+        "board_id": "020503fd-8684-452e-9987-c908c5ad651e",
+        "parent": "${steps.epic.output.ticket_id}",
+        "task_status": "triage"
       },
       "permissions": [
         {
@@ -186,12 +189,13 @@
       }
     },
     {
-      "action": "tickets/update",
-      "name": "epic_inprogress",
+      "action": "tickets/advance",
+      "name": "advance_inprogress",
       "timeout": 60,
       "with": {
-        "id": "${steps.epic.output.ticket_id}",
-        "status": "in_progress"
+        "id": "020503fd-8684-452e-9987-c908c5ad651e",
+        "from": "triage",
+        "to": "in_progress"
       }
     },
     {

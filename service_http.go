@@ -84,6 +84,15 @@ type actionRequest struct {
 	// workflow_id so it outlives the run and every stage/step re-attaches it.
 	CacheWorkflowID string `json:"cache_workflow_id"`
 	CacheVolume     string `json:"cache_volume"`
+	// Delivery lifecycle board wiring. When BoardID is set, the PM stage files its
+	// task tickets onto that board (as children of the run's epic ticket, Parent)
+	// at TaskStatus, and a builder stage's read_tickets reads that board's task
+	// tickets instead of the project's open ones — so the tasks travel the
+	// lifecycle board with the epic. All blank => the pre-board behaviour (file at
+	// status open on the project's default board; read the project's open tickets).
+	BoardID    string `json:"board_id"`
+	Parent     string `json:"parent"`
+	TaskStatus string `json:"task_status"`
 }
 
 // actionResult is one job's terminal state, shaped for the workflows async
@@ -337,7 +346,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 			tr.add(line)
 			a.jobs.finish(id, func(r *actionResult) { r.Stdout = tr.String() })
 		},
-		FileTicket:  a.ticketFiler(agentBearer, req.Project),
+		FileTicket:  a.ticketFiler(agentBearer, req.Project, req.BoardID, req.Parent, req.TaskStatus),
 		WritePage:   a.wikiWriter(agentBearer, req.Project, req.WikiBranch),
 		// Central cross-repo docs wiki: architecture diagrams mirror here (main branch,
 		// never a plan branch) in addition to the project wiki. Nil unless
@@ -345,7 +354,7 @@ func (a *actionServer) run(ctx context.Context, id, role string, req actionReque
 		WriteDocsPage: a.wikiWriter(agentBearer, a.cfg.DocsProject, ""),
 		Project:       req.Project,
 		ReadWiki:      a.wikiReader(agentBearer, req.Project),
-		ReadTickets: a.ticketsReader(agentBearer, req.Project),
+		ReadTickets: a.ticketsReader(agentBearer, req.Project, req.BoardID),
 		// Board-loop sinks: list tickets by column (with ids) + move a card between
 		// columns, so a board-fixer/board-auditor drives the todo->review->done loop.
 		ListTicketsAt: a.ticketLister(agentBearer, req.Project),
@@ -469,7 +478,7 @@ func agentPermissions(project, docsProject string) []gatekeeper.Permission {
 // ticketFiler files a finding on the board AS THE AGENT'S IDENTITY, so a finding
 // can only land where the user could file one. No board configured is a no-op,
 // like the standalone harness.
-func (a *actionServer) ticketFiler(bearer, project string) func(kind, title, body, severity string) (string, error) {
+func (a *actionServer) ticketFiler(bearer, project, boardID, parent, status string) func(kind, title, body, severity string) (string, error) {
 	if a.cfg.TicketsURL == "" {
 		return nil
 	}
@@ -486,15 +495,26 @@ func (a *actionServer) ticketFiler(bearer, project string) func(kind, title, bod
 		if strings.TrimSpace(kind) != "" {
 			full = kind + ": " + title
 		}
+		// The delivery board flow (board_id set on the step) files each task onto the
+		// lifecycle board as a child of the run's epic, at the step's TaskStatus (a
+		// column of that board), so the tasks travel the board with the epic. With no
+		// board_id this is the original behaviour: status open on the project's
+		// default board, no parent.
+		st := ticket.StatusOpen
+		if strings.TrimSpace(status) != "" {
+			st = status
+		}
 		t, err := store.Create(context.Background(), ticket.Ticket{
 			Title:       full,
 			Description: body,
-			Status:      ticket.StatusOpen,
+			Status:      st,
 			Priority:    severity,
 			// Tag the project so the ticket appears under it in the portal and in a
 			// project-scoped listing (the read_tickets tool a builder uses). Empty
 			// for a project-less run, which files an unfiled ticket exactly as before.
-			Project: project,
+			Project:  project,
+			BoardID:  ticket.Ptr(boardID),
+			ParentID: ticket.Ptr(parent),
 		})
 		if err != nil {
 			return "", err
@@ -509,7 +529,7 @@ func (a *actionServer) ticketFiler(bearer, project string) func(kind, title, bod
 // AS THE AGENT'S IDENTITY, so it only sees what the user could — which, since the
 // PM and the builder run under the same pipeline owner, is the tasks the PM just
 // filed. No board configured is a no-op, like the standalone harness.
-func (a *actionServer) ticketsReader(bearer, project string) func() (string, error) {
+func (a *actionServer) ticketsReader(bearer, project, boardID string) func() (string, error) {
 	if a.cfg.TicketsURL == "" {
 		return nil
 	}
@@ -519,9 +539,28 @@ func (a *actionServer) ticketsReader(bearer, project string) func() (string, err
 		return nil
 	}
 	return func() (string, error) {
-		ts, err := store.List(context.Background(), ticket.ListOpts{Project: project, Status: ticket.StatusOpen})
+		// Delivery board flow: read the run's TASK tickets off the lifecycle board at
+		// the in-progress column (where the PM filed them and the chain advanced them
+		// for the dev stage). Skip the epic — it carries no parent, the tasks are its
+		// children — so the builder sees the work items, not the umbrella. With no
+		// board_id this is the original project-scoped open-tickets read.
+		opts := ticket.ListOpts{Project: project, Status: ticket.StatusOpen}
+		onBoard := strings.TrimSpace(boardID) != ""
+		if onBoard {
+			opts = ticket.ListOpts{BoardID: boardID, Status: ticket.StatusInProgress}
+		}
+		ts, err := store.List(context.Background(), opts)
 		if err != nil {
 			return "", err
+		}
+		if onBoard {
+			children := ts[:0]
+			for _, t := range ts {
+				if t.Parent() != "" {
+					children = append(children, t)
+				}
+			}
+			ts = children
 		}
 		if len(ts) == 0 {
 			return "No open tickets are filed for this project. Ground your work in the wiki (read_wiki) and the task you were given.", nil

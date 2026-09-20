@@ -79,6 +79,7 @@
       "timeout": 1800,
       "with": {
         "role": "test-writer",
+        "board_id": "020503fd-8684-452e-9987-c908c5ad651e",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "project": "${inputs.project}",
@@ -141,6 +142,7 @@
       "timeout": 2400,
       "with": {
         "role": "developer",
+        "board_id": "020503fd-8684-452e-9987-c908c5ad651e",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "project": "${inputs.project}",
@@ -203,6 +205,7 @@
       "timeout": 1800,
       "with": {
         "role": "frontend-test-writer",
+        "board_id": "020503fd-8684-452e-9987-c908c5ad651e",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "project": "${inputs.project}",
@@ -264,6 +267,7 @@
       "timeout": 2400,
       "with": {
         "role": "frontend",
+        "board_id": "020503fd-8684-452e-9987-c908c5ad651e",
         "workflow_id": "${run_id}",
         "volume": "ws",
         "project": "${inputs.project}",

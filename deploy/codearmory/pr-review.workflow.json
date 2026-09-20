@@ -550,6 +550,16 @@
         "runner_class": "large",
         "run": "echo 'pr-review: HELD PR #${inputs.number} for a human \u2014 automated refine could not converge (see the review comments).' 1>&2\nexit 1\n"
       }
+    },
+    {
+      "action": "tickets/advance",
+      "name": "advance-review",
+      "timeout": 60,
+      "with": {
+        "id": "020503fd-8684-452e-9987-c908c5ad651e",
+        "from": "in_progress",
+        "to": "in_review"
+      }
     }
   ],
   "maps": [
@@ -672,6 +682,11 @@
       "from": "gate",
       "to": "refine",
       "when": "steps.gate.json.merged == 'false' && steps.gate.json.verdict == 'MERGE WITH NUDGES' && int(steps.gate.json.refine_iter) == 0"
+    },
+    {
+      "from": "clone",
+      "to": "advance-review",
+      "when": "inputs.repo == 'task-tracker'"
     }
   ]
 }

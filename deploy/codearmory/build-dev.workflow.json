@@ -130,6 +130,43 @@
         },
         "run": "set +e\nexport HOME=/tmp\nTOK=$(printf '%s' \"$GIT_URL\" | sed -E 's#.*//[^:/]+:([^@]+)@.*#\\1#')\nGF=http://codearmory-git-factory:9002\nC=http://codearmory-containers:8089\nNS='${inputs.namespace}'; REPO='${inputs.repo}'\n# git-factory is the source of truth for repo->project; mirror that link into the\n# container registry so the pushed image is project-scoped automatically.\nPROJ=$(curl -s --max-time 20 \"$GF/repos\" -H \"authorization: Bearer $TOK\" | tr '{' '\\n' | grep \"\\\"name\\\":\\\"$REPO\\\"\" | grep \"\\\"namespace\\\":\\\"$NS\\\"\" | sed -E 's/.*\"project\":\"([^\"]*)\".*/\\1/' | head -1)\nif [ -z \"$PROJ\" ]; then echo \"link: no project mapped for $NS/$REPO - skipping\"; exit 0; fi\nCODE=$(curl -s -o /tmp/lk -w '%{http_code}' --max-time 20 -X PUT \"$C/repositories/$NS/$REPO/project\" -H \"authorization: Bearer $TOK\" -H 'content-type: application/json' -d \"{\\\"project\\\":\\\"$PROJ\\\"}\")\necho \"link $NS/$REPO -> project $PROJ : HTTP $CODE\"\n[ -f /tmp/lk ] && cat /tmp/lk\nexit 0"
       }
+    },
+    {
+      "action": "tickets/advance",
+      "name": "advance-built",
+      "timeout": 60,
+      "with": {
+        "id": "020503fd-8684-452e-9987-c908c5ad651e",
+        "from": "in_review",
+        "to": "built"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "from": "workspace",
+      "to": "clone"
+    },
+    {
+      "from": "clone",
+      "to": "version"
+    },
+    {
+      "from": "version",
+      "to": "image"
+    },
+    {
+      "from": "image",
+      "to": "show"
+    },
+    {
+      "from": "show",
+      "to": "link-project"
+    },
+    {
+      "from": "image",
+      "to": "advance-built",
+      "when": "inputs.repo == 'task-tracker'"
     }
   ]
 }
