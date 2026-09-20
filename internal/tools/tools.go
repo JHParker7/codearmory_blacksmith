@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -147,6 +149,12 @@ type Set struct {
 	// QUEUE (the board), not the model's memory, drives coverage — nothing is skipped.
 	// Nil = no board wired.
 	NextTask func() (string, error)
+
+	// next_task work-done GATE state (per agent session): a task has been handed out,
+	// and the workspace hash captured when it was — so next_task can REFUSE to advance
+	// until the code actually changes, stopping the model from rushing the queue.
+	taskHanded bool
+	taskHash   uint64
 
 	// MergeFix is the review agent's APPROVAL: it merges the fix under review
 	// into the integration branch and returns what happened. Called at most
@@ -427,6 +435,29 @@ func (s *Set) offers(name string) bool {
 	return false
 }
 
+// workspaceHash is a content hash of the whole workspace tree. The next_task gate
+// compares it before/after to tell whether the agent actually edited anything since
+// the last task was handed out — so the queue only advances on real work.
+func workspaceHash(w *Workspace) uint64 {
+	if w == nil {
+		return 0
+	}
+	files := w.Files()
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	h := fnv.New64a()
+	for _, n := range names {
+		h.Write([]byte(n))
+		h.Write([]byte{0})
+		h.Write([]byte(files[n]))
+		h.Write([]byte{0})
+	}
+	return h.Sum64()
+}
+
 // Invoke runs one tool call and returns the text to hand back to the model.
 //
 // IT RETURNS A STRING AND NOT AN ERROR, because at this boundary a refusal is
@@ -680,10 +711,22 @@ func (s *Set) invoke(ctx context.Context, name, args string) (string, error) {
 		if s.NextTask == nil {
 			return "Error: no task queue is wired at this stage.", nil
 		}
+		// WORK-DONE GATE: refuse to advance until the code actually changed since the
+		// current task was handed out. Without this the model rushes — calling next_task
+		// repeatedly and marking findings done with no fix (measured). The queue can
+		// only move forward on real work.
+		cur := workspaceHash(s.Workspace)
+		if s.taskHanded && cur == s.taskHash {
+			return "You have NOT edited any code since the last task was handed to you, so it is " +
+				"not fixed. Make the change for the current finding (edit the file, then run the check), " +
+				"and only then call next_task. It will not advance until the workspace changes.", nil
+		}
 		out, err := s.NextTask()
 		if err != nil {
 			return "Error: the task queue could not be read: " + err.Error(), nil
 		}
+		s.taskHanded = true
+		s.taskHash = workspaceHash(s.Workspace)
 		return out, nil
 
 	case ArchifyDiagram:
